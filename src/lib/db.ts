@@ -23,6 +23,7 @@ export interface QueuedWidthReading {
   isCorrection: boolean
   /** serverId of the row that superseded this one, once known. */
   supersededBy: string | null
+  isVoided: boolean
   correctionReason: string | null
   status: 'queued' | 'synced' | 'error'
   lastError: string | null
@@ -112,6 +113,7 @@ export interface QueuedTruckTicket {
   isCorrection: boolean
   /** serverId of the row that superseded this one, once known. */
   supersededBy: string | null
+  isVoided: boolean
   correctionReason: string | null
   status: 'queued' | 'synced' | 'error'
   lastError: string | null

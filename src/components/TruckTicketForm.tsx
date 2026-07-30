@@ -71,7 +71,10 @@ export function TruckTicketForm({ roadSegmentId, direction, date, hasIdentity }:
   const sortedEntries = useMemo(() => [...allEntries].sort((a, b) => b.createdAt - a.createdAt), [allEntries])
   const activeEntries = useMemo(() => sortedEntries.filter((t) => t.supersededBy === null), [sortedEntries])
   const totalTonnage = useMemo(
-    () => activeEntries.filter((t) => t.liftType === 'top_lift').reduce((sum, t) => sum + t.netTonnage, 0),
+    () =>
+      activeEntries
+        .filter((t) => t.liftType === 'top_lift' && !t.isVoided)
+        .reduce((sum, t) => sum + t.netTonnage, 0),
     [activeEntries],
   )
 
@@ -168,8 +171,9 @@ export function TruckTicketForm({ roadSegmentId, direction, date, hasIdentity }:
           <ul>
             {sortedEntries.map((entry) => {
               const isSuperseded = entry.supersededBy !== null
+              const struckThrough = isSuperseded || entry.isVoided
               return (
-                <li key={entry.localId} className={isSuperseded ? 'truck-ticket-entry-superseded' : 'truck-ticket-entry'}>
+                <li key={entry.localId} className={struckThrough ? 'truck-ticket-entry-superseded' : 'truck-ticket-entry'}>
                   <div className="truck-ticket-entry-top">
                     <span className="truck-ticket-entry-vehicle">{entry.vehicleNumber}</span>
                     <span className="truck-ticket-entry-tonnage">{entry.netTonnage} t</span>
@@ -181,7 +185,8 @@ export function TruckTicketForm({ roadSegmentId, direction, date, hasIdentity }:
                   <div className="truck-ticket-entry-badges">
                     {entry.isCorrection && <span className="truck-ticket-badge truck-ticket-badge-correction">corrected</span>}
                     {isSuperseded && <span className="truck-ticket-badge truck-ticket-badge-superseded">superseded</span>}
-                    {!isSuperseded && (
+                    {entry.isVoided && <span className="truck-ticket-badge truck-ticket-badge-superseded">voided</span>}
+                    {!struckThrough && (
                       <span
                         className={
                           'milling-sync-dot' + (entry.status === 'synced' ? ' milling-sync-dot-synced' : ' milling-sync-dot-pending')

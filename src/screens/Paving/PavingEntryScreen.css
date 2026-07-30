@@ -13,3 +13,90 @@
   font-size: var(--font-size-sm);
   color: var(--color-muted);
 }
+
+/* Live application-rate checkpoint (Stage 3) — a persistent, always-visible
+   informational readout sitting right below the sticky area summary, not a
+   modal or a separate action. Nothing here writes to the database; it's a
+   real-time self-monitoring approximation only. */
+.paving-checkpoint {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.paving-checkpoint-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.paving-checkpoint-field input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: var(--font-size-lg);
+  padding: var(--space-2);
+  border: 2px solid var(--color-navy);
+  border-radius: var(--radius-md);
+  min-height: var(--touch-standard);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-family: inherit;
+}
+
+.paving-checkpoint-result {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.paving-checkpoint-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+}
+
+.paving-checkpoint-result-row strong {
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+}
+
+/* Table 502-H bands, read from project_config, never hardcoded. */
+.paving-checkpoint-rate {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm) !important;
+}
+
+/* Compound class selectors deliberately, not single-class ones — a plain
+   .paving-checkpoint-rate-reject (specificity 0,1,0) loses to the generic
+   ".paving-checkpoint-result-row strong" text-color rule above (0,1,1),
+   which would otherwise silently override every band's text color and
+   leave only the background tinted. */
+.paving-checkpoint-rate.paving-checkpoint-rate-bonus {
+  background: var(--color-green-light);
+  color: var(--color-green-dark);
+}
+
+.paving-checkpoint-rate.paving-checkpoint-rate-penalty {
+  background: var(--color-orange-light);
+  color: var(--color-orange-dark);
+}
+
+.paving-checkpoint-rate.paving-checkpoint-rate-reject {
+  background: var(--color-red-light);
+  color: var(--color-red-dark);
+}
+
+.paving-checkpoint-rate.paving-checkpoint-rate-unavailable {
+  background: var(--color-bg);
+  color: var(--color-muted);
+}

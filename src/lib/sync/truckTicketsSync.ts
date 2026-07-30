@@ -18,6 +18,7 @@ export async function importServerTruckTickets(roadSegmentId: string, date: stri
       // (e.g. a correction or void from another device).
       await db.truckTicketsQueue.update(existing.localId!, {
         supersededBy: row.supersededBy,
+        isVoided: row.isVoided,
         correctionReason: row.correctionReason,
         isCorrection: row.isCorrection,
       })
@@ -35,6 +36,7 @@ export async function importServerTruckTickets(roadSegmentId: string, date: stri
       liftType: row.liftType,
       isCorrection: row.isCorrection,
       supersededBy: row.supersededBy,
+      isVoided: row.isVoided,
       correctionReason: row.correctionReason,
       status: 'synced',
       lastError: null,
@@ -79,6 +81,7 @@ export async function enqueueTruckTicket(entry: {
     liftType: entry.liftType,
     isCorrection: false,
     supersededBy: null,
+    isVoided: false,
     correctionReason: null,
     status: 'queued',
     lastError: null,
@@ -165,6 +168,7 @@ export async function applyTruckTicketCorrection(params: {
     liftType: corrected.liftType,
     isCorrection: true,
     supersededBy: null,
+    isVoided: false,
     correctionReason: params.reason,
     status: 'synced',
     lastError: null,

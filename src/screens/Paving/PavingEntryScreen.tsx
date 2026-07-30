@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { classifyApplicationRateBand } from '../../lib/calculations/applicationRateBand'
 import {
   findStrictlyInsideCoverage,
   isStationWithinCoverage,
@@ -7,10 +8,10 @@ import {
   type Interval,
 } from '../../lib/calculations/intervalCoverage'
 import { findMilledWidthReference } from '../../lib/calculations/milledWidthReference'
-import { calculateSegments, cumulativeArea } from '../../lib/calculations/segmentArea'
+import { calculateSegments, cumulativeArea, cumulativeAreaToStation } from '../../lib/calculations/segmentArea'
 import { resolveSegmentForStation } from '../../lib/calculations/segmentResolution'
 import { daysAgo, formatDayLabel, todayLocalDateString } from '../../lib/dateFormat'
-import { db, type QueuedWidthReading } from '../../lib/db'
+import { db, type QueuedTruckTicket, type QueuedWidthReading } from '../../lib/db'
 import { setEntrySessionActive } from '../../lib/entrySessionActive'
 import { getEntrySession, type EntrySessionDirection, type EntryResumePayload } from '../../lib/entrySession'
 import {
@@ -23,6 +24,7 @@ import {
   type MillingReferenceReading,
   type SegmentCandidate,
 } from '../../lib/supabase/milling'
+import { fetchProjectApplicationRateConfig, type ProjectApplicationRateConfig } from '../../lib/supabase/projectConfig'
 import {
   enqueueWidthReading,
   importServerReadings,
@@ -279,7 +281,10 @@ export function PavingEntryScreen() {
     [allEntries],
   )
 
-  const activeEntries = useMemo(() => sortedEntries.filter((r) => r.supersededBy === null), [sortedEntries])
+  const activeEntries = useMemo(
+    () => sortedEntries.filter((r) => r.supersededBy === null && !r.isVoided),
+    [sortedEntries],
+  )
 
   const workDateCoverageInterval = useMemo<Interval | null>(() => {
     if (activeEntries.length === 0) return null
@@ -332,6 +337,76 @@ export function PavingEntryScreen() {
   const liveTotalArea = useMemo(() => cumulativeArea(liveSegments), [liveSegments])
 
   const queuedCount = useMemo(() => allEntries.filter((r) => r.status === 'queued').length, [allEntries])
+
+  // Stage 3: live application-rate checkpoint. Never hardcode a target rate
+  // or band thresholds — always read them from project_config, since they
+  // vary per project (see fetchProjectApplicationRateConfig).
+  const [projectConfig, setProjectConfig] = useState<ProjectApplicationRateConfig | null>(null)
+
+  useEffect(() => {
+    setProjectConfig(null)
+    if (!selectedProjectId) return
+    let cancelled = false
+    fetchProjectApplicationRateConfig(selectedProjectId)
+      .then((config) => {
+        if (!cancelled) setProjectConfig(config)
+      })
+      .catch(() => {
+        if (!cancelled) setProjectConfig(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedProjectId])
+
+  // Independent live query from the same truck_tickets local queue
+  // TruckTicketForm itself reads — same "one local table is the whole
+  // source of truth" reactivity TruckTicketForm already relies on, just
+  // scoped here to a running session total rather than a per-row list.
+  const sessionTruckTickets = useLiveQuery(
+    () =>
+      session.activeSegmentId
+        ? db.truckTicketsQueue
+            .where('roadSegmentId')
+            .equals(session.activeSegmentId)
+            .filter((t) => t.date === workDate)
+            .toArray()
+        : Promise.resolve([]),
+    [session.activeSegmentId, workDate],
+    [] as QueuedTruckTicket[],
+  )
+
+  const sessionTotalTonnage = useMemo(
+    () =>
+      sessionTruckTickets
+        .filter((t) => t.supersededBy === null && !t.isVoided && t.liftType === 'top_lift')
+        .reduce((sum, t) => sum + t.netTonnage, 0),
+    [sessionTruckTickets],
+  )
+
+  const [checkpointStationInput, setCheckpointStationInput] = useState('')
+  const checkpointStationValue = Number(checkpointStationInput)
+  const checkpointStationValid = checkpointStationInput.trim() !== '' && Number.isFinite(checkpointStationValue)
+
+  // Purely a real-time self-monitoring approximation for the crew — it
+  // assumes tonnage logged so far in the session went toward paving up to
+  // roughly this checkpoint station. The authoritative per-truck
+  // attribution (which segment/station range each individual truck's load
+  // actually covers) is a separate, later concern — see truckDistribution.ts.
+  const checkpointArea = useMemo(() => {
+    if (!checkpointStationValid) return null
+    return cumulativeAreaToStation(liveSegments, checkpointStationValue)
+  }, [checkpointStationValid, checkpointStationValue, liveSegments])
+
+  const checkpointRatePct = useMemo(() => {
+    if (checkpointArea === null || checkpointArea <= 0 || !projectConfig) return null
+    return ((sessionTotalTonnage * 1000) / checkpointArea / projectConfig.targetRateKgM2) * 100
+  }, [checkpointArea, sessionTotalTonnage, projectConfig])
+
+  const checkpointBand = useMemo(() => {
+    if (checkpointRatePct === null || !projectConfig) return null
+    return classifyApplicationRateBand(checkpointRatePct, projectConfig)
+  }, [checkpointRatePct, projectConfig])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -588,6 +663,45 @@ export function PavingEntryScreen() {
             </section>
           )}
 
+          {(activeSegment || (hasIdentity && !session.blocked && session.direction !== null)) && (
+            <section className="paving-checkpoint">
+              <label className="paving-checkpoint-field">
+                <span>Check application rate at station</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={checkpointStationInput}
+                  onChange={(e) => setCheckpointStationInput(e.target.value)}
+                  placeholder="e.g. 29500"
+                />
+              </label>
+
+              {checkpointStationValid && (
+                <div className="paving-checkpoint-result">
+                  <div className="paving-checkpoint-result-row">
+                    <span>Cumulative area to station</span>
+                    <strong>{(checkpointArea ?? 0).toFixed(2)} m²</strong>
+                  </div>
+                  <div className="paving-checkpoint-result-row">
+                    <span>Application rate</span>
+                    {!projectConfig ? (
+                      <strong className="paving-checkpoint-rate paving-checkpoint-rate-unavailable">
+                        Target rate not configured for this project
+                      </strong>
+                    ) : checkpointRatePct === null ? (
+                      <strong className="paving-checkpoint-rate paving-checkpoint-rate-unavailable">No area paved yet</strong>
+                    ) : (
+                      <strong className={'paving-checkpoint-rate paving-checkpoint-rate-' + (checkpointBand ?? 'unavailable')}>
+                        {checkpointRatePct.toFixed(1)}%
+                      </strong>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
           {hasIdentity && session.blocked && (
             <div className="milling-session-blocked">
               <p className="milling-session-blocked-message">{session.blockMessage}</p>
@@ -660,18 +774,20 @@ export function PavingEntryScreen() {
               <ul>
                 {sortedEntries.map((entry) => {
                   const isSuperseded = entry.supersededBy !== null
+                  const struckThrough = isSuperseded || entry.isVoided
                   const canEdit = hasIdentity && entry.status === 'synced' && !isSuperseded
                   return (
                     <li
                       key={entry.localId}
-                      className={isSuperseded ? 'milling-entry-superseded' : 'milling-entry'}
+                      className={struckThrough ? 'milling-entry-superseded' : 'milling-entry'}
                     >
                       <span className="milling-entry-station">{entry.station} m</span>
                       <span className="milling-entry-width">{entry.width} m wide</span>
                       <span className="milling-entry-status">
                         {entry.isCorrection && <span className="milling-badge milling-badge-correction">corrected</span>}
                         {isSuperseded && <span className="milling-badge milling-badge-superseded">superseded</span>}
-                        {!isSuperseded && (
+                        {entry.isVoided && <span className="milling-badge milling-badge-voided">voided</span>}
+                        {!struckThrough && (
                           <span
                             className={'milling-sync-dot' + (entry.status === 'synced' ? ' milling-sync-dot-synced' : ' milling-sync-dot-pending')}
                             role="status"

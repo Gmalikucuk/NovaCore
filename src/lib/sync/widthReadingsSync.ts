@@ -29,6 +29,7 @@ export async function importServerReadings(activity: 'milling' | 'paving', roadS
       // (e.g. a correction from another device).
       await db.widthReadingsQueue.update(existing.localId!, {
         supersededBy: row.supersededBy,
+        isVoided: row.isVoided,
         correctionReason: row.correctionReason,
         isCorrection: row.isCorrection,
       })
@@ -45,6 +46,7 @@ export async function importServerReadings(activity: 'milling' | 'paving', roadS
       width: row.width,
       isCorrection: row.isCorrection,
       supersededBy: row.supersededBy,
+      isVoided: row.isVoided,
       correctionReason: row.correctionReason,
       status: 'synced',
       lastError: null,
@@ -88,6 +90,7 @@ export async function enqueueWidthReading(entry: {
     width: entry.width,
     isCorrection: false,
     supersededBy: null,
+    isVoided: false,
     correctionReason: null,
     status: 'queued',
     lastError: null,
@@ -174,6 +177,7 @@ export async function applyCorrection(params: {
     width: corrected.width,
     isCorrection: true,
     supersededBy: null,
+    isVoided: false,
     correctionReason: params.reason,
     status: 'synced',
     lastError: null,

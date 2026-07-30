@@ -306,8 +306,13 @@ export function MillingEntryScreen() {
 
   // Superseded readings (their own superseded_by is set, pointing at the
   // correction that replaced them) are excluded from the live calculation —
-  // the correction row itself is what's authoritative.
-  const activeEntries = useMemo(() => sortedEntries.filter((r) => r.supersededBy === null), [sortedEntries])
+  // the correction row itself is what's authoritative. Voided readings are
+  // excluded too — same reasoning, same bug class TruckTicketForm had until
+  // this local queue never carried isVoided at all.
+  const activeEntries = useMemo(
+    () => sortedEntries.filter((r) => r.supersededBy === null && !r.isVoided),
+    [sortedEntries],
+  )
 
   // The work date's own coverage, computed live from the local queue
   // rather than fetched — always reflects not-yet-synced entries, unlike
@@ -759,18 +764,20 @@ export function MillingEntryScreen() {
                 <ul>
                   {sortedEntries.map((entry) => {
                     const isSuperseded = entry.supersededBy !== null
+                    const struckThrough = isSuperseded || entry.isVoided
                     const canEdit = hasIdentity && entry.status === 'synced' && !isSuperseded
                     return (
                       <li
                         key={entry.localId}
-                        className={isSuperseded ? 'milling-entry-superseded' : 'milling-entry'}
+                        className={struckThrough ? 'milling-entry-superseded' : 'milling-entry'}
                       >
                         <span className="milling-entry-station">{entry.station} m</span>
                         <span className="milling-entry-width">{entry.width} m wide</span>
                         <span className="milling-entry-status">
                           {entry.isCorrection && <span className="milling-badge milling-badge-correction">corrected</span>}
                           {isSuperseded && <span className="milling-badge milling-badge-superseded">superseded</span>}
-                          {!isSuperseded && (
+                          {entry.isVoided && <span className="milling-badge milling-badge-voided">voided</span>}
+                          {!struckThrough && (
                             <span
                               className={'milling-sync-dot' + (entry.status === 'synced' ? ' milling-sync-dot-synced' : ' milling-sync-dot-pending')}
                               role="status"
