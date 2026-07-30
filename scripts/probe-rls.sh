@@ -277,6 +277,78 @@ request PATCH "daily_entries?id=eq.$ENTRY_ID" "$PM_TOKEN" '{"station_from": 3000
 ok=0; [ "$STATUS" = "403" ] && ok=1
 check "pm: station_from edit on confirmed entry rejected" "403" "$ok" "$STATUS $BODY_OUT"
 
+# =============================================================================
+# Privileged-path checks — a different layer, tested separately on purpose.
+#
+# Every seat-level edit check above returns 403 at the GRANT level (quantity
+# and station_from/station_to were never granted UPDATE to `authenticated` at
+# all) — which means guard_entry_transitions()'s append-only branch, the
+# `row(...) is distinct from row(...)` comparison enumerating every immutable
+# column, has never actually executed in this suite. The grant stops the
+# request before the trigger is reached, every time. That branch is the
+# backstop for paths that don't go through PostgREST's grant system at all:
+# service_role scripts, RPCs, security-definer functions, anyone in psql —
+# exactly the paths this app grows into next. Optional: needs
+# SUPABASE_DB_PASSWORD and a `supabase` CLI already linked to this repo
+# (`supabase link --project-ref ...`); skipped, not failed, without it.
+# =============================================================================
+echo
+echo "=== Privileged-path checks (postgres role, not a seat — different layer) ==="
+
+if [ -z "${SUPABASE_DB_PASSWORD:-}" ] || ! command -v supabase >/dev/null 2>&1; then
+  echo "SKIP  privileged-path checks — set SUPABASE_DB_PASSWORD and link the supabase CLI to run these"
+else
+  db_query() { supabase db query --linked "$1" 2>&1; }
+
+  # The JSON emitted by `supabase db query` is one object embedded between
+  # CLI chatter (login/update-notice lines); this pulls out just that block
+  # rather than assuming stdout is pure JSON.
+  db_rows() {
+    python3 -c "
+import sys, re, json
+m = re.search(r'\{.*\}', sys.argv[1], re.DOTALL)
+if not m:
+    print('[]'); sys.exit(0)
+try:
+    print(json.dumps(json.loads(m.group(0)).get('rows', [])))
+except Exception:
+    print('[]')
+" "$1"
+  }
+
+  PRIV_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+
+  setup_out=$(db_query "insert into daily_entries (id, project_id, line_item_id, entry_date, quantity, station_from, status, confirmed_by, confirmed_at, created_by, device_id) values ('$PRIV_ID', '$PROJECT_ID', '$LINE_ITEM_ID', current_date, 1234.5, 500, 'confirmed', '$PM_ID', now(), '$FIELD_ID', 'probe-rls-privileged') returning id;")
+  setup_rows=$(db_rows "$setup_out")
+  ok=0; [ "$(json_len "$setup_rows")" = "1" ] && ok=1
+  check "setup: seed a confirmed row as postgres" "1 row inserted" "$ok" "$setup_out"
+
+  qty_out=$(db_query "update daily_entries set quantity = 999 where id = '$PRIV_ID';")
+  ok=0; printf '%s' "$qty_out" | grep -q "append-only" && ok=1
+  check "postgres: quantity UPDATE on confirmed row rejected" "P0001 append-only" "$ok" "$qty_out"
+
+  stn_out=$(db_query "update daily_entries set station_from = 99 where id = '$PRIV_ID';")
+  ok=0; printf '%s' "$stn_out" | grep -q "append-only" && ok=1
+  check "postgres: station_from UPDATE on confirmed row rejected" "P0001 append-only" "$ok" "$stn_out"
+
+  verify_out=$(db_query "select quantity, station_from from daily_entries where id = '$PRIV_ID';")
+  verify_rows=$(db_rows "$verify_out")
+  qv=$(json_field "$verify_rows" 0 quantity)
+  sv=$(json_field "$verify_rows" 0 station_from)
+  ok=0; [ "$qv" = "1234.5" ] && [ "$sv" = "500" ] && ok=1
+  check "postgres: row genuinely unchanged after both rejections" "quantity=1234.5, station_from=500" "$ok" "$verify_out"
+fi
+
+# TODO: nothing tests daily_entries_effective — the view holding the rule
+# that a confirmed row leaves the placed total only when its replacement
+# ENTERS it (supersession takes effect on confirmation, not on insertion; see
+# 0001_foundation_schema.sql's own comment on the view). A regression there
+# changes money silently without violating any RLS policy, so it wouldn't
+# show up as a failure anywhere in this script. Belongs in a SQL-level test
+# here, or in Vitest once the dashboard math (§8 step 5) is factored into
+# pure functions like the rest of this codebase's calculation logic. Not
+# fixed now — noted so it's seen next time this file is touched.
+
 echo
 echo "=== Summary: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -eq 0 ]; then
