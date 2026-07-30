@@ -1,0 +1,28 @@
+-- Record of the minimal v1 seed applied directly against the linked project on
+-- 2026-07-30, per CODE_PROMPT_foundation_reset.md Step 5. Not meant to be replayed
+-- blindly — the auth.users rows were created via the GoTrue Admin API (not SQL,
+-- so passwords are hashed correctly), so this file documents structure/values for
+-- reference rather than serving as a runnable seed script end to end.
+--
+-- Test users (password for all: NovaCoreTest76! — rotate/remove before any real
+-- deployment):
+--   field@novacore.test          ee31c560-2015-4d7a-8a1d-ea3f93a73f96   role: field
+--   pm@novacore.test             86cf63d5-d606-4ad7-924d-c4f6dda1da0b   role: project_manager
+--   cfo@novacore.test            dffa8cc9-f5e8-4ac8-b83d-e7bb9f30beb3   global_role: cfo
+--   owner@novacore.test          09387c27-882f-4aca-953e-787bc5b9c0fc   global_role: owner
+--
+-- Project: Hwy 5 Snowshed Hill (26607-0000), id be9ed906-6a33-4a4c-aa3e-81f5707b5684
+-- owner/cfo auto-enrolled by the on_project_created trigger; field/project_manager
+-- seated manually (they have no global_role, so the trigger doesn't reach them):
+--
+--   insert into project_members (project_id, user_id, role) values
+--   ('be9ed906-6a33-4a4c-aa3e-81f5707b5684', 'ee31c560-2015-4d7a-8a1d-ea3f93a73f96', 'field'),
+--   ('be9ed906-6a33-4a4c-aa3e-81f5707b5684', '86cf63d5-d606-4ad7-924d-c4f6dda1da0b', 'project_manager');
+--
+-- Line items + prices (3, enough to exercise the finance wall):
+--
+--   05.03.03  Asphalt paving, top lift   tonne   cost 88.50   sell 112.00
+--   05.02.01  Milling, full depth        m²      cost  4.20   sell   6.75
+--   05.04.01  Tack coat                  L       cost  1.10   sell   1.65
+--
+-- Full 48-item seed for this project is not yet supplied — placeholder only.
