@@ -16,9 +16,9 @@ export default defineConfig({
       injectRegister: false,
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Novacore',
-        short_name: 'Novacore',
-        description: 'Keywest Asphalt field data tracker',
+        name: 'NovaCore',
+        short_name: 'NovaCore',
+        description: 'NovaCore — field data and finance tracking for Keywest Asphalt, by Vektor Systems',
         theme_color: '#0D1B2A',
         background_color: '#F4F7FA',
         display: 'standalone',
