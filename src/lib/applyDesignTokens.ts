@@ -32,6 +32,7 @@ export function applyDesignTokens(): void {
     }
 
     root.setProperty('--font-family', typography.fontFamily)
+    root.setProperty('--font-family-mono', typography.fontFamilyMono)
     for (const [key, value] of Object.entries(typography.sizes)) {
       const mobileValue = isMobile ? (mobileOverrides.sizes as Record<string, string>)[key] : undefined
       root.setProperty(`--font-size-${key}`, mobileValue ?? value)

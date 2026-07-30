@@ -51,6 +51,10 @@ export const colors = {
 
 export const typography = {
   fontFamily: '"Inter", system-ui, -apple-system, sans-serif',
+  // Numeric data (stations, quantities, item codes) reads as instrument
+  // output, not prose — mono for those fields specifically, sans stays the
+  // default everywhere else. See NovaCore v1's field-entry screen.
+  fontFamilyMono: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
   sizes: { xs: '11px', sm: '12px', base: '14px', md: '15px', lg: '16px',
             xl: '18px', '2xl': '22px', '3xl': '28px' },
   weights: { normal: 400, medium: 500, semibold: 600, bold: 700 },

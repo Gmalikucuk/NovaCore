@@ -1,0 +1,85 @@
+.sign-in-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--color-bg);
+}
+
+.sign-in-form {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-8) var(--space-6);
+  box-shadow: var(--shadow-md);
+}
+
+.sign-in-wordmark {
+  margin: 0;
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-indigo);
+  text-align: center;
+}
+
+.sign-in-subtitle {
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-size-base);
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.sign-in-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-muted);
+  margin-top: var(--space-3);
+}
+
+.sign-in-input {
+  min-height: var(--touch-standard);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-input-bg);
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+}
+
+.sign-in-input:focus {
+  outline: 2px solid var(--color-blue);
+  outline-offset: 1px;
+  background: var(--color-input-focus);
+}
+
+.sign-in-error {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-red-light);
+  color: var(--color-red-dark);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+.sign-in-submit {
+  margin-top: var(--space-5);
+  min-height: var(--touch-large);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--color-green-button);
+  color: #ffffff;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.sign-in-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
