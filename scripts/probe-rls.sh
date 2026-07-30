@@ -17,6 +17,13 @@
 # Meant to be re-run after every migration that touches a policy or a
 # trigger on daily_entries — not read once and trusted forever.
 #
+# Writes real rows via the field write-path and privileged-path checks below,
+# so it always targets the dedicated sandbox project (projects.is_sandbox =
+# true — see 0005/0006's "PROBE — do not use" project), never a live one.
+# The discovery step picks whichever sandbox project the field seat is on;
+# it doesn't assume a fixed id, so re-seeding the sandbox project under a new
+# id needs no change here.
+#
 # Usage:
 #   cp scripts/.env.probe.example .env.probe   # fill in values
 #   ./scripts/probe-rls.sh
@@ -160,12 +167,19 @@ OWNER_TOKEN="${OWNER_AUTH%%|*}"; OWNER_ID="${OWNER_AUTH##*|}"
 echo "Signed in: field=$FIELD_ID pm=$PM_ID"
 echo
 
-echo "=== Discovering a project/line item visible to the field seat ==="
-request GET "line_items?select=id,project_id&limit=1" "$FIELD_TOKEN"
+echo "=== Discovering a line item on the sandbox project ==="
+# Filtered on projects.is_sandbox = true (see 0005/0006), not just "whatever
+# the field seat sees first" — this suite writes confirmed daily_entries as
+# part of its own checks (see the field-write-path and privileged-path
+# sections below), and those rows must never land on a real, non-sandbox
+# project. field is seated on Hwy 5 too, so an unfiltered discovery query
+# would be one seed-data reorder away from silently writing fabricated
+# quantity/margin into a live project again.
+request GET "line_items?select=id,project_id,projects!inner(is_sandbox)&projects.is_sandbox=eq.true&limit=1" "$FIELD_TOKEN"
 PROJECT_ID=$(json_field "$BODY_OUT" 0 project_id)
 LINE_ITEM_ID=$(json_field "$BODY_OUT" 0 id)
 if [ -z "$PROJECT_ID" ] || [ -z "$LINE_ITEM_ID" ]; then
-  echo "FATAL: field seat sees no line_items — seed data missing, cannot run probes" >&2
+  echo "FATAL: field seat sees no line_items on a sandbox project — seed data missing, cannot run probes" >&2
   echo "  ($STATUS $BODY_OUT)" >&2
   exit 1
 fi
