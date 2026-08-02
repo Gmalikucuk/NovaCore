@@ -4,8 +4,10 @@
 -- so passwords are hashed correctly), so this file documents structure/values for
 -- reference rather than serving as a runnable seed script end to end.
 --
--- Test users (password for all: NovaCoreTest76! — rotate/remove before any real
--- deployment):
+-- Test users (passwords rotated 2026-07-30 ahead of the Cloudflare Pages
+-- deploy — the original shared password had been exposed in plaintext
+-- outside the repo. Generated, not recorded anywhere; get a reset link from
+-- Supabase Auth if a seat needs signing into again):
 --   field@novacore.test          ee31c560-2015-4d7a-8a1d-ea3f93a73f96   role: field
 --   pm@novacore.test             86cf63d5-d606-4ad7-924d-c4f6dda1da0b   role: project_manager
 --   cfo@novacore.test            dffa8cc9-f5e8-4ac8-b83d-e7bb9f30beb3   global_role: cfo

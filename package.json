@@ -5,6 +5,9 @@
   "type": "module",
   "author": "Vektor Systems",
   "description": "NovaCore — field data and finance tracking for Keywest Asphalt",
+  "engines": {
+    "node": "24.15.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
