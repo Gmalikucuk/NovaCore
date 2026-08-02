@@ -1,34 +1,7 @@
 import { supabase } from './client'
 import type { QueuedDailyEntry } from '../db'
 
-export interface LineItem {
-  id: string
-  itemNo: string
-  description: string
-  unit: string
-  bidQuantity: number
-}
-
-const LUMP_UNITS = ['Lump Sum', 'Prov. Sum']
-export function isLumpUnit(unit: string): boolean {
-  return LUMP_UNITS.includes(unit)
-}
-
-export async function fetchLineItems(projectId: string): Promise<LineItem[]> {
-  const { data, error } = await supabase
-    .from('line_items')
-    .select('id, item_no, description, unit, bid_quantity')
-    .eq('project_id', projectId)
-    .order('item_no')
-  if (error) throw error
-  return (data ?? []).map((row) => ({
-    id: row.id,
-    itemNo: row.item_no,
-    description: row.description,
-    unit: row.unit,
-    bidQuantity: Number(row.bid_quantity),
-  }))
-}
+export { isLumpUnit } from '../lineItemUnits'
 
 interface RawEntryRow {
   id: string
@@ -78,6 +51,20 @@ function mapEntryRow(row: RawEntryRow): Omit<QueuedDailyEntry, 'pending' | 'last
 /** Every daily_entries row for a project, server-confirmed. RLS scopes this to projects the caller is a member of. */
 export async function fetchProjectEntries(projectId: string): Promise<Omit<QueuedDailyEntry, 'pending' | 'lastError'>[]> {
   const { data, error } = await supabase.from('daily_entries').select(ENTRY_SELECT).eq('project_id', projectId)
+  if (error) throw error
+  return (data ?? []).map((row) => mapEntryRow(row as unknown as RawEntryRow))
+}
+
+/** Scoped to one date — the desktop Manual Daily Entry screen's day view, entering a single day's rows without pulling the whole project's history. */
+export async function fetchEntriesForDate(
+  projectId: string,
+  entryDate: string,
+): Promise<Omit<QueuedDailyEntry, 'pending' | 'lastError'>[]> {
+  const { data, error } = await supabase
+    .from('daily_entries')
+    .select(ENTRY_SELECT)
+    .eq('project_id', projectId)
+    .eq('entry_date', entryDate)
   if (error) throw error
   return (data ?? []).map((row) => mapEntryRow(row as unknown as RawEntryRow))
 }
