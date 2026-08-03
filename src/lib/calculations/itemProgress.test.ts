@@ -36,23 +36,23 @@ describe('placedToDateByItem', () => {
 })
 
 describe('percentComplete', () => {
-  it('computes placed / approximateQuantity for a normal unit', () => {
-    expect(percentComplete(50, 200, 'Tonne')).toBe(0.25)
+  it('computes placed / approximateQuantity for a unit_price item', () => {
+    expect(percentComplete(50, 200, 'unit_price')).toBe(0.25)
   })
 
-  it('is null for a Lump Sum item regardless of approximate quantity', () => {
-    expect(percentComplete(5, 1, 'Lump Sum')).toBeNull()
+  it('is null for a lump_sum item regardless of approximate quantity', () => {
+    expect(percentComplete(5, 1, 'lump_sum')).toBeNull()
   })
 
-  it('is null for a Prov. Sum item', () => {
-    expect(percentComplete(0, 1, 'Prov. Sum')).toBeNull()
+  it('is null for a provisional_sum item', () => {
+    expect(percentComplete(0, 1, 'provisional_sum')).toBeNull()
   })
 
   it('is null when approximate quantity is zero, not a divide-by-zero', () => {
-    expect(percentComplete(10, 0, 'Tonne')).toBeNull()
+    expect(percentComplete(10, 0, 'unit_price')).toBeNull()
   })
 
   it('can exceed 1 for an overrun', () => {
-    expect(percentComplete(250, 200, 'Tonne')).toBe(1.25)
+    expect(percentComplete(250, 200, 'unit_price')).toBe(1.25)
   })
 })

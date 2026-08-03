@@ -5,13 +5,14 @@ import { useSession } from '../../lib/useSession'
 import { useLiveQuery } from '../../lib/sync/useLiveQuery'
 import { db, type QueuedQuantityRecord } from '../../lib/db'
 import { enqueueQuantityRecord, importServerQuantityRecords, registerSyncListeners, syncQueuedQuantityRecords } from '../../lib/sync/quantityRecordsSync'
-import { confirmQuantityRecord, fetchDistinctLocations, isLumpUnit } from '../../lib/supabase/quantityRecords'
+import { confirmQuantityRecord, fetchDistinctLocations } from '../../lib/supabase/quantityRecords'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
 import { ChainageStrip, type ChainageEntry } from '../../components/ChainageStrip'
 import { Button, Card, EmptyState, Input, NotificationBanner, PageHeader, Select, StatusBadge, Textarea } from '../../components/ui'
+import { quantity as fmtQuantity, station } from '../../lib/format'
 
 type StationMode = 'single' | 'range'
 
@@ -306,7 +307,7 @@ export function EntryScreen() {
                   </div>
                 )}
               </div>
-              {mode === 'range' && <p className="nc-numeric -mt-1 min-h-[1.2em] text-sm text-nc-accent">{reachMetres !== null ? `reach ${reachMetres.toFixed(1)} m` : ' '}</p>}
+              {mode === 'range' && <p className="nc-numeric -mt-1 min-h-[1.2em] text-sm text-nc-accent">{reachMetres !== null ? `reach ${station(reachMetres, 1)} m` : ' '}</p>}
 
               <div>
                 <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-quantity">
@@ -323,7 +324,7 @@ export function EntryScreen() {
                   required
                   disabled={!formUsable}
                 />
-                {selectedItem && isLumpUnit(selectedItem.unit) && <p className="mt-1 text-xs text-nc-text-muted">Lump-sum item — quantity is a % or portion complete, per contract convention.</p>}
+                {selectedItem && selectedItem.itemKind === 'lump_sum' && <p className="mt-1 text-xs text-nc-text-muted">Lump-sum item — quantity is a % or portion complete, per contract convention.</p>}
               </div>
 
               <div>
@@ -373,14 +374,11 @@ export function EntryScreen() {
                 <Card key={r.id} className="flex flex-col gap-1 p-3">
                   <div className="flex flex-wrap items-baseline gap-3">
                     <span className="font-semibold text-nc-text">{item?.itemNumber ?? r.itemId.slice(0, 8)}</span>
-                    <span className="nc-numeric text-sm text-nc-text-muted">
-                      {r.quantity}
-                      {item ? ` ${item.unit}` : ''}
-                    </span>
+                    <span className="nc-numeric text-sm text-nc-text-muted">{fmtQuantity(r.quantity, item?.unit)}</span>
                     {r.stationFrom !== null && (
                       <span className="nc-numeric text-sm text-nc-text-muted">
-                        {r.stationFrom}
-                        {r.stationTo !== null ? `–${r.stationTo}` : ''}
+                        {station(r.stationFrom)}
+                        {r.stationTo !== null ? `–${station(r.stationTo)}` : ''}
                       </span>
                     )}
                   </div>

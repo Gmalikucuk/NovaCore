@@ -1,5 +1,15 @@
 import { supabase } from './client'
 
+/**
+ * GC 52.03's three payment bases (0012). unit_price is the only kind where
+ * Approximate Quantity/percent-complete/a per-unit Cost or Unit Price mean
+ * anything — a Lump Sum's approximate_quantity is always 1 (one lump), and
+ * a Provisional Sum pays on value authorized in advance, not proportion.
+ * See itemProgress.ts's percentComplete and the screens that render "—"
+ * for the columns that don't apply to the other two kinds.
+ */
+export type ItemKind = 'unit_price' | 'lump_sum' | 'provisional_sum'
+
 export interface Item {
   id: string
   contractId: string
@@ -7,6 +17,7 @@ export interface Item {
   description: string
   unit: string
   approximateQuantity: number
+  itemKind: ItemKind
 }
 
 interface RawItemRow {
@@ -16,9 +27,10 @@ interface RawItemRow {
   description: string
   unit: string
   approximate_quantity: string
+  item_kind: ItemKind
 }
 
-const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity'
+const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity, item_kind'
 
 function mapItemRow(row: RawItemRow): Item {
   return {
@@ -28,6 +40,7 @@ function mapItemRow(row: RawItemRow): Item {
     description: row.description,
     unit: row.unit,
     approximateQuantity: Number(row.approximate_quantity),
+    itemKind: row.item_kind,
   }
 }
 

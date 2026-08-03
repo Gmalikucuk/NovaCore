@@ -1,3 +1,5 @@
+import { quantity as fmtQuantity, station } from '../lib/format'
+
 export interface ChainageEntry {
   id: string
   stationFrom: number
@@ -5,10 +7,6 @@ export interface ChainageEntry {
   status: 'draft' | 'confirmed'
   itemNumber: string
   quantity: number
-}
-
-function km(v: number): string {
-  return v.toFixed(3)
 }
 
 /**
@@ -37,7 +35,10 @@ export function ChainageStrip({ entries }: { entries: ChainageEntry[] }) {
   const pct = (v: number) => ((v - lo) / span) * 100
   const step = span > 10 ? 2 : span > 4 ? 1 : span > 1 ? 0.5 : 0.1
   const ticks: number[] = []
-  for (let k = Math.ceil(lo / step) * step; k <= hi + 1e-9; k += step) ticks.push(Number(k.toFixed(3)))
+  // Rounded to the same precision station() displays at, not a display
+  // call itself — this is float-step hygiene (0.1 + 0.1 + 0.1 drifting
+  // past exact tenths), not a number being rendered.
+  for (let k = Math.ceil(lo / step) * step; k <= hi + 1e-9; k += step) ticks.push(Math.round(k * 1000) / 1000)
 
   return (
     <div className="rounded-lg border border-nc-border bg-white p-3">
@@ -56,7 +57,7 @@ export function ChainageStrip({ entries }: { entries: ChainageEntry[] }) {
           return (
             <div
               key={e.id}
-              title={`${e.itemNumber}  ${km(e.stationFrom)}${e.stationTo != null ? '–' + km(e.stationTo) : ''}  ${e.quantity}`}
+              title={`${e.itemNumber}  ${station(e.stationFrom)}${e.stationTo != null ? '–' + station(e.stationTo) : ''}  ${fmtQuantity(e.quantity)}`}
               className={`absolute top-[15px] h-2.5 min-w-[3px] rounded-sm ${e.status === 'confirmed' ? 'bg-nc-success-text' : 'bg-nc-warning-text'}`}
               style={{ left: `${left}%`, width: `${width}%` }}
             />
@@ -65,12 +66,12 @@ export function ChainageStrip({ entries }: { entries: ChainageEntry[] }) {
         {ticks.map((t) => (
           <div key={t} className="absolute top-[26px] flex -translate-x-1/2 flex-col items-center" style={{ left: `${pct(t)}%` }}>
             <div className="h-[5px] w-px bg-nc-border" />
-            <div className="nc-numeric mt-0.5 whitespace-nowrap text-[10px] text-nc-text-muted">{t.toFixed(span > 4 ? 0 : 1)}</div>
+            <div className="nc-numeric mt-0.5 whitespace-nowrap text-[10px] text-nc-text-muted">{station(t, span > 4 ? 0 : 1)}</div>
           </div>
         ))}
       </div>
       <div className="nc-numeric mt-2 text-xs text-nc-text-muted">
-        km {km(lo)} → {km(hi)} · green is confirmed, yellow is awaiting review
+        km {station(lo)} → {station(hi)} · green is confirmed, yellow is awaiting review
       </div>
     </div>
   )

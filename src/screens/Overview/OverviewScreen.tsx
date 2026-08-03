@@ -1,0 +1,362 @@
+import { useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
+import { IconAlertTriangle, IconClockPause, IconFlag, IconMinus, IconTrendingDown, IconTrendingUp } from '@tabler/icons-react'
+import type { MyContract } from '../../lib/supabase/contracts'
+import { fetchItems, type Item } from '../../lib/supabase/items'
+import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
+import { fetchContractMonths, fetchItemMonths, fetchItemProgressRate, type ContractMonth, type ItemMonth, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
+import {
+  BEHIND_RATE_THRESHOLD_DAYS,
+  buildProblemList,
+  formatMonthLabel,
+  monthDirection,
+  monthKeyFromDate,
+  monthKeyToPeriod,
+  previousMonth,
+  weightedCompletion,
+  type Direction,
+  type MonthKey,
+  type ProblemItem,
+} from '../../lib/calculations/overview'
+import { margin as computeMargin } from '../../lib/calculations/margin'
+import { errorMessage } from '../../lib/errorMessage'
+import { money, percent, quantity as fmtQuantity } from '../../lib/format'
+import { NotificationBanner, PageHeader, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+
+function DirectionBadge({ direction, sameIsGood }: { direction: Direction; sameIsGood?: boolean }) {
+  if (direction === 'flat') return <IconMinus size={14} stroke={2} className="inline text-nc-text-muted" />
+  const good = direction === 'up'
+  const Icon = good ? IconTrendingUp : IconTrendingDown
+  return <Icon size={14} stroke={2} className={`inline ${good || sameIsGood === false ? 'text-nc-success-text' : 'text-nc-danger-text'}`} />
+}
+
+function problemSentence(p: ProblemItem, costByItem: Map<string, number | null>): string {
+  const { kind, row } = p
+  if (kind === 'stalled') {
+    return row.lastWorkDate ? `No activity since ${row.lastWorkDate} — not finished.` : 'No confirmed activity yet — not finished.'
+  }
+  if (kind === 'over_quantity') {
+    const overage = row.quantityToDate - row.approximateQuantity
+    const cost = costByItem.get(row.itemId) ?? null
+    const atCost = cost !== null ? ` — ${money(overage * cost)} at cost` : ''
+    return `${fmtQuantity(overage)} ${row.unit} over the Approximate Quantity${atCost}.`
+  }
+  // behind_rate — flagged past BEHIND_RATE_THRESHOLD_DAYS; named here so
+  // the flag doesn't read as an unexplained number, since there's no
+  // season-end date in the schema to compare against instead (see
+  // overview.ts).
+  return `At the recent rate, ~${row.workingDaysRemaining} more working days needed — flagged past ${BEHIND_RATE_THRESHOLD_DAYS}.`
+}
+
+const PROBLEM_KIND_LABEL: Record<ProblemItem['kind'], string> = {
+  stalled: 'Stalled',
+  over_quantity: 'Over quantity',
+  behind_rate: 'Behind rate',
+}
+
+function ProblemIcon({ kind }: { kind: ProblemItem['kind'] }) {
+  if (kind === 'stalled') return <IconClockPause size={16} stroke={1.75} className="text-nc-warning-text" />
+  if (kind === 'over_quantity') return <IconAlertTriangle size={16} stroke={1.75} className="text-nc-over-text" />
+  return <IconFlag size={16} stroke={1.75} className="text-nc-info-text" />
+}
+
+export function OverviewScreen() {
+  const contract = useOutletContext<MyContract>()
+
+  const [items, setItems] = useState<Item[]>([])
+  const [prices, setPrices] = useState<ItemPrice[]>([])
+  const [contractMonths, setContractMonths] = useState<ContractMonth[]>([])
+  const [itemMonths, setItemMonths] = useState<ItemMonth[]>([])
+  const [progressRate, setProgressRate] = useState<ItemProgressRate[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const nowMonthKey = useMemo(() => monthKeyFromDate(new Date()), [])
+  const [selectedMonth, setSelectedMonth] = useState<MonthKey>(nowMonthKey)
+
+  useEffect(() => {
+    setStatus('loading')
+    // view_rates gates item_prices and v_contract_month by construction
+    // (both join item_prices) — skipping the call for a seat that would
+    // just get zero rows back is a courtesy, not what's actually enforcing
+    // the finance wall.
+    Promise.all([
+      fetchItems(contract.id),
+      contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([]),
+      contract.viewRates ? fetchContractMonths(contract.id) : Promise.resolve([]),
+      fetchItemMonths(contract.id),
+      fetchItemProgressRate(contract.id),
+    ])
+      .then(([itemRows, priceRows, contractMonthRows, itemMonthRows, progressRows]) => {
+        setItems(itemRows)
+        setPrices(priceRows)
+        setContractMonths(contractMonthRows)
+        setItemMonths(itemMonthRows)
+        setProgressRate(progressRows)
+        setStatus('ready')
+      })
+      .catch((err: unknown) => {
+        setLoadError(errorMessage(err))
+        setStatus('error')
+      })
+  }, [contract.id, contract.viewRates])
+
+  const priceByItem = useMemo(() => new Map(prices.map((p) => [p.itemId, p])), [prices])
+  const progressByItem = useMemo(() => new Map(progressRate.map((p) => [p.itemId, p])), [progressRate])
+  const costByItem = useMemo(() => new Map(prices.map((p) => [p.itemId, p.costPrice])), [prices])
+
+  // Band 1
+  const currentContractMonth = contractMonths.find((m) => m.periodMonth === monthKeyToPeriod(nowMonthKey))
+  const previousContractMonth = contractMonths.find((m) => m.periodMonth === monthKeyToPeriod(previousMonth(nowMonthKey)))
+  const valueThisMonth = currentContractMonth?.valueInPeriod ?? 0
+  const valueLastMonth = previousContractMonth?.valueInPeriod ?? 0
+  const marginThisMonth = currentContractMonth?.marginInPeriod ?? 0
+  const marginLastMonth = previousContractMonth?.marginInPeriod ?? 0
+  const contractComplete = useMemo(() => weightedCompletion(progressRate), [progressRate])
+
+  // Band 2 — v_item_progress_rate already filters to unit_price items.
+  const problemList = useMemo(() => buildProblemList(progressRate, new Date()), [progressRate])
+
+  // Band 3
+  const availableMonths = useMemo(() => {
+    const keys = new Set(itemMonths.map((m) => m.periodMonth))
+    keys.add(monthKeyToPeriod(nowMonthKey))
+    return [...keys].sort().reverse()
+  }, [itemMonths, nowMonthKey])
+
+  const selectedPeriod = monthKeyToPeriod(selectedMonth)
+  const itemMonthByItem = useMemo(() => new Map(itemMonths.filter((m) => m.periodMonth === selectedPeriod).map((m) => [m.itemId, m])), [itemMonths, selectedPeriod])
+
+  const monthRows = useMemo(
+    () =>
+      items.map((item) => {
+        const inPeriod = itemMonthByItem.get(item.id)
+        const price = priceByItem.get(item.id)
+        const progress = progressByItem.get(item.id)
+        const unitPriced = item.itemKind === 'unit_price'
+        const quantityInPeriod = inPeriod?.quantityInPeriod ?? 0
+        const cost = unitPriced ? (price?.costPrice ?? null) : null
+        const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
+        return {
+          item,
+          quantityInPeriod,
+          valueInPeriod: unitPrice !== null ? quantityInPeriod * unitPrice : null,
+          costInPeriod: cost !== null ? quantityInPeriod * cost : null,
+          marginInPeriod: unitPriced ? computeMargin(quantityInPeriod, cost, unitPrice) : null,
+          quantityToDate: progress?.quantityToDate ?? 0,
+          approximateQuantity: unitPriced ? item.approximateQuantity : null,
+          remaining: unitPriced ? item.approximateQuantity - (progress?.quantityToDate ?? 0) : null,
+          proportionComplete: unitPriced ? (progress?.proportionComplete ?? null) : null,
+          isOverQuantity: unitPriced ? (progress?.isOverQuantity ?? false) : false,
+        }
+      }),
+    [items, itemMonthByItem, priceByItem, progressByItem],
+  )
+
+  const monthTotals = useMemo(
+    () => ({
+      value: monthRows.reduce((s, r) => s + (r.valueInPeriod ?? 0), 0),
+      cost: monthRows.reduce((s, r) => s + (r.costInPeriod ?? 0), 0),
+      margin: monthRows.reduce((s, r) => s + (r.marginInPeriod ?? 0), 0),
+    }),
+    [monthRows],
+  )
+
+  // Band 4
+  const unitPriceItems = useMemo(() => items.filter((i) => i.itemKind === 'unit_price'), [items])
+  const hasNoRatesAtAll = contract.viewRates && unitPriceItems.length > 0 && !unitPriceItems.some((i) => priceByItem.get(i.id)?.unitPrice != null)
+
+  return (
+    <div>
+      <PageHeader title="Overview" subtitle={contract.name} />
+      <p className="mb-6 max-w-3xl text-xs text-nc-text-subtle">
+        Value of Work is recorded quantity × tendered Unit Price — the Contractor's own measure, not a Ministry-approved progress estimate.
+      </p>
+
+      {contract.isSandbox && (
+        <NotificationBanner tone="danger" className="mb-4 font-medium">
+          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+        </NotificationBanner>
+      )}
+
+      {status === 'loading' && (
+        <div className="flex items-center gap-2 py-8 text-nc-text-muted">
+          <Spinner />
+          <span className="text-sm">Loading…</span>
+        </div>
+      )}
+      {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
+
+      {status === 'ready' && (
+        <>
+          {hasNoRatesAtAll && (
+            <NotificationBanner tone="warning" className="mb-4">
+              No Unit Prices are set on this contract yet — every money figure below is empty because no rate has been entered, not because there's no work.
+            </NotificationBanner>
+          )}
+
+          {/* Band 1 — the answer, top of screen, no scrolling required. */}
+          <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {contract.viewRates ? (
+              <>
+                <StatCard
+                  label="Value of Work this month"
+                  value={money(valueThisMonth)}
+                  sub={
+                    <>
+                      <DirectionBadge direction={monthDirection(valueThisMonth, valueLastMonth)} /> {money(valueLastMonth)} last month
+                    </>
+                  }
+                />
+                <StatCard
+                  label="Margin this month"
+                  value={<span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{money(marginThisMonth)}</span>}
+                  sub={
+                    <>
+                      <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {money(marginLastMonth)} last month
+                    </>
+                  }
+                />
+              </>
+            ) : (
+              <>
+                <StatCard label="Value of Work this month" value="—" sub="Needs view_rates" />
+                <StatCard label="Margin this month" value="—" sub="Needs view_rates" />
+              </>
+            )}
+            <StatCard label="Contract complete" value={percent(contractComplete)} sub="Quantity-weighted, Unit Price Items" />
+            <StatCard label="Items needing attention" value={problemList.length} sub={problemList.length > 0 ? 'See below' : 'None right now'} />
+          </div>
+
+          {/* Band 2 — what's wrong, worst first. */}
+          <section className="mb-8">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Needs attention</h2>
+            {problemList.length === 0 ? (
+              <p className="text-sm text-nc-text">Every Unit Price Item is progressing normally — nothing stalled, nothing over quantity, nothing behind the recent rate.</p>
+            ) : (
+              <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
+                {problemList.map((p) => (
+                  <div key={`${p.kind}-${p.row.itemId}`} className="flex items-start gap-3 px-4 py-3">
+                    <ProblemIcon kind={p.kind} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm">
+                        <span className="nc-numeric font-semibold text-nc-text">{p.row.itemNumber}</span>{' '}
+                        <span className="text-nc-text-muted">{p.row.description}</span>
+                      </p>
+                      <p className="text-sm text-nc-text-muted">{problemSentence(p, costByItem)}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-nc-secondary px-2 py-0.5 text-xs font-medium text-nc-text-muted">{PROBLEM_KIND_LABEL[p.kind]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Band 3 — the month, for the CFO. */}
+          <section>
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Month detail</h2>
+              <Select
+                className="w-auto"
+                value={selectedPeriod}
+                onChange={(e) => {
+                  const [y, m] = e.target.value.split('-').map(Number)
+                  setSelectedMonth({ year: y, month: m })
+                }}
+                aria-label="Month"
+              >
+                {availableMonths.map((period) => {
+                  const [y, m] = period.split('-').map(Number)
+                  return (
+                    <option key={period} value={period}>
+                      {formatMonthLabel({ year: y, month: m })}
+                    </option>
+                  )
+                })}
+              </Select>
+            </div>
+
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Item #</TH>
+                  <TH>Description</TH>
+                  <TH align="right">Quantity this month</TH>
+                  {contract.viewRates && (
+                    <>
+                      <TH align="right">Value this month</TH>
+                      <TH align="right">Cost this month</TH>
+                      <TH align="right">Margin this month</TH>
+                    </>
+                  )}
+                  <TH align="right">Quantity to date</TH>
+                  <TH align="right">Approximate Quantity</TH>
+                  <TH align="right">Remaining</TH>
+                  <TH align="right">% complete</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {monthRows.map((r) => (
+                  <TR key={r.item.id}>
+                    <TD className="nc-numeric">{r.item.itemNumber}</TD>
+                    <TD prose>{r.item.description}</TD>
+                    <TD align="right" className="nc-numeric">
+                      {fmtQuantity(r.quantityInPeriod, r.item.unit)}
+                    </TD>
+                    {contract.viewRates && (
+                      <>
+                        <TD align="right" className="nc-numeric">
+                          {money(r.valueInPeriod)}
+                        </TD>
+                        <TD align="right" className="nc-numeric">
+                          {money(r.costInPeriod)}
+                        </TD>
+                        <TD align="right" className={`nc-numeric ${r.marginInPeriod !== null && r.marginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                          {r.marginInPeriod === null ? '—' : money(r.marginInPeriod)}
+                        </TD>
+                      </>
+                    )}
+                    <TD align="right" className="nc-numeric">
+                      {fmtQuantity(r.quantityToDate)}
+                    </TD>
+                    <TD align="right" className="nc-numeric">
+                      {r.approximateQuantity === null ? '—' : fmtQuantity(r.approximateQuantity)}
+                    </TD>
+                    {/* A negative Remaining reads as a deficit (recorded
+                        past the Approximate Quantity), not a stray minus
+                        sign — the over tone on both cells is the same
+                        signal used everywhere else over-quantity shows up
+                        (StatusBadge, the problem list above). */}
+                    <TD align="right" className={`nc-numeric ${r.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
+                      {r.remaining === null ? '—' : fmtQuantity(r.remaining)}
+                    </TD>
+                    <TD align="right" className={`nc-numeric ${r.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
+                      {percent(r.proportionComplete)}
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+              {contract.viewRates && (
+                <tfoot>
+                  <tr>
+                    <td colSpan={3} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-xs text-nc-text-muted">
+                      Contract totals for {formatMonthLabel(selectedMonth)} — quantity columns aren't summed (mixed units across items); the $ columns are.
+                    </td>
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.value)}</td>
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.cost)}</td>
+                    <td
+                      className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                    >
+                      {money(monthTotals.margin)}
+                    </td>
+                    <td colSpan={4} className="border-t border-nc-border bg-nc-secondary px-4 py-3" />
+                  </tr>
+                </tfoot>
+              )}
+            </Table>
+          </section>
+        </>
+      )}
+    </div>
+  )
+}

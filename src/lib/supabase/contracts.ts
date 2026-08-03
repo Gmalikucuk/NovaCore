@@ -15,6 +15,8 @@ export interface MyContract extends ContractRights {
   id: string
   name: string
   contractNo: string | null
+  /** Fabricated data for exercising every screen state (0005/0006) — the Overview's unmissable, non-dismissable sandbox banner gates on this. */
+  isSandbox: boolean
 }
 
 /**
@@ -39,7 +41,7 @@ interface RawMembershipRow {
   confirm_quantity: boolean
   view_rates: boolean
   extract_report: boolean
-  contracts: { id: string; contract_name: string; contract_no: string | null }
+  contracts: { id: string; contract_name: string; contract_no: string | null; is_sandbox: boolean }
 }
 
 /**
@@ -62,7 +64,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   const { data, error } = await supabase
     .from('contract_members')
     .select(
-      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no )',
+      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox )',
     )
     .eq('user_id', user.id)
   if (error) throw error
@@ -73,6 +75,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       id: r.contracts.id,
       name: r.contracts.contract_name,
       contractNo: r.contracts.contract_no,
+      isSandbox: r.contracts.is_sandbox,
       createItems: r.create_items,
       setCost: r.set_cost,
       setUnitPrice: r.set_unit_price,

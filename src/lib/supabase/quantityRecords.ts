@@ -1,8 +1,6 @@
 import { supabase } from './client'
 import type { QueuedQuantityRecord } from '../db'
 
-export { isLumpUnit } from '../itemUnits'
-
 interface RawQuantityRecordRow {
   id: string
   contract_id: string

@@ -160,8 +160,22 @@ export function TH({ align = 'left', className = '', ...props }: ThHTMLAttribute
   return <th className={`bg-nc-secondary px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-nc-text-muted ${align === 'right' ? 'text-right' : 'text-left'} ${className}`} {...props} />
 }
 
-export function TD({ align = 'left', prose = false, className = '', ...props }: TdHTMLAttributes<HTMLTableCellElement> & AlignProp & { prose?: boolean }) {
-  return <td className={`text-data px-4 py-3 ${align === 'right' ? 'text-right' : 'text-left'} ${prose ? 'nc-prose' : ''} ${className}`} {...props} />
+interface DenseProp {
+  /**
+   * A cell wrapping an Input/Select/Button already carries that control's
+   * own vertical padding (py-2 on a field, py-2 on a Button) — stacking the
+   * normal py-3 on top of it roughly doubled every row containing a
+   * control to ~62-91px, well past Freight's ~44px density, and since a
+   * table row takes the height of its tallest cell, that inflated cell
+   * dragged every OTHER cell in the same row up with it. Dense drops the
+   * TD's own vertical padding to py-1 so the control's padding is what
+   * sets the row's height instead of adding to it.
+   */
+  dense?: boolean
+}
+
+export function TD({ align = 'left', prose = false, dense = false, className = '', ...props }: TdHTMLAttributes<HTMLTableCellElement> & AlignProp & { prose?: boolean } & DenseProp) {
+  return <td className={`text-data px-4 ${dense ? 'py-1' : 'py-3'} ${align === 'right' ? 'text-right' : 'text-left'} ${prose ? 'nc-prose' : ''} ${className}`} {...props} />
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -200,11 +214,14 @@ interface EmptyStateProps {
   title: ReactNode
   description?: ReactNode
   action?: ReactNode
+  /** An icon component (e.g. a Tabler icon) for an empty-DATA state — "nothing recorded yet" — not used on the right-denial usages, which read fine as text alone. */
+  icon?: ReactNode
 }
 
-export function EmptyState({ title, description, action }: EmptyStateProps) {
+export function EmptyState({ title, description, action, icon }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-lg border border-nc-border bg-white px-6 py-12 text-center">
+      {icon && <div className="mb-1 text-nc-text-subtle">{icon}</div>}
       <p className="text-sm font-medium text-nc-text">{title}</p>
       {description && <p className="text-sm text-nc-text-muted">{description}</p>}
       {action && <div className="mt-2">{action}</div>}

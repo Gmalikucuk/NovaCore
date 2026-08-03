@@ -1,4 +1,4 @@
-import { isLumpUnit } from '../itemUnits'
+import type { ItemKind } from '../supabase/items'
 
 export interface EffectiveQuantityRow {
   itemId: string
@@ -21,13 +21,20 @@ export function placedToDateByItem(rows: readonly EffectiveQuantityRow[]): Map<s
 }
 
 /**
- * null, not 0 or 100%, when the figure is meaningless: a Lump Sum / Prov.
- * Sum item (approximateQuantity is typically 1, and percent-against-1 is not
- * a real completion percentage — see the Line Items brief), or an
+ * null, not 0 or 100%, when the figure is meaningless: a Lump Sum or
+ * Provisional Sum item (approximate_quantity is always 1, and percent-
+ * against-1 is not a real completion percentage — GC 52.03(c) pays a
+ * Provisional Sum on value authorized in advance, not proportion), or an
  * approximate quantity of zero. Callers render null as "—", never as 0%.
+ *
+ * Keyed on item_kind (0012), not the unit string — the prior version
+ * matched unit against a hardcoded ['Lump Sum', 'Prov. Sum'] list, which
+ * silently missed the real seed data's "Provisional Sum" (full word,
+ * not the abbreviation the list checked for) and rendered 0.0% for every
+ * Provisional Sum item instead of "—".
  */
-export function percentComplete(placed: number, approximateQuantity: number, unit: string): number | null {
-  if (isLumpUnit(unit)) return null
+export function percentComplete(placed: number, approximateQuantity: number, itemKind: ItemKind): number | null {
+  if (itemKind !== 'unit_price') return null
   if (approximateQuantity <= 0) return null
   return placed / approximateQuantity
 }

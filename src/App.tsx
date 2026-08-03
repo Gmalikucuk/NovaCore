@@ -9,7 +9,7 @@ import { EntryScreen } from './screens/Entry/EntryScreen'
 import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
-import { DashboardScreen } from './screens/Dashboard/DashboardScreen'
+import { OverviewScreen } from './screens/Overview/OverviewScreen'
 
 function App() {
   return (
@@ -64,10 +64,10 @@ function App() {
                 }
               />
               <Route
-                path="/dashboard"
+                path="/overview"
                 element={
                   <ErrorBoundary>
-                    <DashboardScreen />
+                    <OverviewScreen />
                   </ErrorBoundary>
                 }
               />

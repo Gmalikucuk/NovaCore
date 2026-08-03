@@ -1,10 +1,13 @@
-import { Fragment, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { IconArrowDown, IconArrowUp, IconArrowsSort, IconCurrencyDollar } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
 import { margin } from '../../lib/calculations/margin'
+import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
+import { money, quantity as fmtQuantity } from '../../lib/format'
 import { EmptyState, Input, NotificationBanner, PageHeader, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 interface Draft {
@@ -29,6 +32,13 @@ function focusCell(row: number, field: 'cost' | 'unitPrice') {
   el?.select()
 }
 
+type SortKey = 'itemNumber' | 'quantity'
+
+function SortIndicator({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
+  if (!active) return <IconArrowsSort size={13} stroke={1.75} className="inline-block opacity-40" />
+  return dir === 'asc' ? <IconArrowUp size={13} stroke={2} className="inline-block" /> : <IconArrowDown size={13} stroke={2} className="inline-block" />
+}
+
 export function RatesScreen() {
   const contract = useOutletContext<MyContract>()
   // view_rates alone reaches this screen — a finance-only seat (view_rates
@@ -47,6 +57,13 @@ export function RatesScreen() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null)
 
+  // Contract quantity descending by default — the largest few items carry
+  // most of a paving contract's value, so a PM entering rates hits them
+  // first and can stop there if she wants. Sortable so the item-number
+  // order (scrambled by the default) is reachable too.
+  const [sortKey, setSortKey] = useState<SortKey>('quantity')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
   useEffect(() => {
     setStatus('loading')
     Promise.all([fetchItems(contract.id), fetchItemPrices(contract.id)])
@@ -63,29 +80,47 @@ export function RatesScreen() {
       })
   }, [contract.id])
 
-  // Contract quantity descending by default — the largest few items carry
-  // most of a paving contract's value, so a PM entering rates hits them
-  // first and can stop there if she wants (see the brief's own reasoning).
-  const sorted = useMemo(() => [...items].sort((a, b) => b.approximateQuantity - a.approximateQuantity), [items])
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir(key === 'quantity' ? 'desc' : 'asc')
+    }
+  }
+
+  const sorted = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    return [...items].sort((a, b) => (sortKey === 'itemNumber' ? compareItemCodes(a.itemNumber, b.itemNumber) * dir : (a.approximateQuantity - b.approximateQuantity) * dir))
+  }, [items, sortKey, sortDir])
 
   const rows = useMemo(
     () =>
       sorted.map((item) => {
+        // Cost/unit, Unit Price and Contract margin are all per-unit
+        // figures — meaningless for a Lump Sum (always qty 1) or
+        // Provisional Sum (paid on value authorized, not a rate), so those
+        // kinds never read as priced here regardless of what item_prices
+        // holds, and the priced/unpriced tallies below only count
+        // unit_price items — this screen isn't where a lump amount is set.
+        const unitPriced = item.itemKind === 'unit_price'
         const price = prices.get(item.id)
-        const cost = price?.costPrice ?? null
-        const unitPrice = price?.unitPrice ?? null
+        const cost = unitPriced ? (price?.costPrice ?? null) : null
+        const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
         return {
           item,
+          unitPriced,
           cost,
           unitPrice,
           priced: cost !== null && unitPrice !== null,
-          contractMargin: margin(item.approximateQuantity, cost, unitPrice),
+          contractMargin: unitPriced ? margin(item.approximateQuantity, cost, unitPrice) : null,
         }
       }),
     [sorted, prices],
   )
 
-  const pricedCount = rows.filter((r) => r.priced).length
+  const unitPriceRows = useMemo(() => rows.filter((r) => r.unitPriced), [rows])
+  const pricedCount = unitPriceRows.filter((r) => r.priced).length
   const totalMargin = rows.reduce((sum, r) => sum + (r.contractMargin ?? 0), 0)
 
   function updateDraft(id: string, field: 'cost' | 'unitPrice', value: string) {
@@ -127,7 +162,18 @@ export function RatesScreen() {
     })
   }
 
-  const subtitle = `${contract.name}${status === 'ready' ? ` · ${pricedCount} of ${rows.length} priced` : ''}`
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${pricedCount} of ${unitPriceRows.length} priced` : ''}`
+
+  function sortableHeader(key: SortKey, label: string, align: 'left' | 'right' = 'left'): ReactNode {
+    return (
+      <TH align={align} onClick={() => toggleSort(key)} className="cursor-pointer select-none hover:bg-nc-border/40">
+        <span className="inline-flex items-center gap-1">
+          {label}
+          <SortIndicator active={sortKey === key} dir={sortDir} />
+        </span>
+      </TH>
+    )
+  }
 
   return (
     <div>
@@ -145,95 +191,111 @@ export function RatesScreen() {
           )}
           {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-          {status === 'ready' && (
-            <>
-              {!canEdit && (
-                <NotificationBanner tone="info" className="mb-4">
-                  Read-only — setting rates needs set_cost and set_unit_price on this contract.
-                </NotificationBanner>
-              )}
-              {pricedCount < rows.length && (
-                <NotificationBanner tone="warning" className="mb-4">
-                  {rows.length - pricedCount} of {rows.length} items still unpriced — the contract margin total below reflects priced items only, not the whole contract.
-                </NotificationBanner>
-              )}
+          {status === 'ready' &&
+            (rows.length === 0 ? (
+              <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
+            ) : (
+              <>
+                {!canEdit && (
+                  <NotificationBanner tone="info" className="mb-4">
+                    Read-only — setting rates needs set_cost and set_unit_price on this contract.
+                  </NotificationBanner>
+                )}
+                {pricedCount < unitPriceRows.length && (
+                  <NotificationBanner tone="warning" className="mb-4">
+                    {unitPriceRows.length - pricedCount} of {unitPriceRows.length} unit-price items still unpriced — the contract margin total below reflects priced items only, not the whole
+                    contract.
+                  </NotificationBanner>
+                )}
 
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Item #</TH>
-                    <TH>Description</TH>
-                    <TH align="right">Approximate Quantity</TH>
-                    <TH align="right">Cost / unit</TH>
-                    <TH align="right">Unit Price</TH>
-                    <TH align="right">Contract margin</TH>
-                  </TR>
-                </THead>
-                <TBody>
-                  {rows.map((row, i) => {
-                    const draft = drafts.get(row.item.id) ?? { cost: '', unitPrice: '' }
-                    return (
-                      <Fragment key={row.item.id}>
-                        <TR className={row.priced ? undefined : 'bg-nc-secondary/60'}>
-                          <TD className="nc-numeric">{row.item.itemNumber}</TD>
-                          <TD prose>{row.item.description}</TD>
-                          <TD align="right" className="nc-numeric">
-                            {row.item.approximateQuantity} <span className="text-nc-text-muted">{row.item.unit}</span>
-                          </TD>
-                          <TD align="right">
-                            <Input
-                              className="nc-numeric text-right"
-                              data-cell={`${i}-cost`}
-                              inputMode="decimal"
-                              placeholder="—"
-                              value={draft.cost}
-                              readOnly={!canEdit}
-                              onChange={(e) => updateDraft(row.item.id, 'cost', e.target.value)}
-                              onBlur={() => void commitRate(row.item, 'cost')}
-                              onKeyDown={(e) => handleKeyDown(e, row.item, 'cost', i)}
-                            />
-                          </TD>
-                          <TD align="right">
-                            <Input
-                              className="nc-numeric text-right"
-                              data-cell={`${i}-unitPrice`}
-                              inputMode="decimal"
-                              placeholder="—"
-                              value={draft.unitPrice}
-                              readOnly={!canEdit}
-                              onChange={(e) => updateDraft(row.item.id, 'unitPrice', e.target.value)}
-                              onBlur={() => void commitRate(row.item, 'unitPrice')}
-                              onKeyDown={(e) => handleKeyDown(e, row.item, 'unitPrice', i)}
-                            />
-                          </TD>
-                          <TD align="right" className={`nc-numeric ${row.contractMargin !== null && row.contractMargin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                            {row.contractMargin === null ? '—' : row.contractMargin.toLocaleString('en-CA', { maximumFractionDigits: 0 })}
-                          </TD>
-                        </TR>
-                        {rowError?.id === row.item.id && (
-                          <TR>
-                            <TD colSpan={6} className="text-nc-danger-text">
-                              {rowError.message}
+                <Table>
+                  <THead>
+                    <TR>
+                      {sortableHeader('itemNumber', 'Item #')}
+                      <TH>Description</TH>
+                      {sortableHeader('quantity', 'Approximate Quantity', 'right')}
+                      <TH align="right">Cost / unit</TH>
+                      <TH align="right">Unit Price</TH>
+                      <TH align="right">Contract margin</TH>
+                    </TR>
+                  </THead>
+                  <TBody>
+                    {rows.map((row, i) => {
+                      const draft = drafts.get(row.item.id) ?? { cost: '', unitPrice: '' }
+                      return (
+                        <Fragment key={row.item.id}>
+                          <TR className={row.unitPriced && !row.priced ? 'bg-nc-secondary/60' : undefined}>
+                            <TD className="nc-numeric">{row.item.itemNumber}</TD>
+                            <TD prose>{row.item.description}</TD>
+                            <TD align="right" className="nc-numeric">
+                              {row.unitPriced ? (
+                                <>
+                                  {fmtQuantity(row.item.approximateQuantity)} <span className="text-nc-text-muted">{row.item.unit}</span>
+                                </>
+                              ) : (
+                                '—'
+                              )}
+                            </TD>
+                            <TD align="right" dense={row.unitPriced}>
+                              {row.unitPriced ? (
+                                <Input
+                                  className="nc-numeric text-right"
+                                  data-cell={`${i}-cost`}
+                                  inputMode="decimal"
+                                  placeholder="—"
+                                  value={draft.cost}
+                                  readOnly={!canEdit}
+                                  onChange={(e) => updateDraft(row.item.id, 'cost', e.target.value)}
+                                  onBlur={() => void commitRate(row.item, 'cost')}
+                                  onKeyDown={(e) => handleKeyDown(e, row.item, 'cost', i)}
+                                />
+                              ) : (
+                                <span className="text-nc-text-muted">—</span>
+                              )}
+                            </TD>
+                            <TD align="right" dense={row.unitPriced}>
+                              {row.unitPriced ? (
+                                <Input
+                                  className="nc-numeric text-right"
+                                  data-cell={`${i}-unitPrice`}
+                                  inputMode="decimal"
+                                  placeholder="—"
+                                  value={draft.unitPrice}
+                                  readOnly={!canEdit}
+                                  onChange={(e) => updateDraft(row.item.id, 'unitPrice', e.target.value)}
+                                  onBlur={() => void commitRate(row.item, 'unitPrice')}
+                                  onKeyDown={(e) => handleKeyDown(e, row.item, 'unitPrice', i)}
+                                />
+                              ) : (
+                                <span className="text-nc-text-muted">—</span>
+                              )}
+                            </TD>
+                            <TD align="right" className={`nc-numeric ${row.contractMargin !== null && row.contractMargin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                              {row.contractMargin === null ? '—' : money(row.contractMargin)}
                             </TD>
                           </TR>
-                        )}
-                      </Fragment>
-                    )
-                  })}
-                </TBody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={5} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                      Contract margin ({pricedCount} of {rows.length} items priced)
-                    </td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                      {totalMargin.toLocaleString('en-CA', { maximumFractionDigits: 0 })}
-                    </td>
-                  </tr>
-                </tfoot>
-              </Table>
-            </>
-          )}
+                          {rowError?.id === row.item.id && (
+                            <TR>
+                              <TD colSpan={6} className="text-nc-danger-text">
+                                {rowError.message}
+                              </TD>
+                            </TR>
+                          )}
+                        </Fragment>
+                      )
+                    })}
+                  </TBody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={5} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                        Contract margin ({pricedCount} of {unitPriceRows.length} unit-price items priced)
+                      </td>
+                      <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(totalMargin)}</td>
+                    </tr>
+                  </tfoot>
+                </Table>
+              </>
+            ))}
         </>
       )}
     </div>

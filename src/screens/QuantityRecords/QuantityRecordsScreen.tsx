@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { IconCalendarPlus } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
 import { fetchItems, type Item } from '../../lib/supabase/items'
@@ -8,6 +9,7 @@ import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
+import { quantity as fmtQuantity, station } from '../../lib/format'
 import { Button, EmptyState, Input, NotificationBanner, PageHeader, Select, Spinner, StatusBadge, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 type DayRecord = Omit<QueuedQuantityRecord, 'pending' | 'lastError'>
@@ -243,94 +245,105 @@ export function QuantityRecordsScreen() {
             </NotificationBanner>
           )}
 
-          <form onSubmit={handleSubmit} className="mb-6">
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Item #</TH>
-                  <TH>Location</TH>
-                  <TH align="right">Station from</TH>
-                  <TH align="right">Station to</TH>
-                  <TH align="right">Reach (m)</TH>
-                  <TH align="right">Quantity</TH>
-                  <TH>Note</TH>
-                  <TH />
-                </TR>
-              </THead>
-              <TBody>
-                <TR>
-                  <TD>
-                    <Select value={itemId} onChange={(e) => setItemId(e.target.value)} onKeyDown={handleFormKeyDown} disabled={!formUsable}>
-                      {items.length === 0 && <option value="">No items</option>}
-                      {items.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.itemNumber}
-                        </option>
-                      ))}
-                    </Select>
-                  </TD>
-                  <TD>
-                    <Input
-                      list="quantity-records-locations"
-                      value={fields.location}
-                      onChange={(e) => setFields({ ...fields, location: e.target.value })}
-                      onKeyDown={handleFormKeyDown}
-                      disabled={!formUsable}
-                    />
-                    <datalist id="quantity-records-locations">
-                      {locations.map((loc) => (
-                        <option key={loc} value={loc} />
-                      ))}
-                    </datalist>
-                  </TD>
-                  <TD align="right">
-                    <Input
-                      ref={stationFromRef}
-                      className="nc-numeric text-right"
-                      type="number"
-                      step="0.001"
-                      value={fields.stationFrom}
-                      onChange={(e) => setFields({ ...fields, stationFrom: e.target.value })}
-                      onKeyDown={handleFormKeyDown}
-                      disabled={!formUsable}
-                    />
-                  </TD>
-                  <TD align="right">
-                    <Input
-                      className="nc-numeric text-right"
-                      type="number"
-                      step="0.001"
-                      value={fields.stationTo}
-                      onChange={(e) => setFields({ ...fields, stationTo: e.target.value })}
-                      onKeyDown={handleFormKeyDown}
-                      disabled={!formUsable}
-                    />
-                  </TD>
-                  <TD align="right" className="nc-numeric text-nc-text-muted">
-                    {reachMetres !== null ? reachMetres.toFixed(1) : '—'}
-                  </TD>
-                  <TD align="right">
-                    <Input
-                      className="nc-numeric text-right"
-                      type="number"
-                      step="0.01"
-                      value={fields.quantity}
-                      onChange={(e) => setFields({ ...fields, quantity: e.target.value })}
-                      onKeyDown={handleFormKeyDown}
-                      disabled={!formUsable}
-                    />
-                  </TD>
-                  <TD>
-                    <Input value={fields.note} onChange={(e) => setFields({ ...fields, note: e.target.value })} onKeyDown={handleFormKeyDown} disabled={!formUsable} />
-                  </TD>
-                  <TD>
-                    <Button type="submit" disabled={submitting || !formUsable} title={!formUsable ? `Needs ${correctingId ? 'correct_quantity' : 'enter_quantity'}` : undefined}>
-                      {submitting ? 'Adding…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add — Enter'}
-                    </Button>
-                  </TD>
-                </TR>
-              </TBody>
-            </Table>
+          {/* A card with flex-wrap fields, not a single rigid table row —
+              seven fields plus the submit button never fit one row at
+              1440px (the button rendered ~330px past the right edge, fully
+              unreachable). Wrapping to a second row here instead of
+              overflowing horizontally. */}
+          <form onSubmit={handleSubmit} className="mb-6 rounded-lg border border-nc-border bg-nc-secondary p-4">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Add a record</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="w-32">
+                <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-item">
+                  Item #
+                </label>
+                <Select id="de-item" value={itemId} onChange={(e) => setItemId(e.target.value)} onKeyDown={handleFormKeyDown} disabled={!formUsable}>
+                  {items.length === 0 && <option value="">No items</option>}
+                  {items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.itemNumber}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="min-w-[180px] flex-1">
+                <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-location">
+                  Location
+                </label>
+                <Input
+                  id="de-location"
+                  list="quantity-records-locations"
+                  value={fields.location}
+                  onChange={(e) => setFields({ ...fields, location: e.target.value })}
+                  onKeyDown={handleFormKeyDown}
+                  disabled={!formUsable}
+                />
+                <datalist id="quantity-records-locations">
+                  {locations.map((loc) => (
+                    <option key={loc} value={loc} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="w-28">
+                <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-station-from">
+                  Station from
+                </label>
+                <Input
+                  id="de-station-from"
+                  ref={stationFromRef}
+                  className="nc-numeric"
+                  type="number"
+                  step="0.001"
+                  value={fields.stationFrom}
+                  onChange={(e) => setFields({ ...fields, stationFrom: e.target.value })}
+                  onKeyDown={handleFormKeyDown}
+                  disabled={!formUsable}
+                />
+              </div>
+              <div className="w-28">
+                <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-station-to">
+                  Station to
+                </label>
+                <Input
+                  id="de-station-to"
+                  className="nc-numeric"
+                  type="number"
+                  step="0.001"
+                  value={fields.stationTo}
+                  onChange={(e) => setFields({ ...fields, stationTo: e.target.value })}
+                  onKeyDown={handleFormKeyDown}
+                  disabled={!formUsable}
+                />
+              </div>
+              <div className="w-20">
+                <p className="mb-1 text-xs text-nc-text-muted">Reach (m)</p>
+                <p className="nc-numeric px-3 py-2 text-sm text-nc-text-muted">{reachMetres !== null ? station(reachMetres, 1) : '—'}</p>
+              </div>
+              <div className="w-28">
+                <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-quantity">
+                  Quantity
+                </label>
+                <Input
+                  id="de-quantity"
+                  className="nc-numeric"
+                  type="number"
+                  step="0.01"
+                  value={fields.quantity}
+                  onChange={(e) => setFields({ ...fields, quantity: e.target.value })}
+                  onKeyDown={handleFormKeyDown}
+                  disabled={!formUsable}
+                />
+              </div>
+              <div className="min-w-[200px] flex-1">
+                <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-note">
+                  Note
+                </label>
+                <Input id="de-note" value={fields.note} onChange={(e) => setFields({ ...fields, note: e.target.value })} onKeyDown={handleFormKeyDown} disabled={!formUsable} />
+              </div>
+              <Button type="submit" disabled={submitting || !formUsable} title={!formUsable ? `Needs ${correctingId ? 'correct_quantity' : 'enter_quantity'}` : undefined}>
+                {submitting ? 'Adding…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add — Enter'}
+              </Button>
+            </div>
           </form>
           {formError && (
             <NotificationBanner tone="danger" className="mb-4">
@@ -346,71 +359,66 @@ export function QuantityRecordsScreen() {
           )}
           {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-          {status === 'ready' && (
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Item #</TH>
-                  <TH>Location</TH>
-                  <TH align="right">Station</TH>
-                  <TH align="right">Quantity</TH>
-                  <TH>Note</TH>
-                  <TH>Status</TH>
-                  <TH />
-                </TR>
-              </THead>
-              <TBody>
-                {records.length === 0 && (
+          {status === 'ready' &&
+            (records.length === 0 ? (
+              <EmptyState icon={<IconCalendarPlus size={32} stroke={1.5} />} title={`No entries yet for ${workDate}.`} description="Add the day's first record above." />
+            ) : (
+              <Table>
+                <THead>
                   <TR>
-                    <TD colSpan={7} className="text-center text-nc-text-muted">
-                      No entries yet for {workDate}.
-                    </TD>
+                    <TH>Item #</TH>
+                    <TH>Location</TH>
+                    <TH align="right">Station</TH>
+                    <TH align="right">Quantity</TH>
+                    <TH>Note</TH>
+                    <TH>Status</TH>
+                    <TH />
                   </TR>
-                )}
-                {records.map((r) => {
-                  const item = itemById.get(r.itemId)
-                  return (
-                    <TR key={r.id}>
-                      <TD className="nc-numeric">{item?.itemNumber ?? r.itemId.slice(0, 8)}</TD>
-                      <TD prose>{r.location}</TD>
-                      <TD align="right" className="nc-numeric">
-                        {r.stationFrom !== null ? `${r.stationFrom}${r.stationTo !== null ? `–${r.stationTo}` : ''}` : ''}
-                      </TD>
-                      <TD align="right" className="nc-numeric">
-                        {r.quantity}
-                        {item ? ` ${item.unit}` : ''}
-                      </TD>
-                      <TD prose>{r.note}</TD>
-                      <TD>
-                        <div className="flex flex-wrap items-center gap-1">
-                          <StatusBadge status={r.status} />
-                          {supersededByConfirmed.has(r.id) && <StatusBadge status="superseded" />}
-                        </div>
-                      </TD>
-                      <TD>
-                        <div className="flex items-center gap-2">
-                          {r.status === 'draft' && (
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              disabled={confirmingId === r.id || !contract.confirmQuantity}
-                              title={!contract.confirmQuantity ? 'Needs confirm_quantity' : undefined}
-                              onClick={() => void handleConfirm(r.id)}
-                            >
-                              {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
+                </THead>
+                <TBody>
+                  {records.map((r) => {
+                    const item = itemById.get(r.itemId)
+                    return (
+                      <TR key={r.id}>
+                        <TD className="nc-numeric">{item?.itemNumber ?? r.itemId.slice(0, 8)}</TD>
+                        <TD prose>{r.location}</TD>
+                        <TD align="right" className="nc-numeric">
+                          {r.stationFrom !== null ? `${station(r.stationFrom)}${r.stationTo !== null ? `–${station(r.stationTo)}` : ''}` : ''}
+                        </TD>
+                        <TD align="right" className="nc-numeric">
+                          {fmtQuantity(r.quantity, item?.unit)}
+                        </TD>
+                        <TD prose>{r.note}</TD>
+                        <TD>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <StatusBadge status={r.status} />
+                            {supersededByConfirmed.has(r.id) && <StatusBadge status="superseded" />}
+                          </div>
+                        </TD>
+                        <TD dense>
+                          <div className="flex items-center gap-2">
+                            {r.status === 'draft' && (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                disabled={confirmingId === r.id || !contract.confirmQuantity}
+                                title={!contract.confirmQuantity ? 'Needs confirm_quantity' : undefined}
+                                onClick={() => void handleConfirm(r.id)}
+                              >
+                                {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
+                              </Button>
+                            )}
+                            <Button type="button" variant="secondary" disabled={!canCorrect} title={!canCorrect ? 'Needs correct_quantity' : undefined} onClick={() => startCorrection(r)}>
+                              Correct
                             </Button>
-                          )}
-                          <Button type="button" variant="secondary" disabled={!canCorrect} title={!canCorrect ? 'Needs correct_quantity' : undefined} onClick={() => startCorrection(r)}>
-                            Correct
-                          </Button>
-                        </div>
-                      </TD>
-                    </TR>
-                  )
-                })}
-              </TBody>
-            </Table>
-          )}
+                          </div>
+                        </TD>
+                      </TR>
+                    )
+                  })}
+                </TBody>
+              </Table>
+            ))}
         </>
       )}
     </div>

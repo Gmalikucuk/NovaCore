@@ -27,8 +27,11 @@ function NavGroupHeading({ children }: { children: React.ReactNode }) {
  * create_items (nothing useful there without it — the screen would be a
  * bare read-only catalog). Rates needs view_rates alone. Daily Entry needs
  * enter_quantity OR correct_quantity — either one reaches it, with the
- * unavailable half of the form disabled inside. Dashboard is never gated
- * here: it's reachable by every contract member.
+ * unavailable half of the form disabled inside. Overview is never gated
+ * here: it's reachable by every contract member, same as the Dashboard it
+ * replaced — the finance-specific bands inside it hide themselves when the
+ * seat lacks view_rates, the same pattern Dashboard used for its finance
+ * columns.
  *
  * The ADMIN group renders nothing — no heading, no content — while both
  * company-wide rights (profiles.create_projects/manage_members, not
@@ -61,19 +64,27 @@ export function Sidebar() {
 
         <div className="px-5 pb-4">
           {contracts.length > 1 ? (
+            // The closed control can only show one line of text — a bare
+            // name truncates mid-word once it's longer than ~180px
+            // ("Hwy 97C Pennask Summ▾"), so the contract number leads
+            // (short, unique, never truncates) and the browser's own
+            // ellipsis lands in the descriptive tail instead. `title` gives
+            // the full name on hover, same as the single-contract case
+            // below gets from its own truncate.
             <select
               className="w-full rounded-md border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white"
               value={contract.id}
+              title={contract.name}
               onChange={(e) => setCurrentId(e.target.value)}
             >
               {contracts.map((c) => (
                 <option key={c.id} value={c.id} className="text-nc-text">
-                  {c.name}
+                  {c.contractNo ? `${c.contractNo} — ${c.name}` : c.name}
                 </option>
               ))}
             </select>
           ) : (
-            <div>
+            <div title={contract.name}>
               <p className="truncate text-sm font-medium text-white">{contract.name}</p>
               {contract.contractNo && <p className="text-xs text-white/50">{contract.contractNo}</p>}
             </div>
@@ -84,9 +95,9 @@ export function Sidebar() {
           <div>
             <NavGroupHeading>Contract</NavGroupHeading>
             <div className="space-y-0.5">
-              <NavLink to="/dashboard" className={navLinkClass}>
+              <NavLink to="/overview" className={navLinkClass}>
                 <IconLayoutDashboard size={18} stroke={1.75} />
-                Dashboard
+                Overview
               </NavLink>
               {contract.createItems && (
                 <NavLink to="/line-items" className={navLinkClass}>
@@ -153,7 +164,13 @@ export function Sidebar() {
       </aside>
 
       <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-7xl px-8 py-8">
+        {/* Not centered, not max-w-7xl — that assumed no sidebar competing
+            for width (Freight's own layout), which here left ~350px of
+            dead gutter on each side of a 1280px column while wide tables
+            still overflowed anyway. A modest left offset from the sidebar
+            (px-8) and a wide cap; screens with genuine prose or a form
+            (not a data table) apply their own narrower max-w- locally. */}
+        <div className="max-w-[1800px] px-8 py-8">
           <Outlet context={contract} />
         </div>
       </main>

@@ -34,7 +34,7 @@ export function FieldHeader() {
   const { current: contract } = contractState
   const { mode, setOverride } = useViewMode()
 
-  if (mode === 'office') return <Navigate to="/dashboard" replace />
+  if (mode === 'office') return <Navigate to="/overview" replace />
   if (!contract) return null
 
   return (
