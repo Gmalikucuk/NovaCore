@@ -16,7 +16,8 @@
    visible at a glance. Freight holds this line; hold it here.
 
    DELIBERATE DIVERGENCES FROM FREIGHT — three, each justified below:
-     1. --text-data-*  a 13px table scale alongside Freight's 14px body
+     1. the data type scale (--text-data, --text-label, --text-sm), one
+        notch larger than Freight's own body size
      2. font-variant-numeric: tabular-nums as a DEFAULT, not per-site
      3. --color-nc-over-* a sixth status tone for over-quantity
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -88,19 +89,20 @@
      One family, matching Freight exactly. */
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
-  /* ── DIVERGENCE 1: a data type scale ────────────────────────────────────
-     Freight's body is 14px, calibrated for shipment lists. NovaCore's central
-     view is Schedule 7: 48 Items x up to 10 columns of figures. QuoteDock hit
-     the same wall and dropped to 13px for the same reason.
+  /* -- DIVERGENCE 1: a data type scale --
+     Originally reasoned from Freight 14px body and Schedule 7 density,
+     both too small for this audience. Bumped one notch across the board
+     after the first pass shipped too small for daily use: base body 14px
+     to 15px (via the text-sm override below, since that is the de facto
+     body and control size used everywhere), text-data 13px to 14px,
+     text-label 11px to 12px (eleven was too small for a column head
+     someone has to read to know what a number means).
 
-     So: 14px for prose and controls, as Freight. 13px inside data tables.
-     Declared as tokens rather than left as arbitrary `text-[13px]` classes,
-     which is where QuoteDock's second, accidental scale came from.
-
-     Two sizes, named by role. Do not add a third without a reason. */
-  --text-data: 0.8125rem;          /* 13px — table cells, dense figures */
+     Three sizes, named by role. Do not add a fourth without a reason. */
+  --text-sm: 0.9375rem;
+  --text-data: 0.875rem;
   --text-data--line-height: 1.35;
-  --text-label: 0.6875rem;         /* 11px — micro-labels, column heads */
+  --text-label: 0.75rem;
   --text-label--line-height: 1.3;
 }
 

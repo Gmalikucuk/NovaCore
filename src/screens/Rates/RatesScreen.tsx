@@ -236,10 +236,20 @@ export function RatesScreen() {
                                 '—'
                               )}
                             </TD>
+                            {/* size=10 on both rate inputs below is load-bearing, not decorative: an
+                                unconstrained <input> has no CSS width here (w-full only resolves once
+                                the column width is already known), so the browser's auto-layout table
+                                falls back to its UA-default preferred input width (~20 characters) when
+                                sizing these columns — measured at 224.5px each for a column whose actual
+                                content never exceeds ~8 characters, which alone accounted for the
+                                table's 57px overflow past its own wrapper at 1440px. The HTML `size`
+                                attribute (not a CSS width, which w-full would just override) is what
+                                the layout algorithm actually reads at that stage. */}
                             <TD align="right" dense={row.unitPriced}>
                               {row.unitPriced ? (
                                 <Input
                                   className="nc-numeric text-right"
+                                  size={10}
                                   data-cell={`${i}-cost`}
                                   inputMode="decimal"
                                   placeholder="—"
@@ -257,6 +267,7 @@ export function RatesScreen() {
                               {row.unitPriced ? (
                                 <Input
                                   className="nc-numeric text-right"
+                                  size={10}
                                   data-cell={`${i}-unitPrice`}
                                   inputMode="decimal"
                                   placeholder="—"

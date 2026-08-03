@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
-import { IconChevronDown, IconChevronRight } from '@tabler/icons-react'
+import { IconChevronDown, IconChevronRight, IconTable } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
@@ -14,7 +14,7 @@ import { formatDayLabel } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportTrackerWorkbook } from '../../lib/export/trackerExport'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
-import { Button, NotificationBanner, PageHeader, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, EmptyState, NotificationBanner, PageHeader, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 function periodLabel(period: string): string {
   const [y, m] = period.split('-').map(Number)
@@ -224,175 +224,179 @@ export function TrackerScreen() {
             </NotificationBanner>
           )}
 
-          <Table>
-            <THead>
-              <TR>
-                <TH className="sticky left-0 z-10 bg-nc-secondary" style={{ width: STICKY_WIDTHS.itemNumber }}>
-                  Item #
-                </TH>
-                <TH className="sticky z-10 bg-nc-secondary" style={{ left: STICKY_LEFT.description, width: STICKY_WIDTHS.description }}>
-                  Description
-                </TH>
-                <TH className="sticky z-10 bg-nc-secondary" style={{ left: STICKY_LEFT.unit, width: STICKY_WIDTHS.unit }}>
-                  Unit
-                </TH>
-                <TH align="right" className="sticky z-10 bg-nc-secondary" style={{ left: STICKY_LEFT.approxQty, width: STICKY_WIDTHS.approxQty }}>
-                  Approx. Qty
-                </TH>
-
-                {periods.map((period) => {
-                  const expanded = expandedPeriods.has(period)
-                  const days = daysByPeriod.get(period) ?? []
-                  return (
-                    <Fragment key={period}>
-                      {expanded &&
-                        days.map((day) => (
-                          <TH key={day} align="right">
-                            {formatDayLabel(day)}
-                          </TH>
-                        ))}
-                      <TH align="right">
-                        <button type="button" className="flex items-center gap-1 hover:underline" onClick={() => togglePeriod(period)}>
-                          {expanded ? <IconChevronDown size={14} stroke={2} /> : <IconChevronRight size={14} stroke={2} />}
-                          {periodLabel(period)} Qty
-                        </button>
-                      </TH>
-                      {contract.viewRates && <TH align="right">{periodLabel(period)} $</TH>}
-                    </Fragment>
-                  )
-                })}
-
-                <TH align="right">Qty to Date</TH>
-                {contract.viewRates && <TH align="right">Value to Date</TH>}
-                {contract.viewRates && <TH align="right">MoT Qty</TH>}
-                {contract.viewRates && <TH align="right">MoT Total</TH>}
-                <TH align="right">Remaining</TH>
-                <TH align="right">% Complete</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {sections.map((section) => (
-                <Fragment key={section.prefix}>
-                  <TR>
-                    {/* Split into a small sticky label cell (spanning just the 4 sticky
-                        columns, same width/left as they use) plus a plain filler cell for
-                        the rest — a single `sticky` cell spanning the WHOLE row (colSpan
-                        across everything) does not reliably stay pinned while scrolled;
-                        this mirrors the mechanism already proven to work on the 4 real
-                        sticky columns below instead of a new, larger one. */}
-                    <TD
-                      colSpan={4}
-                      className="sticky left-0 z-10 bg-nc-secondary font-semibold text-nc-text"
-                      style={{ width: STICKY_LEFT.approxQty + STICKY_WIDTHS.approxQty }}
-                    >
-                      {section.label}
-                    </TD>
-                    <TD colSpan={totalColumnCount - 4} className="bg-nc-secondary" />
-                  </TR>
-                  {section.items.map((item) => {
-                    const unitPriced = item.itemKind === 'unit_price'
-                    const itemProgress = progressByItem.get(item.id)
-                    const price = priceByItem.get(item.id)
-                    const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
-                    const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
-                    const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
-                    const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
-                    const recon = reconciliation.get(item.itemNumber)
-
+          {sections.length === 0 ? (
+            <EmptyState icon={<IconTable size={32} stroke={1.5} />} title="No items to track yet." description="Add items on the Items screen first." />
+          ) : (
+            <Table>
+              <THead>
+                <TR>
+                  <TH className="sticky left-0 z-10 bg-nc-secondary" style={{ width: STICKY_WIDTHS.itemNumber }}>
+                    Item #
+                  </TH>
+                  <TH className="sticky z-10 bg-nc-secondary" style={{ left: STICKY_LEFT.description, width: STICKY_WIDTHS.description }}>
+                    Description
+                  </TH>
+                  <TH className="sticky z-10 bg-nc-secondary" style={{ left: STICKY_LEFT.unit, width: STICKY_WIDTHS.unit }}>
+                    Unit
+                  </TH>
+                  <TH align="right" className="sticky z-10 bg-nc-secondary" style={{ left: STICKY_LEFT.approxQty, width: STICKY_WIDTHS.approxQty }}>
+                    Approx. Qty
+                  </TH>
+  
+                  {periods.map((period) => {
+                    const expanded = expandedPeriods.has(period)
+                    const days = daysByPeriod.get(period) ?? []
                     return (
-                      <TR key={item.id}>
-                        <TD className="nc-numeric sticky left-0 z-10 bg-white">{item.itemNumber}</TD>
-                        <TD prose className="sticky z-10 bg-white" style={{ left: STICKY_LEFT.description }}>
-                          <div className="max-w-[200px] truncate" title={item.description}>
-                            {item.description}
-                          </div>
-                        </TD>
-                        <TD className="sticky z-10 bg-white" style={{ left: STICKY_LEFT.unit }}>
-                          {item.unit}
-                        </TD>
-                        <TD align="right" className="nc-numeric sticky z-10 bg-white" style={{ left: STICKY_LEFT.approxQty }}>
-                          {unitPriced ? fmtQuantity(item.approximateQuantity) : '—'}
-                        </TD>
-
-                        {periods.map((period) => {
-                          const expanded = expandedPeriods.has(period)
-                          const days = daysByPeriod.get(period) ?? []
-                          const inPeriod = itemMonthByKey.get(`${item.id}|${period}`)
-                          // The current month with literally nothing recorded yet, contract-wide,
-                          // renders "—" rather than "0" — 0.0 would read as "worked zero this
-                          // month," when the true state is "too early in the month to tell,"
-                          // same distinction Overview's money cards already make.
-                          const isEmptyCurrentPeriod = period === currentPeriod && !currentPeriodHasAnyData
-                          const quantityInPeriod = unitPriced ? (isEmptyCurrentPeriod ? null : (inPeriod?.quantityInPeriod ?? 0)) : null
-                          const valueInPeriod = unitPriced && unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null
-
-                          return (
-                            <Fragment key={period}>
-                              {expanded &&
-                                days.map((day) => {
-                                  const dayQty = unitPriced ? (dayQuantityByKey.get(`${item.id}|${day}`) ?? null) : null
-                                  return (
-                                    <TD key={day} align="right" className="nc-numeric">
-                                      {dayQty === null ? (
-                                        '—'
-                                      ) : (
-                                        <button type="button" className="hover:underline" onClick={() => goToDailyEntry(item.id, period)}>
-                                          {fmtQuantity(dayQty)}
-                                        </button>
-                                      )}
-                                    </TD>
-                                  )
-                                })}
-                              <TD align="right" className={`nc-numeric ${expanded ? 'font-semibold' : ''}`}>
-                                <button type="button" className="hover:underline" onClick={() => goToDailyEntry(item.id, period)}>
-                                  {fmtQuantity(quantityInPeriod)}
-                                </button>
-                              </TD>
-                              {contract.viewRates && <TD align="right" className={`nc-numeric ${expanded ? 'font-semibold' : ''}`}>{money(valueInPeriod)}</TD>}
-                            </Fragment>
-                          )
-                        })}
-
-                        {/* Quantity to Date's place: a plain number for a Unit Price Item, but
-                            Lump Sum and Provisional Sum have no quantity at all — % complete and
-                            authorized-vs-provisional-sum respectively are the meaningful figures
-                            for those two kinds, so they render here, labelled, instead of a bare
-                            number that would read as a quantity. */}
-                        <TD align="right" className="nc-numeric">
-                          {item.itemKind === 'lump_sum'
-                            ? `${percent(itemProgress?.percentComplete != null ? itemProgress.percentComplete / 100 : null)} complete`
-                            : item.itemKind === 'provisional_sum'
-                              ? `${money(itemProgress?.authorizedValue ?? null)} of ${money(itemProgress?.provisionalSum ?? null)}`
-                              : fmtQuantity(quantityToDate)}
-                        </TD>
-                        {contract.viewRates && (
-                          <TD align="right" className="nc-numeric">
-                            {money(valueToDate)}
-                          </TD>
-                        )}
-                        {contract.viewRates && (
-                          <TD align="right" className="nc-numeric">
-                            {recon?.certifiedQuantityToDate != null ? fmtQuantity(recon.certifiedQuantityToDate) : '—'}
-                          </TD>
-                        )}
-                        {contract.viewRates && (
-                          <TD align="right" className="nc-numeric">
-                            {recon?.certifiedValueToDate != null ? money(recon.certifiedValueToDate) : '—'}
-                          </TD>
-                        )}
-                        <TD align="right" className="nc-numeric">
-                          {remaining === null ? '—' : fmtQuantity(remaining)}
-                        </TD>
-                        <TD align="right" className="nc-numeric">
-                          {item.itemKind === 'provisional_sum' ? '—' : percent(itemProgress?.proportionComplete ?? null)}
-                        </TD>
-                      </TR>
+                      <Fragment key={period}>
+                        {expanded &&
+                          days.map((day) => (
+                            <TH key={day} align="right">
+                              {formatDayLabel(day)}
+                            </TH>
+                          ))}
+                        <TH align="right">
+                          <button type="button" className="flex items-center gap-1 hover:underline" onClick={() => togglePeriod(period)}>
+                            {expanded ? <IconChevronDown size={14} stroke={2} /> : <IconChevronRight size={14} stroke={2} />}
+                            {periodLabel(period)} Qty
+                          </button>
+                        </TH>
+                        {contract.viewRates && <TH align="right">{periodLabel(period)} $</TH>}
+                      </Fragment>
                     )
                   })}
-                </Fragment>
-              ))}
-            </TBody>
-          </Table>
+  
+                  <TH align="right">Qty to Date</TH>
+                  {contract.viewRates && <TH align="right">Value to Date</TH>}
+                  {contract.viewRates && <TH align="right">MoT Qty</TH>}
+                  {contract.viewRates && <TH align="right">MoT Total</TH>}
+                  <TH align="right">Remaining</TH>
+                  <TH align="right">% Complete</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {sections.map((section) => (
+                  <Fragment key={section.prefix}>
+                    <TR>
+                      {/* Split into a small sticky label cell (spanning just the 4 sticky
+                          columns, same width/left as they use) plus a plain filler cell for
+                          the rest — a single `sticky` cell spanning the WHOLE row (colSpan
+                          across everything) does not reliably stay pinned while scrolled;
+                          this mirrors the mechanism already proven to work on the 4 real
+                          sticky columns below instead of a new, larger one. */}
+                      <TD
+                        colSpan={4}
+                        className="sticky left-0 z-10 bg-nc-secondary font-semibold text-nc-text"
+                        style={{ width: STICKY_LEFT.approxQty + STICKY_WIDTHS.approxQty }}
+                      >
+                        {section.label}
+                      </TD>
+                      <TD colSpan={totalColumnCount - 4} className="bg-nc-secondary" />
+                    </TR>
+                    {section.items.map((item) => {
+                      const unitPriced = item.itemKind === 'unit_price'
+                      const itemProgress = progressByItem.get(item.id)
+                      const price = priceByItem.get(item.id)
+                      const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
+                      const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
+                      const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
+                      const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
+                      const recon = reconciliation.get(item.itemNumber)
+  
+                      return (
+                        <TR key={item.id}>
+                          <TD className="nc-numeric sticky left-0 z-10 bg-white">{item.itemNumber}</TD>
+                          <TD prose className="sticky z-10 bg-white" style={{ left: STICKY_LEFT.description }}>
+                            <div className="max-w-[200px] truncate" title={item.description}>
+                              {item.description}
+                            </div>
+                          </TD>
+                          <TD className="sticky z-10 bg-white" style={{ left: STICKY_LEFT.unit }}>
+                            {item.unit}
+                          </TD>
+                          <TD align="right" className="nc-numeric sticky z-10 bg-white" style={{ left: STICKY_LEFT.approxQty }}>
+                            {unitPriced ? fmtQuantity(item.approximateQuantity) : '—'}
+                          </TD>
+  
+                          {periods.map((period) => {
+                            const expanded = expandedPeriods.has(period)
+                            const days = daysByPeriod.get(period) ?? []
+                            const inPeriod = itemMonthByKey.get(`${item.id}|${period}`)
+                            // The current month with literally nothing recorded yet, contract-wide,
+                            // renders "—" rather than "0" — 0.0 would read as "worked zero this
+                            // month," when the true state is "too early in the month to tell,"
+                            // same distinction Overview's money cards already make.
+                            const isEmptyCurrentPeriod = period === currentPeriod && !currentPeriodHasAnyData
+                            const quantityInPeriod = unitPriced ? (isEmptyCurrentPeriod ? null : (inPeriod?.quantityInPeriod ?? 0)) : null
+                            const valueInPeriod = unitPriced && unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null
+  
+                            return (
+                              <Fragment key={period}>
+                                {expanded &&
+                                  days.map((day) => {
+                                    const dayQty = unitPriced ? (dayQuantityByKey.get(`${item.id}|${day}`) ?? null) : null
+                                    return (
+                                      <TD key={day} align="right" className="nc-numeric">
+                                        {dayQty === null ? (
+                                          '—'
+                                        ) : (
+                                          <button type="button" className="hover:underline" onClick={() => goToDailyEntry(item.id, period)}>
+                                            {fmtQuantity(dayQty)}
+                                          </button>
+                                        )}
+                                      </TD>
+                                    )
+                                  })}
+                                <TD align="right" className={`nc-numeric ${expanded ? 'font-semibold' : ''}`}>
+                                  <button type="button" className="hover:underline" onClick={() => goToDailyEntry(item.id, period)}>
+                                    {fmtQuantity(quantityInPeriod)}
+                                  </button>
+                                </TD>
+                                {contract.viewRates && <TD align="right" className={`nc-numeric ${expanded ? 'font-semibold' : ''}`}>{money(valueInPeriod)}</TD>}
+                              </Fragment>
+                            )
+                          })}
+  
+                          {/* Quantity to Date's place: a plain number for a Unit Price Item, but
+                              Lump Sum and Provisional Sum have no quantity at all — % complete and
+                              authorized-vs-provisional-sum respectively are the meaningful figures
+                              for those two kinds, so they render here, labelled, instead of a bare
+                              number that would read as a quantity. */}
+                          <TD align="right" className="nc-numeric">
+                            {item.itemKind === 'lump_sum'
+                              ? `${percent(itemProgress?.percentComplete != null ? itemProgress.percentComplete / 100 : null)} complete`
+                              : item.itemKind === 'provisional_sum'
+                                ? `${money(itemProgress?.authorizedValue ?? null)} of ${money(itemProgress?.provisionalSum ?? null)}`
+                                : fmtQuantity(quantityToDate)}
+                          </TD>
+                          {contract.viewRates && (
+                            <TD align="right" className="nc-numeric">
+                              {money(valueToDate)}
+                            </TD>
+                          )}
+                          {contract.viewRates && (
+                            <TD align="right" className="nc-numeric">
+                              {recon?.certifiedQuantityToDate != null ? fmtQuantity(recon.certifiedQuantityToDate) : '—'}
+                            </TD>
+                          )}
+                          {contract.viewRates && (
+                            <TD align="right" className="nc-numeric">
+                              {recon?.certifiedValueToDate != null ? money(recon.certifiedValueToDate) : '—'}
+                            </TD>
+                          )}
+                          <TD align="right" className="nc-numeric">
+                            {remaining === null ? '—' : fmtQuantity(remaining)}
+                          </TD>
+                          <TD align="right" className="nc-numeric">
+                            {item.itemKind === 'provisional_sum' ? '—' : percent(itemProgress?.proportionComplete ?? null)}
+                          </TD>
+                        </TR>
+                      )
+                    })}
+                  </Fragment>
+                ))}
+              </TBody>
+            </Table>
+          )}
         </>
       )}
     </div>

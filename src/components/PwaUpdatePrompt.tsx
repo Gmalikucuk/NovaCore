@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 
 /**
@@ -25,15 +25,18 @@ import { useRegisterSW } from 'virtual:pwa-register/react'
  * unconditional, standard signal instead — it fires whenever control
  * actually changes hands, regardless of that stale flag.
  */
-const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000
+const UPDATE_CHECK_INTERVAL_MS = 60 * 1000
 
 export function PwaUpdatePrompt() {
+  const registrationRef = useRef<ServiceWorkerRegistration | null>(null)
+
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
   } = useRegisterSW({
     onRegisteredSW(_swUrl, registration) {
       if (!registration) return
+      registrationRef.current = registration
       // The browser only re-checks a service worker's script on its own at
       // the next full navigation — an idle open tab (exactly what a field
       // app does all day) would otherwise never discover a new version
@@ -43,6 +46,20 @@ export function PwaUpdatePrompt() {
       }, UPDATE_CHECK_INTERVAL_MS)
     },
   })
+
+  useEffect(() => {
+    // The other half of the "don't sit on stale code" fix, alongside the
+    // shortened interval above: the common case is a tab left open in the
+    // background all day, then brought back to the front — worth an
+    // immediate check rather than waiting up to a full interval for it.
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible') {
+        void registrationRef.current?.update()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
 
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return

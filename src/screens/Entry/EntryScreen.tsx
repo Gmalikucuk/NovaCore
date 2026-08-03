@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
@@ -7,12 +7,13 @@ import { db, type QueuedQuantityRecord } from '../../lib/db'
 import { enqueueQuantityRecord, importServerQuantityRecords, registerSyncListeners, syncQueuedQuantityRecords } from '../../lib/sync/quantityRecordsSync'
 import { confirmQuantityRecord, fetchDistinctLocations } from '../../lib/supabase/quantityRecords'
 import { fetchItems, type Item } from '../../lib/supabase/items'
+import { fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
-import { todayLocalDateString } from '../../lib/dateFormat'
+import { formatDayLabel, todayLocalDateString } from '../../lib/dateFormat'
 import { ChainageStrip, type ChainageEntry } from '../../components/ChainageStrip'
 import { Button, Card, EmptyState, Input, NotificationBanner, PageHeader, Select, StatusBadge, Textarea } from '../../components/ui'
-import { quantity as fmtQuantity, parseStation, station } from '../../lib/format'
+import { quantity as fmtQuantity, parseStation, percent, station } from '../../lib/format'
 
 type StationMode = 'single' | 'range'
 
@@ -31,6 +32,7 @@ export function EntryScreen() {
 
   const [items, setItems] = useState<Item[]>([])
   const [locations, setLocations] = useState<string[]>([])
+  const [itemProgress, setItemProgress] = useState<ItemProgress[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const [workDate, setWorkDate] = useState(todayLocalDateString())
@@ -67,9 +69,17 @@ export function EntryScreen() {
       .then(([itemRows, locs]) => {
         setItems(itemRows)
         setLocations(locs)
-        if (itemRows.length > 0) setItemId((prev) => prev || itemRows[0].id)
       })
       .catch((err: unknown) => setLoadError(errorMessage(err)))
+    // Separate from the fetch above, deliberately: this is what drives the
+    // recency sort and the context line, but neither is essential to the
+    // form working — a crew offline still gets a usable (just unsorted,
+    // context-free) picker rather than the whole screen failing to load.
+    fetchItemProgress(contract.id)
+      .then((rows) => setItemProgress(rows))
+      .catch((err: unknown) => {
+        console.warn('fetchItemProgress failed (likely offline) — item picker will be unsorted:', err)
+      })
   }, [contract.id])
 
   const dayRecords = useLiveQuery(
@@ -80,6 +90,47 @@ export function EntryScreen() {
 
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const selectedItem = itemById.get(itemId)
+
+  const progressByItemId = useMemo(() => new Map(itemProgress.map((p) => [p.itemId, p])), [itemProgress])
+  const selectedProgress = progressByItemId.get(itemId)
+
+  // Lump Sum/Provisional Sum aren't quantity-recorded day to day the way a
+  // Unit Price item is (GC 52.03(b)/(c) pay them by estimate or milestone,
+  // not a per-day station reading) — excluded from the field picker
+  // entirely, not just sorted to the bottom. Recent-first: a crew doing top
+  // lift needs the handful of Items actually in play today at the top of a
+  // list of up to 19+, not alphabetical. Nulls (never recorded) sort last,
+  // tied by item number.
+  const pickableItems = useMemo(() => {
+    const unitPriced = items.filter((item) => item.itemKind === 'unit_price')
+    return [...unitPriced].sort((a, b) => {
+      const aDate = progressByItemId.get(a.id)?.lastWorkDate ?? null
+      const bDate = progressByItemId.get(b.id)?.lastWorkDate ?? null
+      if (aDate !== null && bDate !== null) return bDate.localeCompare(aDate)
+      if (aDate !== null) return -1
+      if (bDate !== null) return 1
+      return a.itemNumber.localeCompare(b.itemNumber)
+    })
+  }, [items, progressByItemId])
+
+  // Tracks whether the current itemId came from a deliberate pick (the
+  // Select's onChange, or opening a correction) rather than this screen's
+  // own default. Without it, the very first render — before fetchItemProgress
+  // resolves and pickableItems can sort by recency — would default-select
+  // whatever sorts first alphabetically, then get stuck there once set, even
+  // as the recency-sorted list settles around a different top item.
+  const hasPickedItem = useRef(false)
+
+  useEffect(() => {
+    if (!hasPickedItem.current && pickableItems.length > 0) setItemId(pickableItems[0].id)
+  }, [pickableItems])
+
+  // A correction can target a historical record against a Lump Sum/
+  // Provisional Sum item recorded before this screen excluded them from new
+  // entries — startCorrection still needs to select that item, so it's
+  // added back as an option rather than left pointing at a value the
+  // dropdown doesn't offer.
+  const correctionItemOutsidePicker = correctingId !== null && selectedItem !== undefined && selectedItem.itemKind !== 'unit_price' ? selectedItem : null
 
   const supersededByConfirmed = useMemo(() => {
     const set = new Set<string>()
@@ -123,6 +174,7 @@ export function EntryScreen() {
   function startCorrection(record: QueuedQuantityRecord) {
     setCorrectingId(record.id)
     setWorkDate(record.workDate)
+    hasPickedItem.current = true
     setItemId(record.itemId)
     setMode(record.stationTo !== null ? 'range' : 'single')
     setStationFrom(record.stationFrom !== null ? String(record.stationFrom) : '')
@@ -254,14 +306,34 @@ export function EntryScreen() {
                 <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-item">
                   Item
                 </label>
-                <Select id="entry-item" value={itemId} onChange={(e) => setItemId(e.target.value)} required disabled={!formUsable}>
-                  {items.length === 0 && <option value="">No items on this contract</option>}
-                  {items.map((item) => (
+                <Select
+                  id="entry-item"
+                  value={itemId}
+                  onChange={(e) => {
+                    hasPickedItem.current = true
+                    setItemId(e.target.value)
+                  }}
+                  required
+                  disabled={!formUsable}
+                >
+                  {pickableItems.length === 0 && !correctionItemOutsidePicker && <option value="">No Unit Price items on this contract</option>}
+                  {correctionItemOutsidePicker && (
+                    <option key={correctionItemOutsidePicker.id} value={correctionItemOutsidePicker.id}>
+                      {correctionItemOutsidePicker.itemNumber} — {correctionItemOutsidePicker.description}
+                    </option>
+                  )}
+                  {pickableItems.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.itemNumber} — {item.description}
                     </option>
                   ))}
                 </Select>
+                {selectedProgress && (
+                  <p className="mt-1 text-xs text-nc-text-muted">
+                    {percent(selectedProgress.proportionComplete)} complete, {fmtQuantity(selectedProgress.approximateQuantity, selectedProgress.unit)} contract — last recorded{' '}
+                    {selectedProgress.lastWorkDate ? formatDayLabel(selectedProgress.lastWorkDate) : 'never recorded'}
+                  </p>
+                )}
               </div>
 
               <div className="flex gap-2" role="group" aria-label="Station mode">

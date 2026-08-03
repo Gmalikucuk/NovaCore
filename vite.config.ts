@@ -52,6 +52,20 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // clientsClaim, NOT skipWaiting — skipWaiting:true would make a new
+        // worker activate the instant it installs, defeating the prompt
+        // flow entirely. clientsClaim only changes what happens once a
+        // worker DOES activate (still gated on the user's tap sending
+        // SKIP_WAITING, see PwaUpdatePrompt.tsx): without it, an activated
+        // worker never takes control of an already-open tab, so
+        // navigator.serviceWorker.oncontrollerchange — what both this tab's
+        // own reload listener and vite-plugin-pwa's internal one wait for —
+        // never fires. That's the actual reason "tap to reload" did nothing:
+        // not a wiring bug in the prompt, a missing activation step in the
+        // generated worker. Confirmed by reading the built dist/sw.js: the
+        // SKIP_WAITING message listener was already correctly injected, but
+        // there was no clients.claim() anywhere in it.
+        clientsClaim: true,
       },
     }),
   ],

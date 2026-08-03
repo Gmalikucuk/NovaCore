@@ -29,6 +29,18 @@ function quantityFormat(unit: string): string {
   return unit === 'Each' ? '#,##0' : '#,##0.00'
 }
 
+/**
+ * Every money figure here is either a product (quantity × rate) or a sum of
+ * such products — both routine sources of a float tail like
+ * 10142.999999999995. MONEY_FORMAT's two-decimal display hides it on
+ * screen, but the underlying cell value is what Excel actually sums,
+ * compares, or exports elsewhere — round at the point of writing, not just
+ * the point of display, so the stored number matches what's shown.
+ */
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
 function styleHeaderCell(cell: ExcelJS.Cell) {
   cell.font = { bold: true }
   cell.fill = HEADER_FILL
@@ -336,32 +348,32 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
         if (quantityInPeriod !== null) qtyCell.numFmt = qtyFmt
         if (contract.viewRates) {
           const valCell = row.getCell(c++)
-          valCell.value = valueInPeriod ?? '—'
+          valCell.value = valueInPeriod !== null ? roundMoney(valueInPeriod) : '—'
           if (valueInPeriod !== null) valCell.numFmt = MONEY_FORMAT
         }
       }
 
       if (contract.viewRates) {
         const authorizedCell = row.getCell(c++)
-        authorizedCell.value = isProvisionalSum ? (itemProgress?.authorizedValue ?? 0) : '—'
+        authorizedCell.value = isProvisionalSum ? roundMoney(itemProgress?.authorizedValue ?? 0) : '—'
         if (isProvisionalSum) authorizedCell.numFmt = MONEY_FORMAT
         const provisionalCell = row.getCell(c++)
-        provisionalCell.value = isProvisionalSum ? (itemProgress?.provisionalSum ?? 0) : '—'
+        provisionalCell.value = isProvisionalSum ? roundMoney(itemProgress?.provisionalSum ?? 0) : '—'
         if (isProvisionalSum) provisionalCell.numFmt = MONEY_FORMAT
         const valueCell = row.getCell(c++)
-        valueCell.value = valueToDate ?? '—'
+        valueCell.value = valueToDate !== null ? roundMoney(valueToDate) : '—'
         if (valueToDate !== null) valueCell.numFmt = MONEY_FORMAT
         const costCell = row.getCell(c++)
-        costCell.value = costToDate ?? '—'
+        costCell.value = costToDate !== null ? roundMoney(costToDate) : '—'
         if (costToDate !== null) costCell.numFmt = MONEY_FORMAT
         const marginCell = row.getCell(c++)
-        marginCell.value = marginToDate ?? '—'
+        marginCell.value = marginToDate !== null ? roundMoney(marginToDate) : '—'
         if (marginToDate !== null) marginCell.numFmt = MONEY_FORMAT
         const motQtyCell = row.getCell(c++)
         motQtyCell.value = recon?.certifiedQuantityToDate ?? '—'
         if (recon?.certifiedQuantityToDate != null) motQtyCell.numFmt = qtyFmt
         const motTotalCell = row.getCell(c++)
-        motTotalCell.value = recon?.certifiedValueToDate ?? '—'
+        motTotalCell.value = recon?.certifiedValueToDate != null ? roundMoney(recon.certifiedValueToDate) : '—'
         if (recon?.certifiedValueToDate != null) motTotalCell.numFmt = MONEY_FORMAT
       }
     }
@@ -460,13 +472,13 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
       unitPriceCell.value = unitPrice ?? '—'
       if (unitPrice !== null) unitPriceCell.numFmt = MONEY_FORMAT
       const valueCell = row.getCell(c++)
-      valueCell.value = valueToDate ?? '—'
+      valueCell.value = valueToDate !== null ? roundMoney(valueToDate) : '—'
       if (valueToDate !== null) valueCell.numFmt = MONEY_FORMAT
       const costCell = row.getCell(c++)
-      costCell.value = costToDate ?? '—'
+      costCell.value = costToDate !== null ? roundMoney(costToDate) : '—'
       if (costToDate !== null) costCell.numFmt = MONEY_FORMAT
       const marginCell = row.getCell(c++)
-      marginCell.value = marginToDate ?? '—'
+      marginCell.value = marginToDate !== null ? roundMoney(marginToDate) : '—'
       if (marginToDate !== null) marginCell.numFmt = MONEY_FORMAT
     }
   })

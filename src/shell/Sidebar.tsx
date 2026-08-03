@@ -114,7 +114,14 @@ export function Sidebar() {
           )}
         </div>
 
-        <nav className="flex-1 space-y-6 overflow-y-auto px-3" aria-label="Office">
+        {/* min-h-0 is load-bearing: a flex child's default min-height is
+            `auto`, which refuses to shrink below its content's natural
+            height regardless of flex-1/overflow-y-auto — it just grows
+            past the sidebar's own height instead of scrolling, pushing the
+            footer (identity/view-toggle/sign-out/version) off the bottom
+            as nav groups accumulate. min-h-0 is what actually lets this
+            element stop at its flex-basis and scroll its overflow. */}
+        <nav className="min-h-0 flex-1 space-y-6 overflow-y-auto px-3" aria-label="Office">
           <div>
             <NavGroupHeading>Contract</NavGroupHeading>
             <div className="space-y-0.5">
