@@ -20,10 +20,10 @@
     "@supabase/supabase-js": "^2.110.0",
     "@tabler/icons-react": "^3.46.0",
     "dexie": "^4.4.4",
+    "exceljs": "^4.4.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-router-dom": "^7.18.1",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
+    "react-router-dom": "^7.18.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.1",

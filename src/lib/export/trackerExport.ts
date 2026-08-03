@@ -1,7 +1,7 @@
-import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 import { supabase } from '../supabase/client'
 import type { MyContract } from '../supabase/contracts'
-import { fetchItems } from '../supabase/items'
+import { fetchItems, type Item } from '../supabase/items'
 import { fetchItemPrices } from '../supabase/prices'
 import { fetchItemMonths, fetchItemProgress } from '../supabase/monthlyPeriods'
 import { fetchContractQuantityRecords } from '../supabase/quantityRecords'
@@ -10,7 +10,69 @@ import { isEffective } from '../calculations/effectiveEntries'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../calculations/naturalSort'
 import { margin as computeMargin } from '../calculations/margin'
 import { station } from '../format'
-import { todayLocalDateString } from '../dateFormat'
+
+// ─────────────────────────────────────────────────────────────────────────
+// Formatting constants — matching HWY5_Daily_Tracker.xlsx, the workbook
+// this export is meant to be recognisable next to, not just a database
+// dump with the right numbers in it.
+// ─────────────────────────────────────────────────────────────────────────
+
+const HEADER_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } }
+const SECTION_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE6F1' } }
+const HEADER_BORDER: Partial<ExcelJS.Borders> = { bottom: { style: 'thin', color: { argb: 'FF000000' } } }
+const DATE_FORMAT = 'd-mmm-yyyy'
+const MONEY_FORMAT = '$#,##0.00'
+const PERCENT_FORMAT = '0.0%'
+
+function quantityFormat(unit: string): string {
+  return unit === 'Each' ? '#,##0' : '#,##0.00'
+}
+
+function styleHeaderRow(row: ExcelJS.Row) {
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.font = { bold: true }
+    cell.fill = HEADER_FILL
+    cell.border = HEADER_BORDER
+  })
+}
+
+function styleSectionRow(row: ExcelJS.Row, colCount: number) {
+  for (let c = 1; c <= colCount; c++) {
+    const cell = row.getCell(c)
+    cell.font = { bold: true }
+    cell.fill = SECTION_FILL
+  }
+}
+
+/** "1 Aug 2026" — the title row's own date style, distinct from the column headers' "1-Aug-2026" (the reference workbook uses both forms in the same title string, e.g. "1 Aug – 10 Oct 2026"). */
+function shortDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  return date.toLocaleDateString('en-CA', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+/** Every period from `start` to `end` inclusive, both "YYYY-MM-01" — the continuous month range the brief asks for, not just the months that happen to have records, "so the season reads continuously." */
+function monthRange(start: string, end: string): string[] {
+  const [sy, sm] = start.split('-').map(Number)
+  const [ey, em] = end.split('-').map(Number)
+  const periods: string[] = []
+  let y = sy
+  let m = sm
+  while (y < ey || (y === ey && m <= em)) {
+    periods.push(`${y}-${String(m).padStart(2, '0')}-01`)
+    m++
+    if (m > 12) {
+      m = 1
+      y++
+    }
+  }
+  return periods
+}
+
+function periodDate(period: string): Date {
+  const [y, m] = period.split('-').map(Number)
+  return new Date(y, m - 1, 1)
+}
 
 async function fetchProfileNames(ids: string[]): Promise<Map<string, string | null>> {
   if (ids.length === 0) return new Map()
@@ -19,40 +81,41 @@ async function fetchProfileNames(ids: string[]): Promise<Map<string, string | nu
   return new Map((data ?? []).map((p) => [p.id as string, p.full_name as string | null]))
 }
 
-/** Sets a number format on every numeric cell in a column — skipped for any cell that isn't a number (a lump-sum row's "45% complete" text, say), since forcing a format string onto a text cell doesn't apply and a blanket per-column format would be wrong for a column that legitimately mixes numbers and labels across item kinds. */
-function formatNumericColumn(sheet: XLSX.WorkSheet, colIndex: number, rowCount: number, format: string) {
-  for (let r = 1; r <= rowCount; r++) {
-    const cell = sheet[XLSX.utils.encode_cell({ r, c: colIndex })]
-    if (cell && cell.t === 'n') cell.z = format
-  }
+function triggerDownload(buffer: ArrayBuffer, filename: string) {
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
-const QTY_FORMAT = '#,##0.00'
-const MONEY_FORMAT = '$#,##0.00'
-const PERCENT_FORMAT = '0.0%'
+interface LoadedData {
+  items: Item[]
+  progressByItem: Map<string, Awaited<ReturnType<typeof fetchItemProgress>>[number]>
+  priceByItem: Map<string, Awaited<ReturnType<typeof fetchItemPrices>>[number]>
+  itemMonthByKey: Map<string, Awaited<ReturnType<typeof fetchItemMonths>>[number]>
+  allRecords: Awaited<ReturnType<typeof fetchContractQuantityRecords>>
+  reconciliation: Map<string, ProgressEstimateReconciliation>
+  namesById: Map<string, string | null>
+  periods: string[]
+  /** Periods with at least one itemMonth row, contract-wide — distinguishes a genuinely empty ongoing month (render "—") from a past month where this one item just didn't work (render 0), same rule as the Tracker screen's own fix. */
+  periodsWithData: Set<string>
+  dateRange: { min: string; max: string } | null
+}
 
-/**
- * One workbook, three sheets, built from the same queries the Tracker
- * screen itself uses — re-fetched here rather than passed in from the
- * screen's own state, trading one extra round-trip (an export is an
- * infrequent, user-initiated action, not a hot path) for a self-contained
- * function that doesn't entangle the screen's state management.
- *
- * The export mirrors the screen's rights exactly: a seat without
- * view_rates gets a workbook with no money columns AT ALL — the columns
- * are absent from the header row, not blanked — so the export can never
- * become a way around the finance wall extract_report itself doesn't
- * already gate.
- */
-export async function exportTrackerWorkbook(contract: MyContract): Promise<void> {
+async function loadData(contract: MyContract): Promise<LoadedData> {
   const [items, progress, prices, itemMonths, allRecords, reconciliation] = await Promise.all([
     fetchItems(contract.id),
     fetchItemProgress(contract.id),
     contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([]),
     fetchItemMonths(contract.id),
-    // Same scale caveat as the Tracker screen's own use of this fetch — see
-    // TrackerScreen.tsx's comment at this call. Not repeating the full note
-    // here since it's the same limitation, not a new one.
+    // Same scale caveat as the Tracker screen's own use of this fetch (see
+    // TrackerScreen.tsx) — fine at a demo contract's scale, needs a
+    // server-side aggregate before a real contract's second season.
     fetchContractQuantityRecords(contract.id),
     contract.viewRates ? fetchProgressEstimateReconciliation(contract.id) : Promise.resolve(new Map<string, ProgressEstimateReconciliation>()),
   ])
@@ -66,143 +129,242 @@ export async function exportTrackerWorkbook(contract: MyContract): Promise<void>
 
   const progressByItem = new Map(progress.map((p) => [p.itemId, p]))
   const priceByItem = new Map(prices.map((p) => [p.itemId, p]))
+  const itemMonthByKey = new Map(itemMonths.map((m) => [`${m.itemId}|${m.periodMonth}`, m]))
+
+  const workDates = allRecords.map((r) => r.workDate).sort()
+  const dateRange = workDates.length > 0 ? { min: workDates[0], max: workDates[workDates.length - 1] } : null
+
+  const now = new Date()
+  const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  const earliestPeriod = itemMonths.length > 0 ? [...itemMonths.map((m) => m.periodMonth)].sort()[0] : currentPeriod
+  const periods = monthRange(earliestPeriod, currentPeriod)
+  const periodsWithData = new Set(itemMonths.map((m) => m.periodMonth))
+
+  return { items, progressByItem, priceByItem, itemMonthByKey, allRecords, reconciliation, namesById, periods, periodsWithData, dateRange }
+}
+
+function sortedItemsBySection(items: Item[]) {
+  const byPrefix = new Map<string, Item[]>()
+  for (const item of items) {
+    const prefix = sectionPrefix(item.itemNumber)
+    const list = byPrefix.get(prefix) ?? []
+    list.push(item)
+    byPrefix.set(prefix, list)
+  }
+  return [...byPrefix.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([prefix, sectionItems]) => ({
+      prefix,
+      // "SECTION 1 – GENERAL" — the reference workbook's own row-heading
+      // style: the section number without its leading zero, an en dash,
+      // the name upper-cased. sectionLabel() already has "01 General";
+      // stripping its own leading "NN " avoids a second hardcoded name map.
+      label: `SECTION ${Number(prefix)} – ${sectionLabel(prefix).replace(/^\d+\s*/, '').toUpperCase()}`,
+      items: [...sectionItems].sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber)),
+    }))
+}
+
+function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
+  const sheet = workbook.addWorksheet('Tracker', { views: [{ state: 'frozen', xSplit: 2, ySplit: 2 }] })
+  const { items, progressByItem, priceByItem, itemMonthByKey, reconciliation, periods, periodsWithData, dateRange } = data
+  const sections = sortedItemsBySection(items)
+
+  const baseHeaders = ['Item #', 'Description', 'UOM', 'Contract Qty', 'Done to Date', 'Remaining', '% Complete']
+  const moneyHeaders = contract.viewRates ? ['Value to Date', 'Cost to Date', 'Margin', 'MoT Qty', 'MoT Total'] : []
+  const monthHeaderCount = periods.length * (contract.viewRates ? 2 : 1)
+  const colCount = baseHeaders.length + moneyHeaders.length + monthHeaderCount
+
+  // Row 1 — title, merged across the sheet. Company name isn't in the
+  // schema (this is a single-tenant app built for Keywest specifically,
+  // same fact this repo's own docs state elsewhere) — everything else
+  // comes straight from the contract record; the date range is omitted
+  // entirely rather than invented when there are no records yet to derive
+  // it from.
+  const titleParts = ['KEYWEST ASPHALT', contract.contractNo ?? '', contract.name]
+  if (dateRange) titleParts.push(`${shortDate(dateRange.min)} – ${shortDate(dateRange.max)}`)
+  sheet.mergeCells(1, 1, 1, colCount)
+  const titleCell = sheet.getCell(1, 1)
+  titleCell.value = titleParts.filter(Boolean).join('  |  ')
+  titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }
+
+  // Row 2 — headers.
+  const headerRow = sheet.getRow(2)
+  let col = 1
+  for (const h of baseHeaders) headerRow.getCell(col++).value = h
+  for (const h of moneyHeaders) headerRow.getCell(col++).value = h
+  const periodStartCol = col
+  for (const period of periods) {
+    const dateCell = headerRow.getCell(col++)
+    dateCell.value = periodDate(period)
+    dateCell.numFmt = DATE_FORMAT
+    if (contract.viewRates) headerRow.getCell(col++).value = 'Value'
+  }
+  styleHeaderRow(headerRow)
+
+  // Column widths — Description wide enough that a real item description
+  // doesn't clip (52 chars, matching the reference workbook exactly);
+  // Item #/UOM narrow, the rest sized to their content.
+  sheet.getColumn(1).width = 10
+  sheet.getColumn(2).width = 52
+  sheet.getColumn(3).width = 10
+  sheet.getColumn(4).width = 14
+  sheet.getColumn(5).width = 14
+  sheet.getColumn(6).width = 12
+  sheet.getColumn(7).width = 12
+  for (let c = 8; c < periodStartCol; c++) sheet.getColumn(c).width = 14
+  for (let c = periodStartCol; c <= colCount; c++) sheet.getColumn(c).width = 12
+
+  let rowNum = 3
+  for (const section of sections) {
+    const sectionRow = sheet.getRow(rowNum++)
+    sectionRow.getCell(1).value = section.prefix
+    sectionRow.getCell(2).value = section.label
+    styleSectionRow(sectionRow, colCount)
+
+    for (const item of section.items) {
+      const unitPriced = item.itemKind === 'unit_price'
+      const itemProgress = progressByItem.get(item.id)
+      const price = priceByItem.get(item.id)
+      const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
+      const cost = unitPriced ? (price?.costPrice ?? null) : null
+      const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
+      const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
+      const costToDate = unitPriced && cost !== null && quantityToDate !== null ? quantityToDate * cost : null
+      const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice) : null
+      const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
+      const recon = reconciliation.get(item.itemNumber)
+      const qtyFmt = quantityFormat(item.unit)
+
+      const row = sheet.getRow(rowNum++)
+      let c = 1
+      row.getCell(c++).value = item.itemNumber
+      row.getCell(c++).value = item.description
+      row.getCell(c++).value = item.unit
+      const contractQtyCell = row.getCell(c++)
+      contractQtyCell.value = unitPriced ? item.approximateQuantity : '—'
+      if (unitPriced) contractQtyCell.numFmt = qtyFmt
+
+      const doneCell = row.getCell(c++)
+      if (item.itemKind === 'lump_sum') {
+        doneCell.value = itemProgress?.percentComplete != null ? `${itemProgress.percentComplete}% complete` : '—'
+      } else if (item.itemKind === 'provisional_sum') {
+        doneCell.value = `${itemProgress?.authorizedValue ?? 0} of ${itemProgress?.provisionalSum ?? 0}`
+      } else {
+        doneCell.value = quantityToDate
+        doneCell.numFmt = qtyFmt
+      }
+
+      const remainingCell = row.getCell(c++)
+      remainingCell.value = remaining ?? '—'
+      if (remaining !== null) remainingCell.numFmt = qtyFmt
+
+      const percentCell = row.getCell(c++)
+      if (item.itemKind === 'provisional_sum') {
+        percentCell.value = '—'
+      } else {
+        percentCell.value = itemProgress?.proportionComplete ?? 0
+        percentCell.numFmt = PERCENT_FORMAT
+      }
+
+      if (contract.viewRates) {
+        const valueCell = row.getCell(c++)
+        valueCell.value = valueToDate ?? '—'
+        if (valueToDate !== null) valueCell.numFmt = MONEY_FORMAT
+        const costCell = row.getCell(c++)
+        costCell.value = costToDate ?? '—'
+        if (costToDate !== null) costCell.numFmt = MONEY_FORMAT
+        const marginCell = row.getCell(c++)
+        marginCell.value = marginToDate ?? '—'
+        if (marginToDate !== null) marginCell.numFmt = MONEY_FORMAT
+        const motQtyCell = row.getCell(c++)
+        motQtyCell.value = recon?.certifiedQuantityToDate ?? '—'
+        if (recon?.certifiedQuantityToDate != null) motQtyCell.numFmt = qtyFmt
+        const motTotalCell = row.getCell(c++)
+        motTotalCell.value = recon?.certifiedValueToDate ?? '—'
+        if (recon?.certifiedValueToDate != null) motTotalCell.numFmt = MONEY_FORMAT
+      }
+
+      for (const period of periods) {
+        const inPeriod = itemMonthByKey.get(`${item.id}|${period}`)
+        // A period with literally nothing recorded contract-wide (the
+        // ongoing current month, most likely) renders "—" rather than 0 —
+        // 0 reads as "confirmed no work happened," when the true state is
+        // "too early to tell." A period that HAS other activity but not
+        // for this specific item still renders 0 — that 0 is a real,
+        // elapsed fact, not a too-early artifact.
+        const periodIsEmpty = !periodsWithData.has(period)
+        const quantityInPeriod = unitPriced && !periodIsEmpty ? (inPeriod?.quantityInPeriod ?? 0) : null
+        const valueInPeriod = unitPriced && unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null
+
+        const qtyCell = row.getCell(c++)
+        qtyCell.value = quantityInPeriod ?? '—'
+        if (quantityInPeriod !== null) qtyCell.numFmt = qtyFmt
+        if (contract.viewRates) {
+          const valCell = row.getCell(c++)
+          valCell.value = valueInPeriod ?? '—'
+          if (valueInPeriod !== null) valCell.numFmt = MONEY_FORMAT
+        }
+      }
+    }
+  }
+}
+
+function buildRecordsSheet(workbook: ExcelJS.Workbook, data: LoadedData) {
+  const sheet = workbook.addWorksheet('Records', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] })
+  const { allRecords, items, namesById } = data
   const itemById = new Map(items.map((i) => [i.id, i]))
   const effectiveIds = new Set(allRecords.filter((r) => isEffective(r, allRecords)).map((r) => r.id))
 
-  const periods = [...new Set(itemMonths.map((m) => m.periodMonth))].sort()
-  const itemMonthByKey = new Map(itemMonths.map((m) => [`${m.itemId}|${m.periodMonth}`, m]))
+  const headers = ['Work Date', 'Item #', 'Description', 'Location', 'Station From', 'Station To', 'Quantity', 'Unit', 'Status', 'Counts', 'Correction', 'Note', 'Entered By', 'Confirmed By']
+  const headerRow = sheet.getRow(1)
+  headers.forEach((h, i) => (headerRow.getCell(i + 1).value = h))
+  styleHeaderRow(headerRow)
+
+  const widths = [13, 10, 40, 20, 14, 14, 12, 10, 11, 8, 10, 30, 16, 16]
+  widths.forEach((w, i) => (sheet.getColumn(i + 1).width = w))
+
+  const sorted = [...allRecords].sort((a, b) => a.workDate.localeCompare(b.workDate))
+  sorted.forEach((r, i) => {
+    const item = itemById.get(r.itemId)
+    const row = sheet.getRow(i + 2)
+    const [y, m, d] = r.workDate.split('-').map(Number)
+    const dateCell = row.getCell(1)
+    dateCell.value = new Date(y, m - 1, d)
+    dateCell.numFmt = DATE_FORMAT
+    row.getCell(2).value = item?.itemNumber ?? r.itemId
+    row.getCell(3).value = item?.description ?? ''
+    row.getCell(4).value = r.location ?? ''
+    row.getCell(5).value = r.stationFrom === null ? '' : station(r.stationFrom)
+    row.getCell(6).value = r.stationTo === null ? '' : station(r.stationTo)
+    const qtyCell = row.getCell(7)
+    qtyCell.value = r.quantity
+    qtyCell.numFmt = quantityFormat(item?.unit ?? '')
+    row.getCell(8).value = item?.unit ?? ''
+    row.getCell(9).value = r.status
+    row.getCell(10).value = effectiveIds.has(r.id) ? 'Yes' : 'No'
+    row.getCell(11).value = r.supersedes !== null ? 'Yes' : 'No'
+    row.getCell(12).value = r.note ?? ''
+    row.getCell(13).value = namesById.get(r.createdBy) ?? ''
+    row.getCell(14).value = r.confirmedBy ? (namesById.get(r.confirmedBy) ?? '') : ''
+  })
+}
+
+function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
+  const sheet = workbook.addWorksheet('Summary', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] })
+  const { items, progressByItem, priceByItem } = data
   const sortedItems = [...items].sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber))
 
-  const workbook = XLSX.utils.book_new()
+  const headers = ['Item #', 'Description', 'Approx. Qty', 'Qty to Date', 'Remaining', '% Complete', ...(contract.viewRates ? ['Unit Price', 'Value to Date', 'Cost to Date', 'Margin'] : [])]
+  const headerRow = sheet.getRow(1)
+  headers.forEach((h, i) => (headerRow.getCell(i + 1).value = h))
+  styleHeaderRow(headerRow)
 
-  // ---------------------------------------------------------------------
-  // Tracker sheet — the grid at month granularity, same section grouping
-  // as the screen (a plain "Section" column here rather than merged
-  // header rows, which don't translate cleanly to a flat spreadsheet).
-  // ---------------------------------------------------------------------
-  const trackerHeader = [
-    'Section',
-    'Item #',
-    'Description',
-    'Unit',
-    'Approx. Qty',
-    ...periods.flatMap((p) => (contract.viewRates ? [`${p} Qty`, `${p} $`] : [`${p} Qty`])),
-    'Qty to Date',
-    ...(contract.viewRates ? ['Value to Date', 'MoT Qty', 'MoT Total'] : []),
-    'Remaining',
-    '% Complete',
-  ]
-  const numericQtyCols: number[] = []
-  const numericMoneyCols: number[] = []
-  const numericPercentCols: number[] = []
+  sheet.getColumn(1).width = 10
+  sheet.getColumn(2).width = 45
+  for (let c = 3; c <= headers.length; c++) sheet.getColumn(c).width = 14
 
-  const trackerRows = sortedItems.map((item) => {
-    const unitPriced = item.itemKind === 'unit_price'
-    const itemProgress = progressByItem.get(item.id)
-    const price = priceByItem.get(item.id)
-    const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
-    const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
-    const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
-    const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
-    const recon = reconciliation.get(item.itemNumber)
-
-    const periodCells = periods.flatMap((period) => {
-      const inPeriod = itemMonthByKey.get(`${item.id}|${period}`)
-      const quantityInPeriod = unitPriced ? (inPeriod?.quantityInPeriod ?? 0) : null
-      const valueInPeriod = unitPriced && unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null
-      return contract.viewRates ? [quantityInPeriod, valueInPeriod] : [quantityInPeriod]
-    })
-
-    const qtyToDateCell =
-      item.itemKind === 'lump_sum'
-        ? `${itemProgress?.percentComplete ?? '—'}% complete`
-        : item.itemKind === 'provisional_sum'
-          ? `${itemProgress?.authorizedValue ?? 0} of ${itemProgress?.provisionalSum ?? 0}`
-          : quantityToDate
-
-    return [
-      sectionLabel(sectionPrefix(item.itemNumber)),
-      item.itemNumber,
-      item.description,
-      item.unit,
-      unitPriced ? item.approximateQuantity : null,
-      ...periodCells,
-      qtyToDateCell,
-      ...(contract.viewRates ? [valueToDate, recon?.certifiedQuantityToDate ?? null, recon?.certifiedValueToDate ?? null] : []),
-      remaining,
-      item.itemKind === 'provisional_sum' ? null : (itemProgress?.proportionComplete ?? null),
-    ]
-  })
-
-  const trackerSheet = XLSX.utils.aoa_to_sheet([trackerHeader, ...trackerRows])
-  // Column indices: 4 = Approx Qty, then alternating Qty/$ per period, then
-  // the right block — computed from the header layout above rather than
-  // hardcoded, since the column count varies with view_rates and period count.
-  numericQtyCols.push(4)
-  let col = 5
-  for (let i = 0; i < periods.length; i++) {
-    numericQtyCols.push(col)
-    col++
-    if (contract.viewRates) {
-      numericMoneyCols.push(col)
-      col++
-    }
-  }
-  const qtyToDateCol = col
-  col++
-  if (contract.viewRates) {
-    numericMoneyCols.push(col) // Value to Date
-    col++
-    numericQtyCols.push(col) // MoT Qty
-    col++
-    numericMoneyCols.push(col) // MoT Total
-    col++
-  }
-  const remainingCol = col
-  col++
-  const percentCol = col
-  numericQtyCols.push(qtyToDateCol, remainingCol)
-  numericPercentCols.push(percentCol)
-
-  for (const c of numericQtyCols) formatNumericColumn(trackerSheet, c, trackerRows.length, QTY_FORMAT)
-  for (const c of numericMoneyCols) formatNumericColumn(trackerSheet, c, trackerRows.length, MONEY_FORMAT)
-  for (const c of numericPercentCols) formatNumericColumn(trackerSheet, c, trackerRows.length, PERCENT_FORMAT)
-  XLSX.utils.book_append_sheet(workbook, trackerSheet, 'Tracker')
-
-  // ---------------------------------------------------------------------
-  // Records sheet — every quantity_records row, whatever its status.
-  // ---------------------------------------------------------------------
-  const recordsHeader = ['Work Date', 'Item #', 'Description', 'Location', 'Station From', 'Station To', 'Quantity', 'Unit', 'Status', 'Counts', 'Correction', 'Note', 'Entered By', 'Confirmed By']
-  const recordsRows = [...allRecords]
-    .sort((a, b) => a.workDate.localeCompare(b.workDate))
-    .map((r) => {
-      const item = itemById.get(r.itemId)
-      return [
-        r.workDate,
-        item?.itemNumber ?? r.itemId,
-        item?.description ?? '',
-        r.location ?? '',
-        r.stationFrom === null ? '' : station(r.stationFrom),
-        r.stationTo === null ? '' : station(r.stationTo),
-        r.quantity,
-        item?.unit ?? '',
-        r.status,
-        effectiveIds.has(r.id) ? 'Yes' : 'No',
-        r.supersedes !== null ? 'Yes' : 'No',
-        r.note ?? '',
-        namesById.get(r.createdBy) ?? '',
-        r.confirmedBy ? (namesById.get(r.confirmedBy) ?? '') : '',
-      ]
-    })
-  const recordsSheet = XLSX.utils.aoa_to_sheet([recordsHeader, ...recordsRows])
-  formatNumericColumn(recordsSheet, 6, recordsRows.length, QTY_FORMAT)
-  XLSX.utils.book_append_sheet(workbook, recordsSheet, 'Records')
-
-  // ---------------------------------------------------------------------
-  // Summary sheet — per Item, to-date figures only.
-  // ---------------------------------------------------------------------
-  const summaryHeader = ['Item #', 'Description', 'Approx. Qty', 'Qty to Date', 'Remaining', '% Complete', ...(contract.viewRates ? ['Unit Price', 'Value to Date', 'Cost to Date', 'Margin'] : [])]
-  const summaryRows = sortedItems.map((item) => {
+  sortedItems.forEach((item, i) => {
     const unitPriced = item.itemKind === 'unit_price'
     const itemProgress = progressByItem.get(item.id)
     const price = priceByItem.get(item.id)
@@ -211,32 +373,60 @@ export async function exportTrackerWorkbook(contract: MyContract): Promise<void>
     const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
     const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
     const costToDate = unitPriced && cost !== null && quantityToDate !== null ? quantityToDate * cost : null
-    const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
     const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice) : null
+    const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
+    const qtyFmt = quantityFormat(item.unit)
 
-    return [
-      item.itemNumber,
-      item.description,
-      unitPriced ? item.approximateQuantity : null,
-      quantityToDate,
-      remaining,
-      item.itemKind === 'provisional_sum' ? null : (itemProgress?.proportionComplete ?? null),
-      ...(contract.viewRates ? [unitPrice, valueToDate, costToDate, marginToDate] : []),
-    ]
+    const row = sheet.getRow(i + 2)
+    let c = 1
+    row.getCell(c++).value = item.itemNumber
+    row.getCell(c++).value = item.description
+    const approxCell = row.getCell(c++)
+    approxCell.value = unitPriced ? item.approximateQuantity : '—'
+    if (unitPriced) approxCell.numFmt = qtyFmt
+    const qtyCell = row.getCell(c++)
+    qtyCell.value = quantityToDate ?? '—'
+    if (quantityToDate !== null) qtyCell.numFmt = qtyFmt
+    const remainingCell = row.getCell(c++)
+    remainingCell.value = remaining ?? '—'
+    if (remaining !== null) remainingCell.numFmt = qtyFmt
+    const percentCell = row.getCell(c++)
+    if (item.itemKind === 'provisional_sum') {
+      percentCell.value = '—'
+    } else {
+      percentCell.value = itemProgress?.proportionComplete ?? 0
+      percentCell.numFmt = PERCENT_FORMAT
+    }
+    if (contract.viewRates) {
+      const unitPriceCell = row.getCell(c++)
+      unitPriceCell.value = unitPrice ?? '—'
+      if (unitPrice !== null) unitPriceCell.numFmt = MONEY_FORMAT
+      const valueCell = row.getCell(c++)
+      valueCell.value = valueToDate ?? '—'
+      if (valueToDate !== null) valueCell.numFmt = MONEY_FORMAT
+      const costCell = row.getCell(c++)
+      costCell.value = costToDate ?? '—'
+      if (costToDate !== null) costCell.numFmt = MONEY_FORMAT
+      const marginCell = row.getCell(c++)
+      marginCell.value = marginToDate ?? '—'
+      if (marginToDate !== null) marginCell.numFmt = MONEY_FORMAT
+    }
   })
-  const summarySheet = XLSX.utils.aoa_to_sheet([summaryHeader, ...summaryRows])
-  formatNumericColumn(summarySheet, 2, summaryRows.length, QTY_FORMAT)
-  formatNumericColumn(summarySheet, 3, summaryRows.length, QTY_FORMAT)
-  formatNumericColumn(summarySheet, 4, summaryRows.length, QTY_FORMAT)
-  formatNumericColumn(summarySheet, 5, summaryRows.length, PERCENT_FORMAT)
-  if (contract.viewRates) {
-    formatNumericColumn(summarySheet, 6, summaryRows.length, MONEY_FORMAT)
-    formatNumericColumn(summarySheet, 7, summaryRows.length, MONEY_FORMAT)
-    formatNumericColumn(summarySheet, 8, summaryRows.length, MONEY_FORMAT)
-    formatNumericColumn(summarySheet, 9, summaryRows.length, MONEY_FORMAT)
-  }
-  XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary')
+}
 
-  const filename = `${contract.contractNo ?? contract.name}_NovaCore_${todayLocalDateString()}.xlsx`
-  XLSX.writeFile(workbook, filename)
+/** Builds the workbook without writing it anywhere — separated from `exportTrackerWorkbook` so it can be exercised directly (e.g. in the browser console, or a future test) without triggering a file download each time. */
+export async function buildTrackerWorkbook(contract: MyContract): Promise<ExcelJS.Workbook> {
+  const data = await loadData(contract)
+  const workbook = new ExcelJS.Workbook()
+  buildTrackerSheet(workbook, contract, data)
+  buildRecordsSheet(workbook, data)
+  buildSummarySheet(workbook, contract, data)
+  return workbook
+}
+
+export async function exportTrackerWorkbook(contract: MyContract): Promise<void> {
+  const workbook = await buildTrackerWorkbook(contract)
+  const buffer = await workbook.xlsx.writeBuffer()
+  const filename = `${contract.contractNo ?? contract.name}_NovaCore_${new Date().toISOString().slice(0, 10)}.xlsx`
+  triggerDownload(buffer as ArrayBuffer, filename)
 }
