@@ -21,6 +21,7 @@ const HEADER_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: 
 const SECTION_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE6F1' } }
 const HEADER_BORDER: Partial<ExcelJS.Borders> = { bottom: { style: 'thin', color: { argb: 'FF000000' } } }
 const DATE_FORMAT = 'd-mmm-yyyy'
+const MONTH_FORMAT = 'mmmm yyyy'
 const MONEY_FORMAT = '$#,##0.00'
 const PERCENT_FORMAT = '0.0%'
 
@@ -28,12 +29,14 @@ function quantityFormat(unit: string): string {
   return unit === 'Each' ? '#,##0' : '#,##0.00'
 }
 
+function styleHeaderCell(cell: ExcelJS.Cell) {
+  cell.font = { bold: true }
+  cell.fill = HEADER_FILL
+  cell.border = HEADER_BORDER
+}
+
 function styleHeaderRow(row: ExcelJS.Row) {
-  row.eachCell({ includeEmpty: true }, (cell) => {
-    cell.font = { bold: true }
-    cell.fill = HEADER_FILL
-    cell.border = HEADER_BORDER
-  })
+  row.eachCell({ includeEmpty: true }, styleHeaderCell)
 }
 
 function styleSectionRow(row: ExcelJS.Row, colCount: number) {
@@ -69,9 +72,24 @@ function monthRange(start: string, end: string): string[] {
   return periods
 }
 
+/**
+ * A date cell at exact midnight, timezone-independent — exceljs's own
+ * serial-number conversion (`dateToExcel`, utils.js) is `d.getTime() / 86400000`,
+ * i.e. it reads the Date's real UTC instant, not its local calendar fields.
+ * A `new Date(y, m-1, d)` LOCAL-constructor date is midnight in the
+ * *browser's* zone, which for anything west of UTC lands on a non-integer
+ * serial (a "7:00" bleeding into the stored value, invisible under the
+ * display format but wrong for any exact date comparison, lookup, or pivot
+ * grouping in Excel). Constructing via `Date.UTC` instead makes the
+ * instant itself exactly midnight, so the serial has no fractional part.
+ */
+function pureDate(year: number, month: number, day: number): Date {
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
 function periodDate(period: string): Date {
   const [y, m] = period.split('-').map(Number)
-  return new Date(y, m - 1, 1)
+  return pureDate(y, m, 1)
 }
 
 async function fetchProfileNames(ids: string[]): Promise<Map<string, string | null>> {
@@ -165,14 +183,23 @@ function sortedItemsBySection(items: Item[]) {
 }
 
 function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
-  const sheet = workbook.addWorksheet('Tracker', { views: [{ state: 'frozen', xSplit: 2, ySplit: 2 }] })
+  // Freeze extends through row 3 now — title, month-group header, and the
+  // Qty/Value sub-header beneath it all stay put on scroll, same idea as
+  // freezing at C3 before, just one row deeper for the added header row.
+  const sheet = workbook.addWorksheet('Tracker', { views: [{ state: 'frozen', xSplit: 2, ySplit: 3 }] })
   const { items, progressByItem, priceByItem, itemMonthByKey, reconciliation, periods, periodsWithData, dateRange } = data
   const sections = sortedItemsBySection(items)
 
+  // Summary-before-detail: the progress picture first (what you see on
+  // open), the monthly detail immediately after (what you scroll into),
+  // the less-frequently-needed money/MoT figures trailing at the end —
+  // matching the reference workbook's own ordering, not a database dump's.
   const baseHeaders = ['Item #', 'Description', 'UOM', 'Contract Qty', 'Done to Date', 'Remaining', '% Complete']
-  const moneyHeaders = contract.viewRates ? ['Value to Date', 'Cost to Date', 'Margin', 'MoT Qty', 'MoT Total'] : []
+  const trailingHeaders = contract.viewRates ? ['Authorized Value', 'Provisional Sum', 'Value to Date', 'Cost to Date', 'Margin', 'MoT Qty', 'MoT Total'] : []
   const monthHeaderCount = periods.length * (contract.viewRates ? 2 : 1)
-  const colCount = baseHeaders.length + moneyHeaders.length + monthHeaderCount
+  const colCount = baseHeaders.length + monthHeaderCount + trailingHeaders.length
+  const periodStartCol = baseHeaders.length + 1
+  const trailingStartCol = periodStartCol + monthHeaderCount
 
   // Row 1 — title, merged across the sheet. Company name isn't in the
   // schema (this is a single-tenant app built for Keywest specifically,
@@ -188,19 +215,42 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }
 
-  // Row 2 — headers.
-  const headerRow = sheet.getRow(2)
-  let col = 1
-  for (const h of baseHeaders) headerRow.getCell(col++).value = h
-  for (const h of moneyHeaders) headerRow.getCell(col++).value = h
-  const periodStartCol = col
-  for (const period of periods) {
-    const dateCell = headerRow.getCell(col++)
-    dateCell.value = periodDate(period)
-    dateCell.numFmt = DATE_FORMAT
-    if (contract.viewRates) headerRow.getCell(col++).value = 'Value'
+  // Rows 2–3 — two-row header for the grouped month columns: row 2 carries
+  // a cell merged across each month's Qty/Value pair reading e.g. "May
+  // 2026" (a real date, formatted to hide the day, not a string — sorting
+  // and filtering on it still works); row 3 carries "Qty"/"Value" beneath
+  // it. Standard treatment for grouped columns — the only arrangement in
+  // which a paired column reads, since otherwise the second column of the
+  // pair has nothing tying it to its month. Non-grouped columns (the base
+  // and trailing blocks) merge vertically across both rows instead, so
+  // their header reads once, at normal height, same as every other column.
+  const headerRow2 = sheet.getRow(2)
+  const headerRow3 = sheet.getRow(3)
+  for (let i = 0; i < baseHeaders.length; i++) {
+    const c = i + 1
+    sheet.mergeCells(2, c, 3, c)
+    headerRow2.getCell(c).value = baseHeaders[i]
   }
-  styleHeaderRow(headerRow)
+  let col = periodStartCol
+  for (const period of periods) {
+    const monthSpan = contract.viewRates ? 2 : 1
+    sheet.mergeCells(2, col, 2, col + monthSpan - 1)
+    const monthCell = headerRow2.getCell(col)
+    monthCell.value = periodDate(period)
+    monthCell.numFmt = MONTH_FORMAT
+    headerRow3.getCell(col).value = 'Qty'
+    if (contract.viewRates) headerRow3.getCell(col + 1).value = 'Value'
+    col += monthSpan
+  }
+  for (let i = 0; i < trailingHeaders.length; i++) {
+    const c = trailingStartCol + i
+    sheet.mergeCells(2, c, 3, c)
+    headerRow2.getCell(c).value = trailingHeaders[i]
+  }
+  for (let c = 1; c <= colCount; c++) {
+    styleHeaderCell(headerRow2.getCell(c))
+    styleHeaderCell(headerRow3.getCell(c))
+  }
 
   // Column widths — Description wide enough that a real item description
   // doesn't clip (52 chars, matching the reference workbook exactly);
@@ -212,10 +262,10 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   sheet.getColumn(5).width = 14
   sheet.getColumn(6).width = 12
   sheet.getColumn(7).width = 12
-  for (let c = 8; c < periodStartCol; c++) sheet.getColumn(c).width = 14
-  for (let c = periodStartCol; c <= colCount; c++) sheet.getColumn(c).width = 12
+  for (let c = periodStartCol; c < trailingStartCol; c++) sheet.getColumn(c).width = 12
+  for (let c = trailingStartCol; c <= colCount; c++) sheet.getColumn(c).width = 14
 
-  let rowNum = 3
+  let rowNum = 4
   for (const section of sections) {
     const sectionRow = sheet.getRow(rowNum++)
     sectionRow.getCell(1).value = section.prefix
@@ -224,6 +274,7 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
 
     for (const item of section.items) {
       const unitPriced = item.itemKind === 'unit_price'
+      const isProvisionalSum = item.itemKind === 'provisional_sum'
       const itemProgress = progressByItem.get(item.id)
       const price = priceByItem.get(item.id)
       const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
@@ -245,44 +296,27 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
       contractQtyCell.value = unitPriced ? item.approximateQuantity : '—'
       if (unitPriced) contractQtyCell.numFmt = qtyFmt
 
+      // Lump Sum/Provisional Sum: "—" here, same as every other quantity
+      // column — never a text label. % Complete already carries a Lump
+      // Sum's figure correctly (proportion_complete is percent_complete/100
+      // straight from v_item_progress); a Provisional Sum's authorized-
+      // value-against-provisional-sum gets its own two numeric columns
+      // below (in the trailing block) instead of being concatenated into a
+      // string that Excel can't sum, sort, or thousands-separate.
       const doneCell = row.getCell(c++)
-      if (item.itemKind === 'lump_sum') {
-        doneCell.value = itemProgress?.percentComplete != null ? `${itemProgress.percentComplete}% complete` : '—'
-      } else if (item.itemKind === 'provisional_sum') {
-        doneCell.value = `${itemProgress?.authorizedValue ?? 0} of ${itemProgress?.provisionalSum ?? 0}`
-      } else {
-        doneCell.value = quantityToDate
-        doneCell.numFmt = qtyFmt
-      }
+      doneCell.value = quantityToDate ?? '—'
+      if (quantityToDate !== null) doneCell.numFmt = qtyFmt
 
       const remainingCell = row.getCell(c++)
       remainingCell.value = remaining ?? '—'
       if (remaining !== null) remainingCell.numFmt = qtyFmt
 
       const percentCell = row.getCell(c++)
-      if (item.itemKind === 'provisional_sum') {
+      if (isProvisionalSum) {
         percentCell.value = '—'
       } else {
         percentCell.value = itemProgress?.proportionComplete ?? 0
         percentCell.numFmt = PERCENT_FORMAT
-      }
-
-      if (contract.viewRates) {
-        const valueCell = row.getCell(c++)
-        valueCell.value = valueToDate ?? '—'
-        if (valueToDate !== null) valueCell.numFmt = MONEY_FORMAT
-        const costCell = row.getCell(c++)
-        costCell.value = costToDate ?? '—'
-        if (costToDate !== null) costCell.numFmt = MONEY_FORMAT
-        const marginCell = row.getCell(c++)
-        marginCell.value = marginToDate ?? '—'
-        if (marginToDate !== null) marginCell.numFmt = MONEY_FORMAT
-        const motQtyCell = row.getCell(c++)
-        motQtyCell.value = recon?.certifiedQuantityToDate ?? '—'
-        if (recon?.certifiedQuantityToDate != null) motQtyCell.numFmt = qtyFmt
-        const motTotalCell = row.getCell(c++)
-        motTotalCell.value = recon?.certifiedValueToDate ?? '—'
-        if (recon?.certifiedValueToDate != null) motTotalCell.numFmt = MONEY_FORMAT
       }
 
       for (const period of periods) {
@@ -305,6 +339,30 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
           valCell.value = valueInPeriod ?? '—'
           if (valueInPeriod !== null) valCell.numFmt = MONEY_FORMAT
         }
+      }
+
+      if (contract.viewRates) {
+        const authorizedCell = row.getCell(c++)
+        authorizedCell.value = isProvisionalSum ? (itemProgress?.authorizedValue ?? 0) : '—'
+        if (isProvisionalSum) authorizedCell.numFmt = MONEY_FORMAT
+        const provisionalCell = row.getCell(c++)
+        provisionalCell.value = isProvisionalSum ? (itemProgress?.provisionalSum ?? 0) : '—'
+        if (isProvisionalSum) provisionalCell.numFmt = MONEY_FORMAT
+        const valueCell = row.getCell(c++)
+        valueCell.value = valueToDate ?? '—'
+        if (valueToDate !== null) valueCell.numFmt = MONEY_FORMAT
+        const costCell = row.getCell(c++)
+        costCell.value = costToDate ?? '—'
+        if (costToDate !== null) costCell.numFmt = MONEY_FORMAT
+        const marginCell = row.getCell(c++)
+        marginCell.value = marginToDate ?? '—'
+        if (marginToDate !== null) marginCell.numFmt = MONEY_FORMAT
+        const motQtyCell = row.getCell(c++)
+        motQtyCell.value = recon?.certifiedQuantityToDate ?? '—'
+        if (recon?.certifiedQuantityToDate != null) motQtyCell.numFmt = qtyFmt
+        const motTotalCell = row.getCell(c++)
+        motTotalCell.value = recon?.certifiedValueToDate ?? '—'
+        if (recon?.certifiedValueToDate != null) motTotalCell.numFmt = MONEY_FORMAT
       }
     }
   }
@@ -330,7 +388,7 @@ function buildRecordsSheet(workbook: ExcelJS.Workbook, data: LoadedData) {
     const row = sheet.getRow(i + 2)
     const [y, m, d] = r.workDate.split('-').map(Number)
     const dateCell = row.getCell(1)
-    dateCell.value = new Date(y, m - 1, d)
+    dateCell.value = pureDate(y, m, d)
     dateCell.numFmt = DATE_FORMAT
     row.getCell(2).value = item?.itemNumber ?? r.itemId
     row.getCell(3).value = item?.description ?? ''
