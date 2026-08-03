@@ -5,7 +5,7 @@ import { createItem, fetchItems, updateItem, type Item, type ItemInput } from '.
 import { UNITS } from '../../lib/itemUnits'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
-import './ItemsScreen.css'
+import { Button, EmptyState, Input, NotificationBanner, PageHeader, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 const BLANK_FORM: ItemInput = { itemNumber: '', description: '', unit: UNITS[0], approximateQuantity: 0 }
 
@@ -126,163 +126,175 @@ export function ItemsScreen() {
     }
   }
 
-  if (!canWrite) {
-    return (
-      <div className="items-screen">
-        <p className="items-denied">Setting up items needs the create_items right on this contract.</p>
-      </div>
-    )
-  }
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${sorted.length} item${sorted.length === 1 ? '' : 's'}` : ''}`
 
   return (
-    <div className="items-screen">
-      <h1 className="items-title">Items — {contract.name}</h1>
+    <div>
+      <PageHeader title="Items" subtitle={subtitle} />
 
-      <form className="items-add-form" onSubmit={handleAdd}>
-        <div className="items-add-field">
-          <label htmlFor="li-add-code">Item #</label>
-          <input
-            id="li-add-code"
-            ref={codeInputRef}
-            className="items-input items-input-mono"
-            value={form.itemNumber}
-            onChange={(e) => setForm({ ...form, itemNumber: e.target.value })}
-            onKeyDown={handleAddKeyDown}
-            placeholder="05.03.03"
-          />
-        </div>
-        <div className="items-add-field items-add-field-description">
-          <label htmlFor="li-add-description">Description</label>
-          <input
-            id="li-add-description"
-            className="items-input"
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            onKeyDown={handleAddKeyDown}
-            placeholder="Asphalt paving, top lift"
-          />
-        </div>
-        <div className="items-add-field">
-          <label htmlFor="li-add-unit">Unit of Measure</label>
-          <select
-            id="li-add-unit"
-            className="items-input"
-            value={form.unit}
-            onChange={(e) => setForm({ ...form, unit: e.target.value })}
-            onKeyDown={handleAddKeyDown}
-          >
-            {UNITS.map((u) => (
-              <option key={u} value={u}>
-                {u}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="items-add-field">
-          <label htmlFor="li-add-quantity">Approximate quantity</label>
-          <input
-            id="li-add-quantity"
-            className="items-input items-input-mono"
-            type="number"
-            inputMode="decimal"
-            step="any"
-            value={form.approximateQuantity || ''}
-            onChange={(e) => setForm({ ...form, approximateQuantity: parseQuantity(e.target.value) })}
-            onKeyDown={handleAddKeyDown}
-          />
-        </div>
-        <button className="items-add-submit" type="submit" disabled={adding}>
-          {adding ? 'Adding…' : 'Add — Enter'}
-        </button>
-      </form>
-      {addError && <p className="items-error">{addError}</p>}
+      {!canWrite ? (
+        <EmptyState title="Setting up items needs the create_items right on this contract." />
+      ) : (
+        <>
+          <form onSubmit={handleAdd} className="mb-4">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Item #</TH>
+                  <TH>Description</TH>
+                  <TH>Unit of Measure</TH>
+                  <TH align="right">Approximate Quantity</TH>
+                  <TH />
+                </TR>
+              </THead>
+              <TBody>
+                <TR>
+                  <TD>
+                    <Input
+                      ref={codeInputRef}
+                      className="nc-numeric"
+                      value={form.itemNumber}
+                      onChange={(e) => setForm({ ...form, itemNumber: e.target.value })}
+                      onKeyDown={handleAddKeyDown}
+                      placeholder="05.03.03"
+                      aria-label="Item #"
+                    />
+                  </TD>
+                  <TD>
+                    <Input
+                      value={form.description}
+                      onChange={(e) => setForm({ ...form, description: e.target.value })}
+                      onKeyDown={handleAddKeyDown}
+                      placeholder="Asphalt paving, top lift"
+                      aria-label="Description"
+                    />
+                  </TD>
+                  <TD>
+                    <Select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} onKeyDown={handleAddKeyDown} aria-label="Unit of Measure">
+                      {UNITS.map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </Select>
+                  </TD>
+                  <TD align="right">
+                    <Input
+                      className="nc-numeric text-right"
+                      type="number"
+                      inputMode="decimal"
+                      step="any"
+                      value={form.approximateQuantity || ''}
+                      onChange={(e) => setForm({ ...form, approximateQuantity: parseQuantity(e.target.value) })}
+                      onKeyDown={handleAddKeyDown}
+                      aria-label="Approximate quantity"
+                    />
+                  </TD>
+                  <TD>
+                    <Button type="submit" disabled={adding}>
+                      {adding ? 'Adding…' : 'Add — Enter'}
+                    </Button>
+                  </TD>
+                </TR>
+              </TBody>
+            </Table>
+          </form>
+          {addError && (
+            <NotificationBanner tone="danger" className="mb-4">
+              {addError}
+            </NotificationBanner>
+          )}
 
-      {status === 'loading' && <p className="items-status">Loading…</p>}
-      {status === 'error' && <p className="items-error">{loadError}</p>}
+          {status === 'loading' && (
+            <div className="flex items-center gap-2 py-8 text-nc-text-muted">
+              <Spinner />
+              <span className="text-sm">Loading…</span>
+            </div>
+          )}
+          {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-      {status === 'ready' && (
-        <table className="items-table">
-          <thead>
-            <tr>
-              <th>Item #</th>
-              <th>Description</th>
-              <th>Unit of Measure</th>
-              <th className="items-col-right">Approximate Quantity</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.length === 0 && (
-              <tr>
-                <td className="items-empty" colSpan={5}>
-                  No items yet — add the first one above.
-                </td>
-              </tr>
-            )}
-            {sorted.map((item) =>
-              editingId === item.id ? (
-                <tr key={item.id}>
-                  <td colSpan={5}>
-                    <form className="items-edit-form" onSubmit={handleSaveEdit}>
-                      <input
-                        className="items-input items-input-mono"
-                        value={editForm.itemNumber}
-                        onChange={(e) => setEditForm({ ...editForm, itemNumber: e.target.value })}
-                        aria-label="Item #"
-                      />
-                      <input
-                        className="items-input items-edit-description"
-                        value={editForm.description}
-                        onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                        aria-label="Description"
-                      />
-                      <select
-                        className="items-input"
-                        value={editForm.unit}
-                        onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })}
-                        aria-label="Unit of Measure"
-                      >
-                        {UNITS.map((u) => (
-                          <option key={u} value={u}>
-                            {u}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        className="items-input items-input-mono"
-                        type="number"
-                        inputMode="decimal"
-                        step="any"
-                        value={editForm.approximateQuantity}
-                        onChange={(e) => setEditForm({ ...editForm, approximateQuantity: parseQuantity(e.target.value) })}
-                        aria-label="Approximate quantity"
-                      />
-                      <button type="submit" className="items-row-btn" disabled={savingEdit}>
-                        {savingEdit ? 'Saving…' : 'Save'}
-                      </button>
-                      <button type="button" className="items-row-btn" onClick={() => setEditingId(null)}>
-                        Cancel
-                      </button>
-                      {editError && <span className="items-error items-edit-error">{editError}</span>}
-                    </form>
-                  </td>
-                </tr>
-              ) : (
-                <tr key={item.id}>
-                  <td className="items-input-mono">{item.itemNumber}</td>
-                  <td>{item.description}</td>
-                  <td>{item.unit}</td>
-                  <td className="items-col-right items-input-mono">{item.approximateQuantity}</td>
-                  <td className="items-col-right">
-                    <button type="button" className="items-row-btn" onClick={() => startEdit(item)}>
-                      Edit
-                    </button>
-                  </td>
-                </tr>
-              ),
-            )}
-          </tbody>
-        </table>
+          {status === 'ready' && (
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Item #</TH>
+                  <TH>Description</TH>
+                  <TH>Unit of Measure</TH>
+                  <TH align="right">Approximate Quantity</TH>
+                  <TH />
+                </TR>
+              </THead>
+              <TBody>
+                {sorted.length === 0 && (
+                  <TR>
+                    <TD colSpan={5} className="text-center text-nc-text-muted">
+                      No items yet — add the first one above.
+                    </TD>
+                  </TR>
+                )}
+                {sorted.map((item) =>
+                  editingId === item.id ? (
+                    <TR key={item.id}>
+                      <TD colSpan={5}>
+                        <form onSubmit={handleSaveEdit} className="flex flex-wrap items-center gap-2">
+                          <Input
+                            className="nc-numeric w-32"
+                            value={editForm.itemNumber}
+                            onChange={(e) => setEditForm({ ...editForm, itemNumber: e.target.value })}
+                            aria-label="Item #"
+                          />
+                          <Input
+                            className="min-w-[16rem] flex-1"
+                            value={editForm.description}
+                            onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                            aria-label="Description"
+                          />
+                          <Select className="w-auto" value={editForm.unit} onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })} aria-label="Unit of Measure">
+                            {UNITS.map((u) => (
+                              <option key={u} value={u}>
+                                {u}
+                              </option>
+                            ))}
+                          </Select>
+                          <Input
+                            className="nc-numeric w-32"
+                            type="number"
+                            inputMode="decimal"
+                            step="any"
+                            value={editForm.approximateQuantity}
+                            onChange={(e) => setEditForm({ ...editForm, approximateQuantity: parseQuantity(e.target.value) })}
+                            aria-label="Approximate quantity"
+                          />
+                          <Button type="submit" disabled={savingEdit}>
+                            {savingEdit ? 'Saving…' : 'Save'}
+                          </Button>
+                          <Button type="button" variant="ghost" onClick={() => setEditingId(null)}>
+                            Cancel
+                          </Button>
+                          {editError && <span className="text-sm text-nc-danger-text">{editError}</span>}
+                        </form>
+                      </TD>
+                    </TR>
+                  ) : (
+                    <TR key={item.id}>
+                      <TD className="nc-numeric">{item.itemNumber}</TD>
+                      <TD prose>{item.description}</TD>
+                      <TD>{item.unit}</TD>
+                      <TD align="right" className="nc-numeric">
+                        {item.approximateQuantity}
+                      </TD>
+                      <TD align="right">
+                        <Button type="button" variant="secondary" onClick={() => startEdit(item)}>
+                          Edit
+                        </Button>
+                      </TD>
+                    </TR>
+                  ),
+                )}
+              </TBody>
+            </Table>
+          )}
+        </>
       )}
     </div>
   )

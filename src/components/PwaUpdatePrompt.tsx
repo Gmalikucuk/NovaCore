@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
-import './PwaUpdatePrompt.css'
 
 /**
  * A field app that stays open all day is exactly the case a stale PWA
@@ -60,16 +59,14 @@ export function PwaUpdatePrompt() {
   if (!needRefresh) return null
 
   return (
-    <div className="pwa-update-banner">
-      <button type="button" className="pwa-update-reload" onClick={() => updateServiceWorker()}>
+    // Normal document flow, not fixed/overlaid — sits above whichever shell
+    // (Sidebar or FieldHeader) is currently mounted, shrink-0 so it never
+    // gets squeezed by a flex ancestor.
+    <div className="box-border flex shrink-0 items-center justify-between gap-3 bg-nc-navy text-white">
+      <button type="button" className="flex-1 px-4 py-2.5 text-left text-sm font-bold text-nc-accent" onClick={() => updateServiceWorker()}>
         Update available — tap to reload
       </button>
-      <button
-        type="button"
-        className="pwa-update-dismiss"
-        aria-label="Dismiss"
-        onClick={() => setNeedRefresh(false)}
-      >
+      <button type="button" aria-label="Dismiss" className="min-h-11 min-w-11 shrink-0 px-4 py-2 text-base text-white" onClick={() => setNeedRefresh(false)}>
         ✕
       </button>
     </div>

@@ -5,7 +5,7 @@ import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
 import { margin } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
-import './RatesScreen.css'
+import { EmptyState, Input, NotificationBanner, PageHeader, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 interface Draft {
   cost: string
@@ -127,105 +127,113 @@ export function RatesScreen() {
     })
   }
 
-  if (!contract.viewRates) {
-    return (
-      <div className="rates-screen">
-        <p className="rates-denied">Viewing rates needs the view_rates right on this contract.</p>
-      </div>
-    )
-  }
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${pricedCount} of ${rows.length} priced` : ''}`
 
   return (
-    <div className="rates-screen">
-      <h1 className="rates-title">Rates — {contract.name}</h1>
+    <div>
+      <PageHeader title="Rates" subtitle={subtitle} />
 
-      {status === 'loading' && <p className="rates-status">Loading…</p>}
-      {status === 'error' && <p className="rates-error">{loadError}</p>}
-
-      {status === 'ready' && (
+      {!contract.viewRates ? (
+        <EmptyState title="Viewing rates needs the view_rates right on this contract." />
+      ) : (
         <>
-          {!canEdit && <p className="rates-readonly-banner">Read-only — setting rates needs set_cost and set_unit_price on this contract.</p>}
-          {pricedCount < rows.length && (
-            <p className="rates-unpriced-banner">
-              {rows.length - pricedCount} of {rows.length} items still unpriced — the contract margin total below reflects priced items
-              only, not the whole contract.
-            </p>
+          {status === 'loading' && (
+            <div className="flex items-center gap-2 py-8 text-nc-text-muted">
+              <Spinner />
+              <span className="text-sm">Loading…</span>
+            </div>
           )}
+          {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-          <table className="rates-table">
-            <thead>
-              <tr>
-                <th>Item #</th>
-                <th>Description</th>
-                <th className="rates-col-right">Approximate Quantity</th>
-                <th className="rates-col-right">Cost / unit</th>
-                <th className="rates-col-right">Unit Price</th>
-                <th className="rates-col-right">Contract margin</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, i) => {
-                const draft = drafts.get(row.item.id) ?? { cost: '', unitPrice: '' }
-                return (
-                  <Fragment key={row.item.id}>
-                    <tr className={row.priced ? undefined : 'rates-row-unpriced'}>
-                      <td className="rates-mono">{row.item.itemNumber}</td>
-                      <td>{row.item.description}</td>
-                      <td className="rates-col-right rates-mono">
-                        {row.item.approximateQuantity} <span className="rates-unit">{row.item.unit}</span>
-                      </td>
-                      <td className="rates-col-right">
-                        <input
-                          className="rates-input"
-                          data-cell={`${i}-cost`}
-                          inputMode="decimal"
-                          placeholder="—"
-                          value={draft.cost}
-                          readOnly={!canEdit}
-                          onChange={(e) => updateDraft(row.item.id, 'cost', e.target.value)}
-                          onBlur={() => void commitRate(row.item, 'cost')}
-                          onKeyDown={(e) => handleKeyDown(e, row.item, 'cost', i)}
-                        />
-                      </td>
-                      <td className="rates-col-right">
-                        <input
-                          className="rates-input"
-                          data-cell={`${i}-unitPrice`}
-                          inputMode="decimal"
-                          placeholder="—"
-                          value={draft.unitPrice}
-                          readOnly={!canEdit}
-                          onChange={(e) => updateDraft(row.item.id, 'unitPrice', e.target.value)}
-                          onBlur={() => void commitRate(row.item, 'unitPrice')}
-                          onKeyDown={(e) => handleKeyDown(e, row.item, 'unitPrice', i)}
-                        />
-                      </td>
-                      <td className={`rates-col-right rates-mono ${row.contractMargin !== null && row.contractMargin < 0 ? 'rates-negative' : ''}`}>
-                        {row.contractMargin === null ? '—' : row.contractMargin.toLocaleString('en-CA', { maximumFractionDigits: 0 })}
-                      </td>
-                    </tr>
-                    {rowError?.id === row.item.id && (
-                      <tr>
-                        <td colSpan={6} className="rates-row-error">
-                          {rowError.message}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={5} className="rates-total-label">
-                  Contract margin ({pricedCount} of {rows.length} items priced)
-                </td>
-                <td className="rates-col-right rates-mono rates-total-value">
-                  {totalMargin.toLocaleString('en-CA', { maximumFractionDigits: 0 })}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+          {status === 'ready' && (
+            <>
+              {!canEdit && (
+                <NotificationBanner tone="info" className="mb-4">
+                  Read-only — setting rates needs set_cost and set_unit_price on this contract.
+                </NotificationBanner>
+              )}
+              {pricedCount < rows.length && (
+                <NotificationBanner tone="warning" className="mb-4">
+                  {rows.length - pricedCount} of {rows.length} items still unpriced — the contract margin total below reflects priced items only, not the whole contract.
+                </NotificationBanner>
+              )}
+
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Item #</TH>
+                    <TH>Description</TH>
+                    <TH align="right">Approximate Quantity</TH>
+                    <TH align="right">Cost / unit</TH>
+                    <TH align="right">Unit Price</TH>
+                    <TH align="right">Contract margin</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {rows.map((row, i) => {
+                    const draft = drafts.get(row.item.id) ?? { cost: '', unitPrice: '' }
+                    return (
+                      <Fragment key={row.item.id}>
+                        <TR className={row.priced ? undefined : 'bg-nc-secondary/60'}>
+                          <TD className="nc-numeric">{row.item.itemNumber}</TD>
+                          <TD prose>{row.item.description}</TD>
+                          <TD align="right" className="nc-numeric">
+                            {row.item.approximateQuantity} <span className="text-nc-text-muted">{row.item.unit}</span>
+                          </TD>
+                          <TD align="right">
+                            <Input
+                              className="nc-numeric text-right"
+                              data-cell={`${i}-cost`}
+                              inputMode="decimal"
+                              placeholder="—"
+                              value={draft.cost}
+                              readOnly={!canEdit}
+                              onChange={(e) => updateDraft(row.item.id, 'cost', e.target.value)}
+                              onBlur={() => void commitRate(row.item, 'cost')}
+                              onKeyDown={(e) => handleKeyDown(e, row.item, 'cost', i)}
+                            />
+                          </TD>
+                          <TD align="right">
+                            <Input
+                              className="nc-numeric text-right"
+                              data-cell={`${i}-unitPrice`}
+                              inputMode="decimal"
+                              placeholder="—"
+                              value={draft.unitPrice}
+                              readOnly={!canEdit}
+                              onChange={(e) => updateDraft(row.item.id, 'unitPrice', e.target.value)}
+                              onBlur={() => void commitRate(row.item, 'unitPrice')}
+                              onKeyDown={(e) => handleKeyDown(e, row.item, 'unitPrice', i)}
+                            />
+                          </TD>
+                          <TD align="right" className={`nc-numeric ${row.contractMargin !== null && row.contractMargin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                            {row.contractMargin === null ? '—' : row.contractMargin.toLocaleString('en-CA', { maximumFractionDigits: 0 })}
+                          </TD>
+                        </TR>
+                        {rowError?.id === row.item.id && (
+                          <TR>
+                            <TD colSpan={6} className="text-nc-danger-text">
+                              {rowError.message}
+                            </TD>
+                          </TR>
+                        )}
+                      </Fragment>
+                    )
+                  })}
+                </TBody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={5} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                      Contract margin ({pricedCount} of {rows.length} items priced)
+                    </td>
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                      {totalMargin.toLocaleString('en-CA', { maximumFractionDigits: 0 })}
+                    </td>
+                  </tr>
+                </tfoot>
+              </Table>
+            </>
+          )}
         </>
       )}
     </div>

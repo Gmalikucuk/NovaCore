@@ -3,7 +3,7 @@ import { Navigate } from 'react-router-dom'
 import { errorMessage } from '../../lib/errorMessage'
 import { signInWithPassword } from '../../lib/supabase/auth'
 import { useSession } from '../../lib/useSession'
-import './SignInScreen.css'
+import { Button, Input, NotificationBanner } from '../../components/ui'
 
 export function SignInScreen() {
   const session = useSession()
@@ -12,7 +12,7 @@ export function SignInScreen() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  // This route sits outside AppShell (see App.tsx), so it's the one place
+  // This route sits outside AuthGate (see App.tsx), so it's the one place
   // responsible for leaving itself once a session exists — both for an
   // already-signed-in visitor landing here directly, and for the moment
   // sign-in succeeds below (onAuthStateChange updates `session`, which
@@ -33,42 +33,33 @@ export function SignInScreen() {
   }
 
   return (
-    <div className="sign-in-screen">
-      <form className="sign-in-form" onSubmit={handleSubmit}>
-        <h1 className="sign-in-wordmark">NovaCore</h1>
-        <p className="sign-in-subtitle">Sign in to continue</p>
+    <div className="flex min-h-screen items-center justify-center bg-nc-page p-6">
+      {/* The one card in the app with rounded-xl + shadow-2xl — every other
+          card uses Card's rounded-lg/shadow-sm; sign-in is the single
+          unauthenticated screen and reads better with more presence. */}
+      <form onSubmit={handleSubmit} className="w-full max-w-[360px] rounded-xl border border-nc-border bg-white p-8 shadow-2xl">
+        <h1 className="text-center text-3xl font-bold text-nc-navy">NovaCore</h1>
+        <p className="mb-4 text-center text-sm text-nc-text-muted">Sign in to continue</p>
 
-        <label className="sign-in-label" htmlFor="sign-in-email">
+        <label className="mb-1 mt-3 block text-sm font-semibold text-nc-text-muted" htmlFor="sign-in-email">
           Email
         </label>
-        <input
-          id="sign-in-email"
-          className="sign-in-input"
-          type="email"
-          autoComplete="username"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
+        <Input id="sign-in-email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
 
-        <label className="sign-in-label" htmlFor="sign-in-password">
+        <label className="mb-1 mt-3 block text-sm font-semibold text-nc-text-muted" htmlFor="sign-in-password">
           Password
         </label>
-        <input
-          id="sign-in-password"
-          className="sign-in-input"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
+        <Input id="sign-in-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
 
-        {error && <p className="sign-in-error">{error}</p>}
+        {error && (
+          <NotificationBanner tone="danger" className="mt-3">
+            {error}
+          </NotificationBanner>
+        )}
 
-        <button className="sign-in-submit" type="submit" disabled={submitting}>
+        <Button type="submit" disabled={submitting} className="mt-5 w-full">
           {submitting ? 'Signing in…' : 'Sign in'}
-        </button>
+        </Button>
       </form>
     </div>
   )

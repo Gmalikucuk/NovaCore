@@ -11,12 +11,20 @@ import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
 import { ChainageStrip, type ChainageEntry } from '../../components/ChainageStrip'
-import './EntryScreen.css'
+import { Button, Card, EmptyState, Input, NotificationBanner, PageHeader, Select, StatusBadge, Textarea } from '../../components/ui'
 
 type StationMode = 'single' | 'range'
 
 export function EntryScreen() {
   const contract = useOutletContext<MyContract>()
+  // Mirrors QuantityRecordsScreen's gate (0008: enter_quantity for an
+  // original entry, correct_quantity for a correction) — this screen never
+  // had one before; it presented a working-looking form to anyone who
+  // reached it, relying on RLS alone to fail the write server-side. Server-
+  // side RLS still is the real enforcement — this just stops the UI from
+  // offering an affordance that can't work.
+  const canEnter = contract.enterQuantity
+  const canCorrect = contract.correctQuantity
   const session = useSession()
   const userId = session?.user.id ?? null
 
@@ -204,168 +212,200 @@ export function EntryScreen() {
     }
   }
 
+  // Same either/or as QuantityRecordsScreen: entering a new original needs
+  // enter_quantity, saving a correction needs correct_quantity. A seat with
+  // only one of the two can still reach this screen; the rest of the form
+  // stays usable, only the submit action is blocked, so a field seat never
+  // sees a screen that just vanishes mid-shift.
+  const formUsable = correctingId ? canCorrect : canEnter
+
   return (
-    <div className="entry-screen">
-      <h1 className="entry-screen-title">Field entry — {contract.name}</h1>
+    <div className="mx-auto flex max-w-2xl flex-col gap-5 p-4">
+      <PageHeader title="Field entry" subtitle={contract.name} />
 
-      {chainageEntries.length > 0 && <ChainageStrip entries={chainageEntries} />}
+      {!canEnter && !canCorrect ? (
+        <EmptyState title="Field entry needs enter_quantity or correct_quantity on this contract." />
+      ) : (
+        <>
+          {chainageEntries.length > 0 && <ChainageStrip entries={chainageEntries} />}
 
-      {loadError && <p className="entry-screen-error">{loadError}</p>}
+          {loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-      <form className="entry-form" onSubmit={handleSubmit}>
-        {correctingId && (
-          <div className="entry-correction-banner">
-            <span>Correcting a prior entry — the original stays in the total until this correction is confirmed.</span>
-            <button type="button" className="entry-correction-cancel" onClick={() => resetForRepeat()}>
-              Cancel
-            </button>
-          </div>
-        )}
+          <Card className="p-4">
+            <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+              {correctingId && (
+                <NotificationBanner tone="info" className="flex items-center justify-between gap-3">
+                  <span>Correcting a prior entry — the original stays in the total until this correction is confirmed.</span>
+                  <Button type="button" variant="ghost" onClick={() => resetForRepeat()}>
+                    Cancel
+                  </Button>
+                </NotificationBanner>
+              )}
 
-        <label className="entry-label" htmlFor="entry-date">
-          Date
-        </label>
-        <input id="entry-date" className="entry-input entry-input-mono" type="date" value={workDate} onChange={(e) => setWorkDate(e.target.value)} required />
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-date">
+                  Date
+                </label>
+                <Input id="entry-date" className="nc-numeric" type="date" value={workDate} onChange={(e) => setWorkDate(e.target.value)} required disabled={!formUsable} />
+              </div>
 
-        <label className="entry-label" htmlFor="entry-item">
-          Item
-        </label>
-        <select id="entry-item" className="entry-input" value={itemId} onChange={(e) => setItemId(e.target.value)} required>
-          {items.length === 0 && <option value="">No items on this contract</option>}
-          {items.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.itemNumber} — {item.description}
-            </option>
-          ))}
-        </select>
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-item">
+                  Item
+                </label>
+                <Select id="entry-item" value={itemId} onChange={(e) => setItemId(e.target.value)} required disabled={!formUsable}>
+                  {items.length === 0 && <option value="">No items on this contract</option>}
+                  {items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.itemNumber} — {item.description}
+                    </option>
+                  ))}
+                </Select>
+              </div>
 
-        <div className="entry-station-toggle" role="group" aria-label="Station mode">
-          <button type="button" className={mode === 'single' ? 'entry-toggle-btn entry-toggle-active' : 'entry-toggle-btn'} onClick={() => setMode('single')}>
-            Single station
-          </button>
-          <button type="button" className={mode === 'range' ? 'entry-toggle-btn entry-toggle-active' : 'entry-toggle-btn'} onClick={() => setMode('range')}>
-            From – To
-          </button>
-        </div>
+              <div className="flex gap-2" role="group" aria-label="Station mode">
+                <Button type="button" variant={mode === 'single' ? 'primary' : 'secondary'} className="flex-1" onClick={() => setMode('single')} disabled={!formUsable}>
+                  Single station
+                </Button>
+                <Button type="button" variant={mode === 'range' ? 'primary' : 'secondary'} className="flex-1" onClick={() => setMode('range')} disabled={!formUsable}>
+                  From – To
+                </Button>
+              </div>
 
-        <div className="entry-station-row">
-          <div className="entry-station-field">
-            <label className="entry-label" htmlFor="entry-station-from">
-              Station {mode === 'range' ? 'From' : ''}
-            </label>
-            <input
-              id="entry-station-from"
-              className="entry-input entry-input-mono"
-              type="number"
-              inputMode="decimal"
-              step="0.001"
-              value={stationFrom}
-              onChange={(e) => setStationFrom(e.target.value)}
-            />
-          </div>
-          {mode === 'range' && (
-            <div className="entry-station-field">
-              <label className="entry-label" htmlFor="entry-station-to">
-                Station To
-              </label>
-              <input
-                id="entry-station-to"
-                className="entry-input entry-input-mono"
-                type="number"
-                inputMode="decimal"
-                step="0.001"
-                value={stationTo}
-                onChange={(e) => setStationTo(e.target.value)}
-              />
-            </div>
-          )}
-        </div>
-        {mode === 'range' && <p className="entry-reach-readout">{reachMetres !== null ? `reach ${reachMetres.toFixed(1)} m` : ' '}</p>}
-
-        <label className="entry-label" htmlFor="entry-quantity">
-          Quantity{selectedItem ? ` (${selectedItem.unit})` : ''}
-        </label>
-        <input
-          id="entry-quantity"
-          className="entry-input entry-input-mono"
-          type="number"
-          inputMode="decimal"
-          step="0.01"
-          value={quantity}
-          onChange={(e) => setQuantity(e.target.value)}
-          required
-        />
-        {selectedItem && isLumpUnit(selectedItem.unit) && <p className="entry-hint">Lump-sum item — quantity is a % or portion complete, per contract convention.</p>}
-
-        <label className="entry-label" htmlFor="entry-location">
-          Location
-        </label>
-        <input
-          id="entry-location"
-          className="entry-input"
-          list="entry-location-options"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-          placeholder="Free text — e.g. Sta 12+400 south shoulder"
-        />
-        <datalist id="entry-location-options">
-          {locations.map((loc) => (
-            <option key={loc} value={loc} />
-          ))}
-        </datalist>
-
-        <label className="entry-label" htmlFor="entry-note">
-          Note
-        </label>
-        <textarea id="entry-note" className="entry-input entry-textarea" value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
-
-        {formError && <p className="entry-form-error">{formError}</p>}
-
-        <button className="entry-submit" type="submit" disabled={submitting}>
-          {submitting ? 'Saving…' : correctingId ? 'Save correction' : 'Add entry'}
-        </button>
-      </form>
-
-      <div className="entry-day-list">
-        <h2 className="entry-day-list-title">{workDate}</h2>
-        {dayRecords.length === 0 && <p className="entry-day-list-empty">No entries yet today.</p>}
-        {dayRecords.map((r) => {
-          const item = itemById.get(r.itemId)
-          return (
-            <div key={r.id} className="entry-row">
-              <div className="entry-row-main">
-                <span className="entry-row-item">{item?.itemNumber ?? r.itemId.slice(0, 8)}</span>
-                <span className="entry-row-quantity entry-input-mono">
-                  {r.quantity}
-                  {item ? ` ${item.unit}` : ''}
-                </span>
-                {r.stationFrom !== null && (
-                  <span className="entry-row-station entry-input-mono">
-                    {r.stationFrom}
-                    {r.stationTo !== null ? `–${r.stationTo}` : ''}
-                  </span>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-station-from">
+                    Station {mode === 'range' ? 'From' : ''}
+                  </label>
+                  <Input
+                    id="entry-station-from"
+                    className="nc-numeric"
+                    type="number"
+                    inputMode="decimal"
+                    step="0.001"
+                    value={stationFrom}
+                    onChange={(e) => setStationFrom(e.target.value)}
+                    disabled={!formUsable}
+                  />
+                </div>
+                {mode === 'range' && (
+                  <div className="flex-1">
+                    <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-station-to">
+                      Station To
+                    </label>
+                    <Input
+                      id="entry-station-to"
+                      className="nc-numeric"
+                      type="number"
+                      inputMode="decimal"
+                      step="0.001"
+                      value={stationTo}
+                      onChange={(e) => setStationTo(e.target.value)}
+                      disabled={!formUsable}
+                    />
+                  </div>
                 )}
               </div>
-              <div className="entry-row-meta">
-                {r.location && <span className="entry-row-location">{r.location}</span>}
-                <span className={`entry-chip entry-chip-${r.status}`}>{r.status}</span>
-                {r.pending && <span className="entry-chip entry-chip-pending">queued</span>}
-                {supersededByConfirmed.has(r.id) && <span className="entry-chip entry-chip-superseded">superseded</span>}
+              {mode === 'range' && <p className="nc-numeric -mt-1 min-h-[1.2em] text-sm text-nc-accent">{reachMetres !== null ? `reach ${reachMetres.toFixed(1)} m` : ' '}</p>}
+
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-quantity">
+                  Quantity{selectedItem ? ` (${selectedItem.unit})` : ''}
+                </label>
+                <Input
+                  id="entry-quantity"
+                  className="nc-numeric"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  required
+                  disabled={!formUsable}
+                />
+                {selectedItem && isLumpUnit(selectedItem.unit) && <p className="mt-1 text-xs text-nc-text-muted">Lump-sum item — quantity is a % or portion complete, per contract convention.</p>}
               </div>
-              <div className="entry-row-actions">
-                {r.status === 'draft' && r.pending === false && (
-                  <button type="button" className="entry-row-btn" disabled={confirmingId === r.id} onClick={() => void handleConfirm(r.id)}>
-                    {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
-                  </button>
-                )}
-                <button type="button" className="entry-row-btn" onClick={() => startCorrection(r)}>
-                  Correct
-                </button>
+
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-location">
+                  Location
+                </label>
+                <Input
+                  id="entry-location"
+                  list="entry-location-options"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="Free text — e.g. Sta 12+400 south shoulder"
+                  disabled={!formUsable}
+                />
+                <datalist id="entry-location-options">
+                  {locations.map((loc) => (
+                    <option key={loc} value={loc} />
+                  ))}
+                </datalist>
               </div>
-            </div>
-          )
-        })}
-      </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-note">
+                  Note
+                </label>
+                <Textarea id="entry-note" value={note} onChange={(e) => setNote(e.target.value)} rows={2} disabled={!formUsable} />
+              </div>
+
+              {formError && <NotificationBanner tone="danger">{formError}</NotificationBanner>}
+
+              <Button
+                type="submit"
+                disabled={submitting || !formUsable}
+                title={!formUsable ? `Needs ${correctingId ? 'correct_quantity' : 'enter_quantity'}` : undefined}
+              >
+                {submitting ? 'Saving…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add entry'}
+              </Button>
+            </form>
+          </Card>
+
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-semibold text-nc-text-muted">{workDate}</h2>
+            {dayRecords.length === 0 && <p className="text-sm text-nc-text-subtle">No entries yet today.</p>}
+            {dayRecords.map((r) => {
+              const item = itemById.get(r.itemId)
+              return (
+                <Card key={r.id} className="flex flex-col gap-1 p-3">
+                  <div className="flex flex-wrap items-baseline gap-3">
+                    <span className="font-semibold text-nc-text">{item?.itemNumber ?? r.itemId.slice(0, 8)}</span>
+                    <span className="nc-numeric text-sm text-nc-text-muted">
+                      {r.quantity}
+                      {item ? ` ${item.unit}` : ''}
+                    </span>
+                    {r.stationFrom !== null && (
+                      <span className="nc-numeric text-sm text-nc-text-muted">
+                        {r.stationFrom}
+                        {r.stationTo !== null ? `–${r.stationTo}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {r.location && <span className="text-xs text-nc-text-subtle">{r.location}</span>}
+                    <StatusBadge status={r.status} />
+                    {r.pending && <StatusBadge status="correcting">queued</StatusBadge>}
+                    {supersededByConfirmed.has(r.id) && <StatusBadge status="superseded" />}
+                  </div>
+                  <div className="mt-1 flex gap-2">
+                    {r.status === 'draft' && r.pending === false && (
+                      <Button type="button" variant="secondary" disabled={confirmingId === r.id || !contract.confirmQuantity} onClick={() => void handleConfirm(r.id)}>
+                        {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
+                      </Button>
+                    )}
+                    <Button type="button" variant="secondary" disabled={!canCorrect} onClick={() => startCorrection(r)}>
+                      Correct
+                    </Button>
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -1,5 +1,3 @@
-import './ChainageStrip.css'
-
 export interface ChainageEntry {
   id: string
   stationFrom: number
@@ -16,11 +14,12 @@ function km(v: number): string {
 /**
  * The day's reaches drawn on a scale derived from the entered stations —
  * ported from novacore_v1_prototype.jsx's ChainageStrip, interaction design
- * kept, implementation rebuilt against tokens.ts instead of the prototype's
- * inline hex palette. No sites table in v1 (spec amendment, 2026-07-30), so
- * there's no a-priori site bound to fall back to — bounds always derive
- * from whatever's actually been entered, the prototype's own fallback path
- * for an unbounded site.
+ * kept, implementation rebuilt against the nc- design tokens instead of the
+ * prototype's inline hex palette (and, before this pass, tokens.ts's CSS
+ * variables — since removed). No sites table in v1 (spec amendment,
+ * 2026-07-30), so there's no a-priori site bound to fall back to — bounds
+ * always derive from whatever's actually been entered, the prototype's own
+ * fallback path for an unbounded site.
  *
  * Scoped to the whole day, not one item or location: the point is
  * making a wrong station visible against everything else entered that day,
@@ -41,11 +40,14 @@ export function ChainageStrip({ entries }: { entries: ChainageEntry[] }) {
   for (let k = Math.ceil(lo / step) * step; k <= hi + 1e-9; k += step) ticks.push(Number(k.toFixed(3)))
 
   return (
-    <div className="chainage-strip">
-      <div className="chainage-strip-label">Chainage — today</div>
-      <div className="chainage-strip-track">
-        <div className="chainage-strip-road" />
-        <div className="chainage-strip-centreline" />
+    <div className="rounded-lg border border-nc-border bg-white p-3">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Chainage — today</div>
+      <div className="relative h-10">
+        <div className="absolute inset-x-0 top-4 h-2 rounded-sm border border-nc-border bg-nc-page" />
+        <div
+          className="absolute inset-x-0 top-[19px] h-0.5"
+          style={{ background: 'repeating-linear-gradient(to right, var(--color-nc-border) 0, var(--color-nc-border) 6px, transparent 6px, transparent 12px)' }}
+        />
         {entries.map((e) => {
           const a = pct(e.stationFrom)
           const b = pct(e.stationTo ?? e.stationFrom)
@@ -55,19 +57,19 @@ export function ChainageStrip({ entries }: { entries: ChainageEntry[] }) {
             <div
               key={e.id}
               title={`${e.itemNumber}  ${km(e.stationFrom)}${e.stationTo != null ? '–' + km(e.stationTo) : ''}  ${e.quantity}`}
-              className={'chainage-strip-reach' + (e.status === 'confirmed' ? ' chainage-strip-reach-confirmed' : ' chainage-strip-reach-draft')}
+              className={`absolute top-[15px] h-2.5 min-w-[3px] rounded-sm ${e.status === 'confirmed' ? 'bg-nc-success-text' : 'bg-nc-warning-text'}`}
               style={{ left: `${left}%`, width: `${width}%` }}
             />
           )
         })}
         {ticks.map((t) => (
-          <div key={t} className="chainage-strip-tick" style={{ left: `${pct(t)}%` }}>
-            <div className="chainage-strip-tick-line" />
-            <div className="chainage-strip-tick-label">{t.toFixed(span > 4 ? 0 : 1)}</div>
+          <div key={t} className="absolute top-[26px] flex -translate-x-1/2 flex-col items-center" style={{ left: `${pct(t)}%` }}>
+            <div className="h-[5px] w-px bg-nc-border" />
+            <div className="nc-numeric mt-0.5 whitespace-nowrap text-[10px] text-nc-text-muted">{t.toFixed(span > 4 ? 0 : 1)}</div>
           </div>
         ))}
       </div>
-      <div className="chainage-strip-caption">
+      <div className="nc-numeric mt-2 text-xs text-nc-text-muted">
         km {km(lo)} → {km(hi)} · green is confirmed, yellow is awaiting review
       </div>
     </div>

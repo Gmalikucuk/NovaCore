@@ -8,7 +8,7 @@ import { placedToDateByItem, percentComplete } from '../../lib/calculations/item
 import { margin, marginPercent } from '../../lib/calculations/margin'
 import { concentrationByValue } from '../../lib/calculations/concentration'
 import { errorMessage } from '../../lib/errorMessage'
-import './DashboardScreen.css'
+import { Button, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 function money(v: number | null, digits = 0): string {
   if (v === null || Number.isNaN(v)) return '—'
@@ -125,174 +125,198 @@ export function DashboardScreen() {
   const topThreeShare = concentration.length >= 3 ? concentration[2].cumulativeShare : (concentration.at(-1)?.cumulativeShare ?? null)
   const contractValueTotal = pricedForAnalysis.reduce((s, r) => s + r.contractValue, 0)
 
-  if (status === 'loading') return <p className="dashboard-status">Loading…</p>
-  if (status === 'error') return <p className="dashboard-error">{loadError}</p>
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${items.length} item${items.length === 1 ? '' : 's'}` : ''}`
 
   return (
-    <div className="dashboard-screen">
-      <h1 className="dashboard-title">Dashboard — {contract.name}</h1>
+    <div>
+      <PageHeader title="Dashboard" subtitle={subtitle} />
 
-      {showFinance && (
-        <p className="dashboard-credibility">
-          <strong>Revenue here is placed quantity × Unit Price.</strong> That is an internal expectation, not a Ministry-approved
-          progress estimate. The gap between what is placed, what is approved, and what is paid is real and is not modelled —
-          quantities come from confirmed field entries only, and a superseded entry stops counting only once its replacement is
-          confirmed.
-        </p>
-      )}
-
-      <div className="dashboard-stats">
-        <div className="dashboard-stat">
-          <div className="dashboard-stat-label">Items</div>
-          <div className="dashboard-stat-value">{items.length}</div>
+      {status === 'loading' && (
+        <div className="flex items-center gap-2 py-8 text-nc-text-muted">
+          <Spinner />
+          <span className="text-sm">Loading…</span>
         </div>
-        {showFinance && (
-          <>
-            <div className="dashboard-stat">
-              <div className="dashboard-stat-label">Cost to date</div>
-              <div className="dashboard-stat-value">{money(totals.costToDate)}</div>
-              <div className="dashboard-stat-sub">
-                {totals.pricedCount} of {totals.total} items priced
-              </div>
-            </div>
-            <div className="dashboard-stat">
-              <div className="dashboard-stat-label">Revenue to date</div>
-              <div className="dashboard-stat-value">{money(totals.revenueToDate)}</div>
-            </div>
-            <div className="dashboard-stat">
-              <div className="dashboard-stat-label">Margin to date</div>
-              <div className={`dashboard-stat-value ${totals.marginToDate < 0 ? 'dashboard-negative' : ''}`}>{money(totals.marginToDate)}</div>
-            </div>
-          </>
-        )}
-      </div>
+      )}
+      {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-      <table className="dashboard-table">
-        <thead>
-          <tr>
-            <th>Item #</th>
-            <th>Description</th>
-            <th>Unit of Measure</th>
-            <th className="dashboard-col-right">Approximate Quantity</th>
-            <th className="dashboard-col-right">Quantity to Date</th>
-            <th className="dashboard-col-right">Remaining</th>
-            <th className="dashboard-col-right">% complete</th>
+      {status === 'ready' && (
+        <>
+          {showFinance && (
+            <NotificationBanner tone="navy" className="mb-4 leading-relaxed">
+              <strong>Revenue here is placed quantity × Unit Price.</strong> That is an internal expectation, not a Ministry-approved
+              progress estimate. The gap between what is placed, what is approved, and what is paid is real and is not modelled —
+              quantities come from confirmed field entries only, and a superseded entry stops counting only once its replacement is
+              confirmed.
+            </NotificationBanner>
+          )}
+
+          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard label="Items" value={items.length} />
             {showFinance && (
               <>
-                <th className="dashboard-col-right">Cost / unit</th>
-                <th className="dashboard-col-right">Unit Price</th>
-                <th className="dashboard-col-right">Cost to date</th>
-                <th className="dashboard-col-right">Revenue to date</th>
-                <th className="dashboard-col-right">Margin</th>
-                <th className="dashboard-col-right">Margin %</th>
+                <StatCard label="Cost to date" value={money(totals.costToDate)} sub={`${totals.pricedCount} of ${totals.total} items priced`} />
+                <StatCard label="Revenue to date" value={money(totals.revenueToDate)} />
+                <StatCard label="Margin to date" value={<span className={totals.marginToDate < 0 ? 'text-nc-danger-text' : undefined}>{money(totals.marginToDate)}</span>} />
               </>
             )}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.item.id}>
-              <td className="dashboard-mono">{r.item.itemNumber}</td>
-              <td>{r.item.description}</td>
-              <td>{r.item.unit}</td>
-              <td className="dashboard-col-right dashboard-mono">{num(r.item.approximateQuantity, 1)}</td>
-              <td className="dashboard-col-right dashboard-mono">{num(r.placed, 1)}</td>
-              <td className="dashboard-col-right dashboard-mono">{num(r.remaining, 1)}</td>
-              <td className="dashboard-col-right dashboard-mono">{pct(r.percent)}</td>
-              {showFinance && (
-                <>
-                  <td className="dashboard-col-right dashboard-mono">{money(r.cost, 2)}</td>
-                  <td className="dashboard-col-right dashboard-mono">{money(r.unitPrice, 2)}</td>
-                  <td className="dashboard-col-right dashboard-mono">{money(r.costToDate)}</td>
-                  <td className="dashboard-col-right dashboard-mono">{money(r.revenueToDate)}</td>
-                  <td className={`dashboard-col-right dashboard-mono ${r.marginToDate !== null && r.marginToDate < 0 ? 'dashboard-negative' : ''}`}>
-                    {money(r.marginToDate)}
+          </div>
+
+          <Table className="mb-6">
+            <THead>
+              <TR>
+                <TH>Item #</TH>
+                <TH>Description</TH>
+                <TH>Unit of Measure</TH>
+                <TH align="right">Approximate Quantity</TH>
+                <TH align="right">Quantity to Date</TH>
+                <TH align="right">Remaining</TH>
+                <TH align="right">% complete</TH>
+                {showFinance && (
+                  <>
+                    <TH align="right">Cost / unit</TH>
+                    <TH align="right">Unit Price</TH>
+                    <TH align="right">Cost to date</TH>
+                    <TH align="right">Revenue to date</TH>
+                    <TH align="right">Margin</TH>
+                    <TH align="right">Margin %</TH>
+                  </>
+                )}
+              </TR>
+            </THead>
+            <TBody>
+              {rows.map((r) => (
+                <TR key={r.item.id}>
+                  <TD className="nc-numeric">{r.item.itemNumber}</TD>
+                  <TD prose>{r.item.description}</TD>
+                  <TD>{r.item.unit}</TD>
+                  <TD align="right" className="nc-numeric">
+                    {num(r.item.approximateQuantity, 1)}
+                  </TD>
+                  <TD align="right" className="nc-numeric">
+                    {num(r.placed, 1)}
+                  </TD>
+                  <TD align="right" className="nc-numeric">
+                    {num(r.remaining, 1)}
+                  </TD>
+                  <TD align="right" className="nc-numeric">
+                    {pct(r.percent)}
+                  </TD>
+                  {showFinance && (
+                    <>
+                      <TD align="right" className="nc-numeric">
+                        {money(r.cost, 2)}
+                      </TD>
+                      <TD align="right" className="nc-numeric">
+                        {money(r.unitPrice, 2)}
+                      </TD>
+                      <TD align="right" className="nc-numeric">
+                        {money(r.costToDate)}
+                      </TD>
+                      <TD align="right" className="nc-numeric">
+                        {money(r.revenueToDate)}
+                      </TD>
+                      <TD align="right" className={`nc-numeric ${r.marginToDate !== null && r.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                        {money(r.marginToDate)}
+                      </TD>
+                      <TD align="right" className="nc-numeric">
+                        {pct(r.marginPct)}
+                      </TD>
+                    </>
+                  )}
+                </TR>
+              ))}
+            </TBody>
+            {showFinance && (
+              <tfoot>
+                <tr>
+                  <td colSpan={9} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-xs text-nc-text-muted">
+                    Contract totals — quantity columns aren't summed above (mixed units across items); the $ columns are.
                   </td>
-                  <td className="dashboard-col-right dashboard-mono">{pct(r.marginPct)}</td>
+                  <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(totals.costToDate)}</td>
+                  <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(totals.revenueToDate)}</td>
+                  <td
+                    className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${totals.marginToDate < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                  >
+                    {money(totals.marginToDate)}
+                  </td>
+                  <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                    {totals.revenueToDate > 0 ? pct(totals.marginToDate / totals.revenueToDate) : '—'}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </Table>
+
+          {showFinance && pricedForAnalysis.length > 0 && (
+            <section className="mb-6">
+              <Button type="button" variant="secondary" className="mb-3" onClick={() => setShowConcentration((v) => !v)} aria-expanded={showConcentration}>
+                {showConcentration ? 'Hide' : 'Show'} concentration — where the money is
+              </Button>
+
+              {showConcentration && (
+                <>
+                  <h2 className="mb-2 text-lg font-semibold text-nc-text">Where the money is</h2>
+                  <p className="mb-4 max-w-3xl text-sm leading-relaxed text-nc-text-muted">
+                    {concentration.length >= 3 &&
+                      `${pct(topThreeShare, 0)} of priced contract value sits in three items — ${concentration
+                        .slice(0, 3)
+                        .map((r) => r.itemNumber)
+                        .join(', ')}. Estimating precision on the remaining ${pricedForAnalysis.length - 3} priced items can't move the
+                      outcome the way a small error in these three can.`}
+                  </p>
+                  <div className="mb-4 flex h-[34px] overflow-hidden rounded-md border border-nc-border">
+                    {concentration.slice(0, 12).map((r, i) => {
+                      const width = contractValueTotal > 0 ? (r.value / contractValueTotal) * 100 : 0
+                      return (
+                        <div
+                          key={r.itemNumber}
+                          className={`nc-numeric flex items-center justify-center overflow-hidden whitespace-nowrap border-r border-white text-[10px] ${
+                            i < 3 ? 'bg-nc-navy font-semibold text-white' : 'bg-nc-border text-nc-text'
+                          }`}
+                          style={{ width: `${width}%` }}
+                          title={`${r.itemNumber} — ${money(r.value)}`}
+                        >
+                          {width > 7 && r.itemNumber}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Item #</TH>
+                        <TH>Description</TH>
+                        <TH align="right">Contract value</TH>
+                        <TH align="right">Margin</TH>
+                        <TH align="right">Cumulative share</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {concentration.map((r, i) => {
+                        const detail = pricedForAnalysis.find((p) => p.itemNumber === r.itemNumber)
+                        return (
+                          <TR key={r.itemNumber} className={i < 3 ? 'bg-nc-info-bg/50' : undefined}>
+                            <TD className="nc-numeric">{r.itemNumber}</TD>
+                            <TD prose>{detail?.description}</TD>
+                            <TD align="right" className="nc-numeric">
+                              {money(r.value)}
+                            </TD>
+                            <TD align="right" className="nc-numeric">
+                              {money(detail?.contractMargin ?? null)}
+                            </TD>
+                            <TD align="right" className="nc-numeric">
+                              {pct(r.cumulativeShare, 0)}
+                            </TD>
+                          </TR>
+                        )
+                      })}
+                    </TBody>
+                  </Table>
                 </>
               )}
-            </tr>
-          ))}
-        </tbody>
-        {showFinance && (
-          <tfoot>
-            <tr>
-              <td colSpan={9} className="dashboard-totals-label">
-                Contract totals — quantity columns aren't summed above (mixed units across items); the $ columns are.
-              </td>
-              <td className="dashboard-col-right dashboard-mono dashboard-totals-value">{money(totals.costToDate)}</td>
-              <td className="dashboard-col-right dashboard-mono dashboard-totals-value">{money(totals.revenueToDate)}</td>
-              <td className={`dashboard-col-right dashboard-mono dashboard-totals-value ${totals.marginToDate < 0 ? 'dashboard-negative' : ''}`}>
-                {money(totals.marginToDate)}
-              </td>
-              <td className="dashboard-col-right dashboard-mono dashboard-totals-value">
-                {totals.revenueToDate > 0 ? pct(totals.marginToDate / totals.revenueToDate) : '—'}
-              </td>
-            </tr>
-          </tfoot>
-        )}
-      </table>
-
-      {showFinance && pricedForAnalysis.length > 0 && (
-        <section className="dashboard-section">
-          <button type="button" className="dashboard-toggle" onClick={() => setShowConcentration((v) => !v)} aria-expanded={showConcentration}>
-            {showConcentration ? 'Hide' : 'Show'} concentration — where the money is
-          </button>
-
-          {showConcentration && (
-            <>
-              <h2 className="dashboard-section-title">Where the money is</h2>
-              <p className="dashboard-section-body">
-                {concentration.length >= 3 &&
-                  `${pct(topThreeShare, 0)} of priced contract value sits in three items — ${concentration
-                    .slice(0, 3)
-                    .map((r) => r.itemNumber)
-                    .join(', ')}. Estimating precision on the remaining ${pricedForAnalysis.length - 3} priced items can't move the
-                  outcome the way a small error in these three can.`}
-              </p>
-              <div className="dashboard-concentration-bar">
-                {concentration.slice(0, 12).map((r, i) => {
-                  const width = contractValueTotal > 0 ? (r.value / contractValueTotal) * 100 : 0
-                  return (
-                    <div
-                      key={r.itemNumber}
-                      className={i < 3 ? 'dashboard-concentration-seg dashboard-concentration-seg-top' : 'dashboard-concentration-seg'}
-                      style={{ width: `${width}%` }}
-                      title={`${r.itemNumber} — ${money(r.value)}`}
-                    >
-                      {width > 7 && r.itemNumber}
-                    </div>
-                  )
-                })}
-              </div>
-              <table className="dashboard-table dashboard-table-compact">
-                <thead>
-                  <tr>
-                    <th>Item #</th>
-                    <th>Description</th>
-                    <th className="dashboard-col-right">Contract value</th>
-                    <th className="dashboard-col-right">Margin</th>
-                    <th className="dashboard-col-right">Cumulative share</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {concentration.map((r, i) => {
-                    const detail = pricedForAnalysis.find((p) => p.itemNumber === r.itemNumber)
-                    return (
-                      <tr key={r.itemNumber} className={i < 3 ? 'dashboard-row-top' : undefined}>
-                        <td className="dashboard-mono">{r.itemNumber}</td>
-                        <td>{detail?.description}</td>
-                        <td className="dashboard-col-right dashboard-mono">{money(r.value)}</td>
-                        <td className="dashboard-col-right dashboard-mono">{money(detail?.contractMargin ?? null)}</td>
-                        <td className="dashboard-col-right dashboard-mono">{pct(r.cumulativeShare, 0)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </>
+            </section>
           )}
-        </section>
+        </>
       )}
     </div>
   )

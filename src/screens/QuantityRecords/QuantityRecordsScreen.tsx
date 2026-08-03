@@ -8,7 +8,7 @@ import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
-import './QuantityRecordsScreen.css'
+import { Button, EmptyState, Input, NotificationBanner, PageHeader, Select, Spinner, StatusBadge, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 type DayRecord = Omit<QueuedQuantityRecord, 'pending' | 'lastError'>
 
@@ -201,223 +201,217 @@ export function QuantityRecordsScreen() {
     void doSubmit()
   }
 
-  if (!canEnter && !canCorrect) {
-    return (
-      <div className="quantity-records-screen">
-        <p className="quantity-records-denied">Desk entry needs enter_quantity or correct_quantity on this contract.</p>
-      </div>
-    )
-  }
+  const subtitle = `${contract.name} · ${workDate}${status === 'ready' ? ` · ${records.length} record${records.length === 1 ? '' : 's'}` : ''}`
 
   // Which half of the form is live depends on the row's mode, not a single
   // screen-wide flag: entering a new original needs enter_quantity, saving a
   // correction needs correct_quantity. A seat with only one of the two can
-  // still reach this screen (see the gate above) — the other half stays
+  // still reach this screen (see the gate below) — the other half stays
   // visible but disabled rather than the screen being hidden outright, per
   // 0008's UI-gating rule (disabled/read-only over hidden).
   const formUsable = correctingId ? canCorrect : canEnter
 
   return (
-    <div className="quantity-records-screen">
-      <div className="quantity-records-header">
-        <h1 className="quantity-records-title">Daily entry — {contract.name}</h1>
-        <label className="quantity-records-date-label" htmlFor="de-date">
-          Date
-        </label>
-        <input
-          id="de-date"
-          className="quantity-records-date"
-          type="date"
-          value={workDate}
-          onChange={(e) => {
-            setWorkDate(e.target.value)
-            resetForm()
-          }}
-        />
-      </div>
+    <div>
+      <PageHeader
+        title="Daily entry"
+        subtitle={subtitle}
+        actions={
+          <Input
+            type="date"
+            className="w-auto"
+            value={workDate}
+            onChange={(e) => {
+              setWorkDate(e.target.value)
+              resetForm()
+            }}
+            aria-label="Date"
+          />
+        }
+      />
 
-      {correctingId && (
-        <div className="quantity-records-correction-banner">
-          <span>Correcting a prior entry — the original stays in the total until this correction is confirmed.</span>
-          <button type="button" className="quantity-records-correction-cancel" onClick={resetForm}>
-            Cancel
-          </button>
-        </div>
-      )}
+      {!canEnter && !canCorrect ? (
+        <EmptyState title="Desk entry needs enter_quantity or correct_quantity on this contract." />
+      ) : (
+        <>
+          {correctingId && (
+            <NotificationBanner tone="info" className="mb-4 flex items-center justify-between gap-4">
+              <span>Correcting a prior entry — the original stays in the total until this correction is confirmed.</span>
+              <Button type="button" variant="ghost" onClick={resetForm}>
+                Cancel
+              </Button>
+            </NotificationBanner>
+          )}
 
-      <form className="quantity-records-form" onSubmit={handleSubmit}>
-        <table className="quantity-records-table">
-          <thead>
-            <tr>
-              <th>Item #</th>
-              <th>Location</th>
-              <th className="quantity-records-col-right">Station from</th>
-              <th className="quantity-records-col-right">Station to</th>
-              <th className="quantity-records-col-right">Reach (m)</th>
-              <th className="quantity-records-col-right">Quantity</th>
-              <th>Note</th>
-              <th />
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="quantity-records-input-row">
-              <td>
-                <select
-                  className="quantity-records-input"
-                  value={itemId}
-                  onChange={(e) => setItemId(e.target.value)}
-                  onKeyDown={handleFormKeyDown}
-                  disabled={!formUsable}
-                >
-                  {items.length === 0 && <option value="">No items</option>}
-                  {items.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.itemNumber}
-                    </option>
-                  ))}
-                </select>
-              </td>
-              <td>
-                <input
-                  className="quantity-records-input"
-                  list="quantity-records-locations"
-                  value={fields.location}
-                  onChange={(e) => setFields({ ...fields, location: e.target.value })}
-                  onKeyDown={handleFormKeyDown}
-                  disabled={!formUsable}
-                />
-                <datalist id="quantity-records-locations">
-                  {locations.map((loc) => (
-                    <option key={loc} value={loc} />
-                  ))}
-                </datalist>
-              </td>
-              <td>
-                <input
-                  ref={stationFromRef}
-                  className="quantity-records-input quantity-records-input-mono quantity-records-col-right"
-                  type="number"
-                  step="0.001"
-                  value={fields.stationFrom}
-                  onChange={(e) => setFields({ ...fields, stationFrom: e.target.value })}
-                  onKeyDown={handleFormKeyDown}
-                  disabled={!formUsable}
-                />
-              </td>
-              <td>
-                <input
-                  className="quantity-records-input quantity-records-input-mono quantity-records-col-right"
-                  type="number"
-                  step="0.001"
-                  value={fields.stationTo}
-                  onChange={(e) => setFields({ ...fields, stationTo: e.target.value })}
-                  onKeyDown={handleFormKeyDown}
-                  disabled={!formUsable}
-                />
-              </td>
-              <td className="quantity-records-col-right quantity-records-input-mono quantity-records-reach">{reachMetres !== null ? reachMetres.toFixed(1) : '—'}</td>
-              <td>
-                <input
-                  className="quantity-records-input quantity-records-input-mono quantity-records-col-right"
-                  type="number"
-                  step="0.01"
-                  value={fields.quantity}
-                  onChange={(e) => setFields({ ...fields, quantity: e.target.value })}
-                  onKeyDown={handleFormKeyDown}
-                  disabled={!formUsable}
-                />
-              </td>
-              <td>
-                <input
-                  className="quantity-records-input"
-                  value={fields.note}
-                  onChange={(e) => setFields({ ...fields, note: e.target.value })}
-                  onKeyDown={handleFormKeyDown}
-                  disabled={!formUsable}
-                />
-              </td>
-              <td>
-                <button type="submit" className="quantity-records-add-btn" disabled={submitting || !formUsable} title={!formUsable ? `Needs ${correctingId ? 'correct_quantity' : 'enter_quantity'}` : undefined}>
-                  {submitting ? 'Adding…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add — Enter'}
-                </button>
-              </td>
-              <td />
-            </tr>
-          </tbody>
-        </table>
-      </form>
-      {formError && <p className="quantity-records-error">{formError}</p>}
+          <form onSubmit={handleSubmit} className="mb-6">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Item #</TH>
+                  <TH>Location</TH>
+                  <TH align="right">Station from</TH>
+                  <TH align="right">Station to</TH>
+                  <TH align="right">Reach (m)</TH>
+                  <TH align="right">Quantity</TH>
+                  <TH>Note</TH>
+                  <TH />
+                </TR>
+              </THead>
+              <TBody>
+                <TR>
+                  <TD>
+                    <Select value={itemId} onChange={(e) => setItemId(e.target.value)} onKeyDown={handleFormKeyDown} disabled={!formUsable}>
+                      {items.length === 0 && <option value="">No items</option>}
+                      {items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.itemNumber}
+                        </option>
+                      ))}
+                    </Select>
+                  </TD>
+                  <TD>
+                    <Input
+                      list="quantity-records-locations"
+                      value={fields.location}
+                      onChange={(e) => setFields({ ...fields, location: e.target.value })}
+                      onKeyDown={handleFormKeyDown}
+                      disabled={!formUsable}
+                    />
+                    <datalist id="quantity-records-locations">
+                      {locations.map((loc) => (
+                        <option key={loc} value={loc} />
+                      ))}
+                    </datalist>
+                  </TD>
+                  <TD align="right">
+                    <Input
+                      ref={stationFromRef}
+                      className="nc-numeric text-right"
+                      type="number"
+                      step="0.001"
+                      value={fields.stationFrom}
+                      onChange={(e) => setFields({ ...fields, stationFrom: e.target.value })}
+                      onKeyDown={handleFormKeyDown}
+                      disabled={!formUsable}
+                    />
+                  </TD>
+                  <TD align="right">
+                    <Input
+                      className="nc-numeric text-right"
+                      type="number"
+                      step="0.001"
+                      value={fields.stationTo}
+                      onChange={(e) => setFields({ ...fields, stationTo: e.target.value })}
+                      onKeyDown={handleFormKeyDown}
+                      disabled={!formUsable}
+                    />
+                  </TD>
+                  <TD align="right" className="nc-numeric text-nc-text-muted">
+                    {reachMetres !== null ? reachMetres.toFixed(1) : '—'}
+                  </TD>
+                  <TD align="right">
+                    <Input
+                      className="nc-numeric text-right"
+                      type="number"
+                      step="0.01"
+                      value={fields.quantity}
+                      onChange={(e) => setFields({ ...fields, quantity: e.target.value })}
+                      onKeyDown={handleFormKeyDown}
+                      disabled={!formUsable}
+                    />
+                  </TD>
+                  <TD>
+                    <Input value={fields.note} onChange={(e) => setFields({ ...fields, note: e.target.value })} onKeyDown={handleFormKeyDown} disabled={!formUsable} />
+                  </TD>
+                  <TD>
+                    <Button type="submit" disabled={submitting || !formUsable} title={!formUsable ? `Needs ${correctingId ? 'correct_quantity' : 'enter_quantity'}` : undefined}>
+                      {submitting ? 'Adding…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add — Enter'}
+                    </Button>
+                  </TD>
+                </TR>
+              </TBody>
+            </Table>
+          </form>
+          {formError && (
+            <NotificationBanner tone="danger" className="mb-4">
+              {formError}
+            </NotificationBanner>
+          )}
 
-      {status === 'loading' && <p className="quantity-records-status">Loading…</p>}
-      {status === 'error' && <p className="quantity-records-error">{loadError}</p>}
+          {status === 'loading' && (
+            <div className="flex items-center gap-2 py-8 text-nc-text-muted">
+              <Spinner />
+              <span className="text-sm">Loading…</span>
+            </div>
+          )}
+          {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-      {status === 'ready' && (
-        <table className="quantity-records-table quantity-records-day-list">
-          <thead>
-            <tr>
-              <th>Item #</th>
-              <th>Location</th>
-              <th className="quantity-records-col-right">Station</th>
-              <th className="quantity-records-col-right">Quantity</th>
-              <th>Note</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {records.length === 0 && (
-              <tr>
-                <td className="quantity-records-empty" colSpan={7}>
-                  No entries yet for {workDate}.
-                </td>
-              </tr>
-            )}
-            {records.map((r) => {
-              const item = itemById.get(r.itemId)
-              return (
-                <tr key={r.id}>
-                  <td className="quantity-records-input-mono">{item?.itemNumber ?? r.itemId.slice(0, 8)}</td>
-                  <td>{r.location}</td>
-                  <td className="quantity-records-col-right quantity-records-input-mono">
-                    {r.stationFrom !== null ? `${r.stationFrom}${r.stationTo !== null ? `–${r.stationTo}` : ''}` : ''}
-                  </td>
-                  <td className="quantity-records-col-right quantity-records-input-mono">
-                    {r.quantity}
-                    {item ? ` ${item.unit}` : ''}
-                  </td>
-                  <td>{r.note}</td>
-                  <td>
-                    <span className={`quantity-records-chip quantity-records-chip-${r.status}`}>{r.status}</span>
-                    {supersededByConfirmed.has(r.id) && <span className="quantity-records-chip quantity-records-chip-superseded">superseded</span>}
-                  </td>
-                  <td className="quantity-records-row-actions">
-                    {r.status === 'draft' && (
-                      <button
-                        type="button"
-                        className="quantity-records-row-btn"
-                        disabled={confirmingId === r.id || !contract.confirmQuantity}
-                        title={!contract.confirmQuantity ? 'Needs confirm_quantity' : undefined}
-                        onClick={() => void handleConfirm(r.id)}
-                      >
-                        {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="quantity-records-row-btn"
-                      disabled={!canCorrect}
-                      title={!canCorrect ? 'Needs correct_quantity' : undefined}
-                      onClick={() => startCorrection(r)}
-                    >
-                      Correct
-                    </button>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+          {status === 'ready' && (
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Item #</TH>
+                  <TH>Location</TH>
+                  <TH align="right">Station</TH>
+                  <TH align="right">Quantity</TH>
+                  <TH>Note</TH>
+                  <TH>Status</TH>
+                  <TH />
+                </TR>
+              </THead>
+              <TBody>
+                {records.length === 0 && (
+                  <TR>
+                    <TD colSpan={7} className="text-center text-nc-text-muted">
+                      No entries yet for {workDate}.
+                    </TD>
+                  </TR>
+                )}
+                {records.map((r) => {
+                  const item = itemById.get(r.itemId)
+                  return (
+                    <TR key={r.id}>
+                      <TD className="nc-numeric">{item?.itemNumber ?? r.itemId.slice(0, 8)}</TD>
+                      <TD prose>{r.location}</TD>
+                      <TD align="right" className="nc-numeric">
+                        {r.stationFrom !== null ? `${r.stationFrom}${r.stationTo !== null ? `–${r.stationTo}` : ''}` : ''}
+                      </TD>
+                      <TD align="right" className="nc-numeric">
+                        {r.quantity}
+                        {item ? ` ${item.unit}` : ''}
+                      </TD>
+                      <TD prose>{r.note}</TD>
+                      <TD>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <StatusBadge status={r.status} />
+                          {supersededByConfirmed.has(r.id) && <StatusBadge status="superseded" />}
+                        </div>
+                      </TD>
+                      <TD>
+                        <div className="flex items-center gap-2">
+                          {r.status === 'draft' && (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              disabled={confirmingId === r.id || !contract.confirmQuantity}
+                              title={!contract.confirmQuantity ? 'Needs confirm_quantity' : undefined}
+                              onClick={() => void handleConfirm(r.id)}
+                            >
+                              {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
+                            </Button>
+                          )}
+                          <Button type="button" variant="secondary" disabled={!canCorrect} title={!canCorrect ? 'Needs correct_quantity' : undefined} onClick={() => startCorrection(r)}>
+                            Correct
+                          </Button>
+                        </div>
+                      </TD>
+                    </TR>
+                  )
+                })}
+              </TBody>
+            </Table>
+          )}
+        </>
       )}
     </div>
   )

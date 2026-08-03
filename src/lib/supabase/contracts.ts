@@ -17,6 +17,19 @@ export interface MyContract extends ContractRights {
   contractNo: string | null
 }
 
+/**
+ * Company-wide, not per-contract — live on profiles, not contract_members
+ * (0011). create_projects: a contract can't be created "on" a contract that
+ * doesn't exist yet. manage_members: seat people and set their rights.
+ * Fetched now so the sidebar's ADMIN nav group can gate on them; the
+ * screens those rights would unlock (contract creation, member management)
+ * aren't built yet — a separate task.
+ */
+export interface CompanyRights {
+  createProjects: boolean
+  manageMembers: boolean
+}
+
 interface RawMembershipRow {
   create_items: boolean
   set_cost: boolean
@@ -70,4 +83,17 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       extractReport: r.extract_report,
     }
   })
+}
+
+/** The signed-in user's two company-wide rights — see CompanyRights. */
+export async function fetchMyCompanyRights(): Promise<CompanyRights> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { createProjects: false, manageMembers: false }
+
+  const { data, error } = await supabase.from('profiles').select('create_projects, manage_members').eq('id', user.id).single()
+  if (error) throw error
+
+  return { createProjects: data.create_projects, manageMembers: data.manage_members }
 }

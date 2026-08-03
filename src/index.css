@@ -1,44 +1,176 @@
-/* Light-background-only, deliberately — every screen sets its own colors
-   explicitly from the fixed design tokens (see tokens.ts /
-   applyDesignTokens.ts), for the sunlight-readability requirement noted in
-   MillingEntryScreen.css. There is no dark theme, and none is planned; this
-   used to carry a leftover `color-scheme: light dark` plus a
-   prefers-color-scheme dark override inherited from the Vite starter
-   template, which (a) never actually re-themed any real screen — they all
-   set explicit colors, per ReviewQueueScreen.css's comment about this
-   exact class of bug recurring — and (b) left the <html> background
-   (visible during iOS/Android overscroll/rubber-banding, since no
-   screen's own background covers past 100vh) mismatched from the app's
-   actual bg color, and flipping near-black under an OS dark-mode setting
-   nothing else in the app respects. Fixed to the real --color-bg token
-   value below instead. */
-:root {
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+@import "tailwindcss";
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color: #1a1a2e;
-  background: #f4f7fa;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+/* ═══════════════════════════════════════════════════════════════════════════
+   NovaCore — design tokens
+   Vektor Systems
+
+   Mirrors Vektor Freight's token system (src/index.css, `vktr-` prefix) with
+   an `nc-` prefix. Freight is the reference implementation: 21 tokens, zero
+   off-token Tailwind palette colours anywhere in src/, zero hardcoded hex
+   outside the PDF renderer. QuoteDock is the same system applied less
+   rigorously — 2,868 raw `slate-*` classes — and is NOT the model to follow.
+
+   The prefix is what makes "is this on-system?" greppable. Tailwind v4's
+   @theme EXTENDS the default palette rather than replacing it, so `bg-slate-500`
+   still compiles. Any un-prefixed colour class in a diff is a system violation,
+   visible at a glance. Freight holds this line; hold it here.
+
+   DELIBERATE DIVERGENCES FROM FREIGHT — three, each justified below:
+     1. --text-data-*  a 13px table scale alongside Freight's 14px body
+     2. font-variant-numeric: tabular-nums as a DEFAULT, not per-site
+     3. --color-nc-over-* a sixth status tone for over-quantity
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ── Brand ──────────────────────────────────────────────────────────────
+     Identical to Freight and QuoteDock. Do not adjust — this is what makes
+     three products read as one company. */
+  --color-nc-navy: #0D1F3C;
+  --color-nc-navy-hover: #1a3257;
+  --color-nc-accent: #0284C7;
+
+  /* ── Surfaces ─────────────────────────────────────────────────────────── */
+  --color-nc-page: #F8FAFC;
+  --color-nc-card: #FFFFFF;
+  --color-nc-secondary: #F1F5F9;
+  --color-nc-border: #E2E8F0;
+
+  /* ── Text ───────────────────────────────────────────────────────────────
+     Tokenised, as Freight does. QuoteDock hardcodes these as slate-* at ~2,900
+     call sites, which is why it can never add a dark mode. Don't repeat it. */
+  --color-nc-text: #0F172A;
+  --color-nc-text-muted: #64748B;
+  --color-nc-text-subtle: #94A3B8;
+
+  /* ── Status pairs ───────────────────────────────────────────────────────
+     Colour carries meaning (Freight's Rule 6). Success is always green,
+     warning always amber, danger always red, neutral always grey. Never
+     decorative.
+
+     Tokens ship as fill/text PAIRS so a fill cannot be chosen without its
+     matching foreground. This is what keeps a 12px badge legible. */
+  --color-nc-success-bg: #DCFCE7;
+  --color-nc-success-text: #15803D;
+  --color-nc-warning-bg: #FEF3C7;
+  --color-nc-warning-text: #B45309;
+  --color-nc-danger-bg: #FEE2E2;
+  --color-nc-danger-text: #B91C1C;
+  --color-nc-neutral-bg: #F1F5F9;
+  --color-nc-neutral-text: #475569;
+  --color-nc-info-bg: #E0F2FE;
+  --color-nc-info-text: #075985;
+
+  /* Fifth state — ready/teal. Carried from Freight and QuoteDock for
+     consistency even though NovaCore has no ready_to_bill equivalent yet. */
+  --color-nc-ready-bg: #E1F5EE;
+  --color-nc-ready-text: #085041;
+
+  /* ── DIVERGENCE 3: sixth state — over-quantity ──────────────────────────
+     Freight's rule is that a new tone needs justification. Here it is.
+
+     NovaCore has a state neither sibling product has: quantity recorded
+     ABOVE the Schedule 7 Approximate Quantity. On a unit price contract that
+     is work performed that may not be paid — GC 52.03(a) pays the quantity
+     actually performed, but quantity beyond the approximate figure without an
+     approved change order is exposure, not revenue.
+
+     It is not danger: nothing failed, and red would say "error" about a
+     legitimate measurement. It is not warning: warning means action needed
+     or in-flight, and this has already happened. It is a factual state the
+     eye must catch on a 48-row table.
+
+     Violet, chosen because it appears nowhere else in any of the three
+     products, so it cannot be confused with an existing meaning. */
+  --color-nc-over-bg: #EDE9FE;
+  --color-nc-over-text: #5B21B6;
+
+  /* ── Typography ─────────────────────────────────────────────────────────
+     One family, matching Freight exactly. */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* ── DIVERGENCE 1: a data type scale ────────────────────────────────────
+     Freight's body is 14px, calibrated for shipment lists. NovaCore's central
+     view is Schedule 7: 48 Items x up to 10 columns of figures. QuoteDock hit
+     the same wall and dropped to 13px for the same reason.
+
+     So: 14px for prose and controls, as Freight. 13px inside data tables.
+     Declared as tokens rather than left as arbitrary `text-[13px]` classes,
+     which is where QuoteDock's second, accidental scale came from.
+
+     Two sizes, named by role. Do not add a third without a reason. */
+  --text-data: 0.8125rem;          /* 13px — table cells, dense figures */
+  --text-data--line-height: 1.35;
+  --text-label: 0.6875rem;         /* 11px — micro-labels, column heads */
+  --text-label--line-height: 1.3;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Global
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-nc-text);
+  background: var(--color-nc-page);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
-html,
-body {
-  background: #f4f7fa;
+/* ── DIVERGENCE 2: tabular figures by default ────────────────────────────
+   Freight applies `tabular-nums` at 12 hand-picked sites. QuoteDock aligns
+   numbers by setting them in a mono family instead, which changes the
+   typeface as a side effect of wanting alignment.
+
+   Neither is right for this product. A misread quantity here is money: a
+   station, a tonnage, a Unit Price. Proportional digits make 1,180 and 1,094
+   different widths in the same column, and a scanning eye compares column
+   position before it reads the digits.
+
+   So tabular figures are the DEFAULT on every numeric surface, and
+   `slashed-zero` too — 0 and O are adjacent in item numbers like 05.03.04
+   sitting beside descriptions.
+
+   Applied by element type and by an explicit class, so it cannot be forgotten
+   at a call site. */
+table,
+input[type="number"],
+input[inputmode="decimal"],
+input[inputmode="numeric"],
+.nc-numeric {
+  font-variant-numeric: tabular-nums slashed-zero;
 }
 
-body {
-  margin: 0;
+/* Prose inside a table cell should NOT be tabular — descriptions and notes
+   read better with proportional figures. Opt out explicitly. */
+.nc-prose {
+  font-variant-numeric: normal;
 }
 
-p {
-  margin: 0;
-}
+/* ═══════════════════════════════════════════════════════════════════════════
+   NOT DEFINED, deliberately
+
+   Spacing, radius and shadow are NOT overridden. Tailwind v4's base holds
+   (--spacing: 0.25rem), exactly as in Freight. The conventions are:
+
+     Spacing    8px / 12px dominant rhythm. gap-2, gap-3, px-3, py-2.
+                16px+ reserved for card interiors and dialogs.
+     Radius     rounded-md (6px) default — buttons, inputs, nav links.
+                rounded-lg (8px) for containers — Card, Table.
+                rounded-full for badges and dots.
+                rounded-xl (12px) ONLY on the sign-in card.
+     Borders    1px everywhere. `border`, `border-nc-border`.
+                Dashed carries meaning — "unverified" or "not yours" — never
+                decoration. In NovaCore: a superseded record awaiting its
+                replacement's confirmation.
+     Shadow     Flat is the norm. shadow-sm on resting cards, shadow-lg on
+                dropdowns, shadow-2xl on the sign-in card. Elevation means
+                "floats above the page", never "is a card".
+
+   No dark mode. Zero `dark:` variants. Settled across all three products;
+   adding it would mean re-deriving twelve status pairs.
+   ═══════════════════════════════════════════════════════════════════════════ */
