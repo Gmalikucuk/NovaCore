@@ -76,13 +76,36 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # anything already exported. A stray leftover .env.probe on a shared runner
 # overriding real CI credentials is exactly the kind of silent failure this
 # script exists to catch elsewhere; it shouldn't cause one itself.
+#
+# Every key found in .env.probe is checked against the known set below and
+# any stranger is a fatal error, not a silently-ignored line — this is what
+# actually catches a stale file. A leftover pre-0008 .env.probe (FIELD_
+# PASSWORD/PM_PASSWORD/CFO_PASSWORD/OWNER_PASSWORD, no CORRECT_ONLY_PASSWORD)
+# used to fail downstream as either a generic missing-var error with no clue
+# why, or — worse, if the stale names happened to coincide with a required
+# one holding an outdated value — an opaque GoTrue sign-in failure. Neither
+# reads as "your fixture file is out of date," which is the actual problem
+# every time this has happened so far.
+KNOWN_ENV_KEYS="SUPABASE_URL SUPABASE_ANON_KEY QUANTITIES_PASSWORD FULL_PASSWORD VIEWER_PASSWORD READONLY_PASSWORD CORRECT_ONLY_PASSWORD QUANTITIES_EMAIL FULL_EMAIL VIEWER_EMAIL READONLY_EMAIL CORRECT_ONLY_EMAIL"
 if [ -f .env.probe ]; then
+  unrecognised=""
   while IFS='=' read -r key value; do
     case "$key" in ''|'#'*) continue ;; esac
+    case " $KNOWN_ENV_KEYS " in
+      *" $key "*) ;;
+      *) unrecognised="$unrecognised $key" ;;
+    esac
     if [ -z "${!key:-}" ]; then
       export "$key=$value"
     fi
   done < .env.probe
+  if [ -n "$unrecognised" ]; then
+    echo "FATAL: .env.probe has variable name(s) this script doesn't use:$unrecognised" >&2
+    echo "  This is what a stale, pre-rights-model .env.probe looks like (e.g. FIELD_PASSWORD" >&2
+    echo "  instead of QUANTITIES_PASSWORD) — copy scripts/.env.probe.example fresh rather than" >&2
+    echo "  editing an old file, and see probe-rls.sh's header for the current five fixtures." >&2
+    exit 1
+  fi
 fi
 
 : "${SUPABASE_URL:?Set SUPABASE_URL (env or .env.probe)}"
