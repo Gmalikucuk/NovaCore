@@ -9,12 +9,32 @@ import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
 import { DashboardScreen } from './screens/Dashboard/DashboardScreen'
+import { useIsDesktopViewport } from './lib/useIsDesktopViewport'
 
 // The mobile field-capture route (index, "/") is built, deployed, and
 // verified on a real device — it stays mounted directly under AppShell with
 // no nav chrome, untouched. Everything else (§8 step 5, the desktop office
 // screens) is nested under DesktopShell instead, which is where the nav bar
 // lives — see DesktopShell.tsx for why the two are kept apart.
+//
+// A desktop viewport landing on "/" has no way out — no nav chrome exists
+// there by design, so a mouse-and-keyboard user would be stuck editing the
+// URL bar to reach anything else. IndexRoute exists so that never happens:
+// index redirects to /dashboard (the one desktop screen every contract
+// member can reach, gated on nothing) whenever the viewport is desktop-sized,
+// full stop — not just on first landing, but any time "/" is rendered,
+// including a direct link or a resize mid-session. A real mobile viewport
+// still gets EntryScreen exactly as before.
+function IndexRoute() {
+  const isDesktop = useIsDesktopViewport()
+  if (isDesktop) return <Navigate to="/dashboard" replace />
+  return (
+    <ErrorBoundary>
+      <EntryScreen />
+    </ErrorBoundary>
+  )
+}
+
 function App() {
   return (
     <>
@@ -29,14 +49,7 @@ function App() {
         <Routes>
           <Route path="/sign-in" element={<SignInScreen />} />
           <Route element={<AppShell />}>
-            <Route
-              index
-              element={
-                <ErrorBoundary>
-                  <EntryScreen />
-                </ErrorBoundary>
-              }
-            />
+            <Route index element={<IndexRoute />} />
             <Route element={<DesktopShell />}>
               <Route
                 path="/line-items"

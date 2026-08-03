@@ -7,6 +7,13 @@
   gap: var(--space-5);
 }
 
+.entry-screen-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-indigo);
+}
+
 .entry-screen-error {
   padding: var(--space-2) var(--space-3);
   background: var(--color-red-light);

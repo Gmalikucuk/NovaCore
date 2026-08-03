@@ -206,6 +206,8 @@ export function EntryScreen() {
 
   return (
     <div className="entry-screen">
+      <h1 className="entry-screen-title">Field entry — {contract.name}</h1>
+
       {chainageEntries.length > 0 && <ChainageStrip entries={chainageEntries} />}
 
       {loadError && <p className="entry-screen-error">{loadError}</p>}
