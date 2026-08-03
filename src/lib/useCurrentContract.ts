@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchMyContracts, type MyContract } from './supabase/contracts'
+import { errorMessage } from './errorMessage'
 
 const STORAGE_KEY = 'novacore_current_contract_id'
 
@@ -46,7 +47,7 @@ export function useCurrentContract(): CurrentContractState {
       .catch((err: unknown) => {
         if (cancelled) return
         setStatus('error')
-        setMessage(err instanceof Error ? err.message : String(err))
+        setMessage(errorMessage(err))
       })
     return () => {
       cancelled = true
