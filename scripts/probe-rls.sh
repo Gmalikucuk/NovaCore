@@ -280,6 +280,37 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "readonly: item_prices on sandbox project" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# Monthly period views (0013) — v_contract_month joins item_prices, so it's
+# behind the same finance wall by construction: view_rates gates it exactly
+# like item_prices itself, zero rows rather than an error for a seat without
+# it. v_item_month and v_item_progress_rate carry no money (quantity and
+# rate-of-progress only) and are readable by any member regardless of
+# view_rates — the readonly checks below are their positive controls.
+# =============================================================================
+echo
+echo "=== Monthly periods (0013) ==="
+
+request GET "v_contract_month?select=*" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: v_contract_month" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_contract_month?select=*&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: v_contract_month on sandbox project" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_contract_month?select=*&limit=1" "$VIEWER_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "viewer: v_contract_month returns rows (view_rates)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_month?select=*&limit=1" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "quantities: v_item_month returns rows (no view_rates needed)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_progress_rate?select=*&limit=1" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "quantities: v_item_progress_rate returns rows (no view_rates needed)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # Positive controls — prove the seats can still do their jobs. A suite that
 # only asserts "empty"/"rejected" passes just as well when auth is silently
 # broken; these are the checks that would actually catch that.
