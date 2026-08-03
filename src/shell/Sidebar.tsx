@@ -1,9 +1,11 @@
-import { IconCalendarPlus, IconCurrencyDollar, IconDeviceMobile, IconLayoutDashboard, IconListDetails, IconLogout } from '@tabler/icons-react'
+import { useEffect, useState } from 'react'
+import { IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconLayoutDashboard, IconListDetails, IconLogout } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
 import { useSession } from '../lib/useSession'
 import { signOut } from '../lib/supabase/auth'
+import { fetchPendingQuantityRecordCount } from '../lib/supabase/quantityRecords'
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {
   const base = 'flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors'
@@ -46,6 +48,27 @@ export function Sidebar() {
   const session = useSession()
   const navigate = useNavigate()
   const { mode, setOverride } = useViewMode()
+  const [pendingCount, setPendingCount] = useState(0)
+
+  // Fetched once per contract switch (not per render — Sidebar re-renders on
+  // every navigation, and this number only changes a couple of times a day).
+  useEffect(() => {
+    if (!contract?.confirmQuantity) {
+      setPendingCount(0)
+      return
+    }
+    let cancelled = false
+    fetchPendingQuantityRecordCount(contract.id)
+      .then((count) => {
+        if (!cancelled) setPendingCount(count)
+      })
+      .catch(() => {
+        /* nav badge only — not worth surfacing as a page error */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contract?.id, contract?.confirmQuantity])
 
   if (!contract) return null
 
@@ -114,7 +137,7 @@ export function Sidebar() {
             </div>
           </div>
 
-          {(contract.enterQuantity || contract.correctQuantity) && (
+          {(contract.enterQuantity || contract.correctQuantity || contract.confirmQuantity) && (
             <div>
               <NavGroupHeading>Production</NavGroupHeading>
               <div className="space-y-0.5">
@@ -122,6 +145,13 @@ export function Sidebar() {
                   <IconCalendarPlus size={18} stroke={1.75} />
                   Daily Entry
                 </NavLink>
+                {contract.confirmQuantity && (
+                  <NavLink to="/confirm" className={navLinkClass}>
+                    <IconClipboardCheck size={18} stroke={1.75} />
+                    Confirm
+                    {pendingCount > 0 && <span className="ml-auto rounded-full bg-nc-accent px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">{pendingCount}</span>}
+                  </NavLink>
+                )}
               </div>
             </div>
           )}

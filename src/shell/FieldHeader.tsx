@@ -3,6 +3,7 @@ import { Navigate, Outlet, useNavigate, useOutletContext } from 'react-router-do
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode, type ViewMode } from '../lib/useViewMode'
 import { signOut } from '../lib/supabase/auth'
+import { OverviewScreen } from '../screens/Overview/OverviewScreen'
 
 /**
  * Chrome for the field-capture route only ("/", index) — deliberately not
@@ -28,6 +29,19 @@ import { signOut } from '../lib/supabase/auth'
  * site, not shared, so two independent calls would silently desync (the
  * bar's setOverride would update localStorage but never re-render this
  * component, which reads its own separate, now-stale `mode`).
+ *
+ * A field-detected/overridden user with neither enter_quantity nor
+ * correct_quantity has no use for EntryScreen — historically they'd still
+ * land on it (a working-looking form that could never save) with no way to
+ * reach Overview at all, since Sidebar's 220px layout is deliberately never
+ * shown on this device class (see Sidebar's own comment). Rendering
+ * OverviewScreen directly here — not via <Navigate to="/overview">, which
+ * would put them in that same unreachable Sidebar layout — gets them a
+ * screen they actually have a reason to look at, in the same minimal
+ * chrome. OverviewScreen takes an explicit `contract` prop for exactly this
+ * call site: rendered outside Sidebar's own nested <Outlet context={contract}>,
+ * its default useOutletContext() read would otherwise resolve to this
+ * route's CurrentContractState instead.
  */
 export function FieldHeader() {
   const contractState = useOutletContext<CurrentContractState>()
@@ -37,12 +51,12 @@ export function FieldHeader() {
   if (mode === 'office') return <Navigate to="/overview" replace />
   if (!contract) return null
 
+  const canUseFieldEntry = contract.enterQuantity || contract.correctQuantity
+
   return (
     <div className="flex min-h-screen flex-col bg-nc-page">
       <FieldHeaderBar contractState={contractState} setOverride={setOverride} />
-      <main className="flex-1">
-        <Outlet context={contract} />
-      </main>
+      <main className="flex-1">{canUseFieldEntry ? <Outlet context={contract} /> : <OverviewScreen contract={contract} />}</main>
     </div>
   )
 }

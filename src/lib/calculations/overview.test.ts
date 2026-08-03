@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ItemProgressRate } from '../supabase/monthlyPeriods'
-import { buildProblemList, classifyProblem, formatMonthLabel, monthDirection, monthKeyFromDate, monthKeyToPeriod, previousMonth, weightedCompletion } from './overview'
+import { buildProblemList, classifyProblem, formatMonthLabel, itemsInProgress, monthDirection, monthKeyFromDate, monthKeyToPeriod, previousMonth, weightedCompletion } from './overview'
 
 function row(overrides: Partial<ItemProgressRate>): ItemProgressRate {
   return {
@@ -71,6 +71,22 @@ describe('weightedCompletion', () => {
   })
 })
 
+describe('itemsInProgress', () => {
+  it('counts items started (quantity > 0) but not yet finished (quantity < approximate)', () => {
+    const result = itemsInProgress([
+      { quantityToDate: 0, approximateQuantity: 100 }, // not started
+      { quantityToDate: 50, approximateQuantity: 100 }, // in progress
+      { quantityToDate: 100, approximateQuantity: 100 }, // finished exactly
+      { quantityToDate: 150, approximateQuantity: 100 }, // over quantity — not "in progress"
+    ])
+    expect(result).toEqual({ started: 1, total: 4 })
+  })
+
+  it('reports total as the full row count regardless of state', () => {
+    expect(itemsInProgress([])).toEqual({ started: 0, total: 0 })
+  })
+})
+
 describe('monthDirection', () => {
   it('reports up, down, or flat', () => {
     expect(monthDirection(100, 50)).toBe('up')
@@ -105,14 +121,14 @@ describe('classifyProblem', () => {
 describe('buildProblemList', () => {
   const now = new Date('2026-08-15T12:00:00')
 
-  it('groups by kind in order — stalled, then over quantity, then behind rate', () => {
+  it('groups by kind in order — over quantity (largest cost exposure first), then behind rate, then stalled', () => {
     const rows = [
       row({ itemId: 'behind', workingDaysRemaining: 50 }),
       row({ itemId: 'over', isOverQuantity: true }),
       row({ itemId: 'stalled', isStalled: true }),
     ]
     const list = buildProblemList(rows, now)
-    expect(list.map((p) => p.kind)).toEqual(['stalled', 'over_quantity', 'behind_rate'])
+    expect(list.map((p) => p.kind)).toEqual(['over_quantity', 'behind_rate', 'stalled'])
   })
 
   it('excludes healthy items entirely', () => {

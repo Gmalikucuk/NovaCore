@@ -45,6 +45,12 @@ export function weightedCompletion(rows: readonly { approximateQuantity: number;
   return totalToDate / totalApprox
 }
 
+/** Started but not yet finished — Band 1's other headline figure, alongside weightedCompletion. Same rows (progressRate, already unit_price-only). */
+export function itemsInProgress(rows: readonly { quantityToDate: number; approximateQuantity: number }[]): { started: number; total: number } {
+  const started = rows.filter((r) => r.quantityToDate > 0 && r.quantityToDate < r.approximateQuantity).length
+  return { started, total: rows.length }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Month-over-month direction — for Band 1's "beside it, with the direction
 // of change" figures.
@@ -59,14 +65,16 @@ export function monthDirection(current: number, previous: number): Direction {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Band 2's problem list. Three kinds, in the brief's own order — stalled,
-// then over quantity, then behind rate — each its own group, worst first
-// within it. The three conditions are near-mutually-exclusive by the view's
-// own math (is_over_quantity implies quantity_remaining = 0, which makes
-// working_days_remaining null; a genuinely stalled item usually has no
-// quantity_last_30 either, which does the same) — classifyProblem still
-// checks in that priority order for the rare item where more than one
-// could technically hold.
+// Band 2's problem list. Three kinds, ranked by consequence rather than by
+// type — over quantity (cost exposure, largest overage first), then behind
+// rate, then stalled (schedule risk, longest idle last) — each its own
+// group, worst first within it. The three conditions are near-mutually-
+// exclusive by the view's own math (is_over_quantity implies
+// quantity_remaining = 0, which makes working_days_remaining null; a
+// genuinely stalled item usually has no quantity_last_30 either, which does
+// the same) — classifyProblem still checks stalled first internally for the
+// rare item where more than one could technically hold, since a stalled
+// item's other numbers are the least meaningful of the three.
 //
 // "Behind rate" has no season-end date anywhere in the schema (checked:
 // contracts has no such column) to compare working_days_remaining against,
@@ -108,8 +116,8 @@ export function buildProblemList(rows: readonly ItemProgressRate[], now: Date): 
   const behindRate = rows.filter((r) => classifyProblem(r) === 'behind_rate').sort((a, b) => (b.workingDaysRemaining ?? 0) - (a.workingDaysRemaining ?? 0))
 
   return [
-    ...stalled.map((row) => ({ kind: 'stalled' as const, row })),
     ...overQuantity.map((row) => ({ kind: 'over_quantity' as const, row })),
     ...behindRate.map((row) => ({ kind: 'behind_rate' as const, row })),
+    ...stalled.map((row) => ({ kind: 'stalled' as const, row })),
   ]
 }

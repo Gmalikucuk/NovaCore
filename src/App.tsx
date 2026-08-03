@@ -10,6 +10,7 @@ import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
 import { OverviewScreen } from './screens/Overview/OverviewScreen'
+import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
 
 function App() {
   return (
@@ -60,6 +61,14 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <QuantityRecordsScreen />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/confirm"
+                element={
+                  <ErrorBoundary>
+                    <ConfirmQueueScreen />
                   </ErrorBoundary>
                 }
               />

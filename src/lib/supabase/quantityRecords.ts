@@ -123,3 +123,108 @@ export async function confirmQuantityRecord(id: string): Promise<void> {
   const { error } = await supabase.from('quantity_records').update({ status: 'confirmed' }).eq('id', id)
   if (error) throw error
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// PM confirmation queue — every draft record across the whole contract
+// (not scoped to one work_date, unlike fetchQuantityRecordsForDate above),
+// with the Item and correction context joined in so the queue screen never
+// needs a second round-trip per record.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface PendingQuantityRecord {
+  id: string
+  itemId: string
+  itemNumber: string
+  description: string
+  unit: string
+  approximateQuantity: number
+  workDate: string
+  location: string | null
+  quantity: number
+  note: string | null
+  stationFrom: number | null
+  stationTo: number | null
+  supersedes: string | null
+  /** The quantity currently counted from the record this one supersedes — null unless this is a correction AND the original was itself confirmed (an unconfirmed original counts for nothing today, so there's nothing to subtract/compare). */
+  originalQuantity: number | null
+  createdBy: string
+  createdByName: string | null
+}
+
+interface RawPendingRow {
+  id: string
+  item_id: string
+  work_date: string
+  location: string | null
+  quantity: string
+  note: string | null
+  station_from: string | null
+  station_to: string | null
+  supersedes: string | null
+  created_by: string
+  items: { item_number: string; description: string; unit: string; approximate_quantity: string } | null
+  creator: { full_name: string | null } | null
+}
+
+/** Just the count of draft records — the Sidebar nav badge's source, cheaper than fetching every row when only the number is shown. */
+export async function fetchPendingQuantityRecordCount(contractId: string): Promise<number> {
+  const { count, error } = await supabase.from('quantity_records').select('id', { count: 'exact', head: true }).eq('contract_id', contractId).eq('status', 'draft')
+  if (error) throw error
+  return count ?? 0
+}
+
+/** Every draft (unconfirmed) quantity_records row on the contract — the PM confirmation queue's source list. RLS scopes this to contracts the caller is a member of; the confirm_quantity gate is enforced on the write (confirmQuantityRecord), not the read. */
+export async function fetchPendingQuantityRecords(contractId: string): Promise<PendingQuantityRecord[]> {
+  const { data, error } = await supabase
+    .from('quantity_records')
+    .select(
+      'id, item_id, work_date, location, quantity, note, station_from, station_to, supersedes, created_by, ' +
+        'items!inner ( item_number, description, unit, approximate_quantity ), ' +
+        'creator:profiles!created_by ( full_name )',
+    )
+    .eq('contract_id', contractId)
+    .eq('status', 'draft')
+    .order('work_date', { ascending: false })
+  if (error) throw error
+
+  const rows = (data ?? []) as unknown as RawPendingRow[]
+
+  // The "original" (what a correction supersedes) is deliberately a SEPARATE
+  // query, not a self-referencing embed — quantity_records!supersedes is a
+  // self-join, and PostgREST resolves a bare `!supersedes` hint as the
+  // reverse (one-to-many: "rows that supersede me") rather than the forward
+  // direction this needed ("the row my own supersedes column points at"),
+  // silently returning the wrong record. An explicit .in() lookup has no
+  // such ambiguity.
+  const originalIds = [...new Set(rows.map((r) => r.supersedes).filter((id): id is string => id !== null))]
+  const originalById = new Map<string, { quantity: number; status: 'draft' | 'confirmed' }>()
+  if (originalIds.length > 0) {
+    const { data: originals, error: originalsError } = await supabase.from('quantity_records').select('id, quantity, status').in('id', originalIds)
+    if (originalsError) throw originalsError
+    for (const o of originals ?? []) {
+      originalById.set(o.id as string, { quantity: Number(o.quantity), status: o.status as 'draft' | 'confirmed' })
+    }
+  }
+
+  return rows.map((r) => {
+    const original = r.supersedes ? originalById.get(r.supersedes) : undefined
+    return {
+      id: r.id,
+      itemId: r.item_id,
+      itemNumber: r.items?.item_number ?? '',
+      description: r.items?.description ?? '',
+      unit: r.items?.unit ?? '',
+      approximateQuantity: r.items ? Number(r.items.approximate_quantity) : 0,
+      workDate: r.work_date,
+      location: r.location,
+      quantity: Number(r.quantity),
+      note: r.note,
+      stationFrom: r.station_from === null ? null : Number(r.station_from),
+      stationTo: r.station_to === null ? null : Number(r.station_to),
+      supersedes: r.supersedes,
+      originalQuantity: original && original.status === 'confirmed' ? original.quantity : null,
+      createdBy: r.created_by,
+      createdByName: r.creator?.full_name ?? null,
+    }
+  })
+}
