@@ -1,4 +1,4 @@
 /sw.js
-  Cache-Control: no-cache
+  Cache-Control: no-store
 /manifest.webmanifest
-  Cache-Control: no-cache
+  Cache-Control: no-store
