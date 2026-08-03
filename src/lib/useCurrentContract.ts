@@ -1,25 +1,25 @@
 import { useEffect, useState } from 'react'
-import { fetchMyProjects, type MyProject } from './supabase/projects'
+import { fetchMyContracts, type MyContract } from './supabase/contracts'
 
-const STORAGE_KEY = 'novacore_current_project_id'
+const STORAGE_KEY = 'novacore_current_contract_id'
 
-export interface CurrentProjectState {
+export interface CurrentContractState {
   status: 'loading' | 'none' | 'ready' | 'error'
-  projects: MyProject[]
-  current: MyProject | null
+  contracts: MyContract[]
+  current: MyContract | null
   setCurrentId: (id: string) => void
   message?: string
 }
 
 /**
- * The signed-in user's projects, plus which one is "current" — persisted so
+ * The signed-in user's contracts, plus which one is "current" — persisted so
  * a reload doesn't lose the choice. Auto-selects when there's exactly one
  * (the common case for a field seat), matching the archived build's
- * single-assignment auto-select behavior; a multi-project person keeps an
+ * single-assignment auto-select behavior; a multi-contract person keeps an
  * explicit choice.
  */
-export function useCurrentProject(): CurrentProjectState {
-  const [projects, setProjects] = useState<MyProject[]>([])
+export function useCurrentContract(): CurrentContractState {
+  const [contracts, setContracts] = useState<MyContract[]>([])
   const [status, setStatus] = useState<'loading' | 'none' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | undefined>()
   const [currentId, setCurrentIdState] = useState<string | null>(() => localStorage.getItem(STORAGE_KEY))
@@ -27,17 +27,17 @@ export function useCurrentProject(): CurrentProjectState {
   useEffect(() => {
     let cancelled = false
     setStatus('loading')
-    fetchMyProjects()
+    fetchMyContracts()
       .then((list) => {
         if (cancelled) return
-        setProjects(list)
+        setContracts(list)
         if (list.length === 0) {
           setStatus('none')
           return
         }
         setStatus('ready')
         setCurrentIdState((prev) => {
-          if (prev && list.some((p) => p.id === prev)) return prev
+          if (prev && list.some((c) => c.id === prev)) return prev
           const fallback = list[0].id
           localStorage.setItem(STORAGE_KEY, fallback)
           return fallback
@@ -58,7 +58,7 @@ export function useCurrentProject(): CurrentProjectState {
     setCurrentIdState(id)
   }
 
-  const current = projects.find((p) => p.id === currentId) ?? null
+  const current = contracts.find((c) => c.id === currentId) ?? null
 
-  return { status, projects, current, setCurrentId, message }
+  return { status, contracts, current, setCurrentId, message }
 }

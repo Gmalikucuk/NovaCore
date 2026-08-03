@@ -1,40 +1,40 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import type { MyProject } from '../../lib/supabase/projects'
-import { createLineItem, fetchLineItems, updateLineItem, type LineItem, type LineItemInput } from '../../lib/supabase/lineItems'
-import { UNITS } from '../../lib/lineItemUnits'
+import type { MyContract } from '../../lib/supabase/contracts'
+import { createItem, fetchItems, updateItem, type Item, type ItemInput } from '../../lib/supabase/items'
+import { UNITS } from '../../lib/itemUnits'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
-import './LineItemsScreen.css'
+import './ItemsScreen.css'
 
-const BLANK_FORM: LineItemInput = { itemNo: '', description: '', unit: UNITS[0], bidQuantity: 0 }
+const BLANK_FORM: ItemInput = { itemNumber: '', description: '', unit: UNITS[0], approximateQuantity: 0 }
 
 function parseQuantity(raw: string): number {
   const n = Number(raw)
   return raw.trim() === '' || Number.isNaN(n) ? 0 : n
 }
 
-export function LineItemsScreen() {
-  const project = useOutletContext<MyProject>()
-  const isPm = project.role === 'project_manager'
+export function ItemsScreen() {
+  const contract = useOutletContext<MyContract>()
+  const canWrite = contract.createItems
 
-  const [items, setItems] = useState<LineItem[]>([])
+  const [items, setItems] = useState<Item[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  const [form, setForm] = useState<LineItemInput>(BLANK_FORM)
+  const [form, setForm] = useState<ItemInput>(BLANK_FORM)
   const [addError, setAddError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const codeInputRef = useRef<HTMLInputElement>(null)
 
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState<LineItemInput>(BLANK_FORM)
+  const [editForm, setEditForm] = useState<ItemInput>(BLANK_FORM)
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
 
   useEffect(() => {
     setStatus('loading')
-    fetchLineItems(project.id)
+    fetchItems(contract.id)
       .then((rows) => {
         setItems(rows)
         setStatus('ready')
@@ -43,9 +43,9 @@ export function LineItemsScreen() {
         setLoadError(errorMessage(err))
         setStatus('error')
       })
-  }, [project.id])
+  }, [contract.id])
 
-  const sorted = useMemo(() => [...items].sort((a, b) => compareItemCodes(a.itemNo, b.itemNo)), [items])
+  const sorted = useMemo(() => [...items].sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber)), [items])
 
   // Split from the form's onSubmit so onKeyDown can call it directly.
   // Implicit submit-on-Enter is a browser heuristic gated on trusted native
@@ -55,7 +55,7 @@ export function LineItemsScreen() {
   // below rather than left to that heuristic.
   async function doAdd() {
     setAddError(null)
-    if (!form.itemNo.trim()) {
+    if (!form.itemNumber.trim()) {
       setAddError('Enter an item code.')
       return
     }
@@ -65,11 +65,11 @@ export function LineItemsScreen() {
     }
     setAdding(true)
     try {
-      const created = await createLineItem(project.id, {
-        itemNo: form.itemNo.trim(),
+      const created = await createItem(contract.id, {
+        itemNumber: form.itemNumber.trim(),
         description: form.description.trim(),
         unit: form.unit,
-        bidQuantity: form.bidQuantity,
+        approximateQuantity: form.approximateQuantity,
       })
       setItems((prev) => [...prev, created])
       // Keep the unit selection (a PM entering 48 items is usually entering
@@ -95,9 +95,9 @@ export function LineItemsScreen() {
     void doAdd()
   }
 
-  function startEdit(item: LineItem) {
+  function startEdit(item: Item) {
     setEditingId(item.id)
-    setEditForm({ itemNo: item.itemNo, description: item.description, unit: item.unit, bidQuantity: item.bidQuantity })
+    setEditForm({ itemNumber: item.itemNumber, description: item.description, unit: item.unit, approximateQuantity: item.approximateQuantity })
     setEditError(null)
   }
 
@@ -105,17 +105,17 @@ export function LineItemsScreen() {
     e.preventDefault()
     if (!editingId) return
     setEditError(null)
-    if (!editForm.itemNo.trim() || !editForm.description.trim()) {
+    if (!editForm.itemNumber.trim() || !editForm.description.trim()) {
       setEditError('Code and description are required.')
       return
     }
     setSavingEdit(true)
     try {
-      const updated = await updateLineItem(editingId, {
-        itemNo: editForm.itemNo.trim(),
+      const updated = await updateItem(editingId, {
+        itemNumber: editForm.itemNumber.trim(),
         description: editForm.description.trim(),
         unit: editForm.unit,
-        bidQuantity: editForm.bidQuantity,
+        approximateQuantity: editForm.approximateQuantity,
       })
       setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))
       setEditingId(null)
@@ -126,47 +126,47 @@ export function LineItemsScreen() {
     }
   }
 
-  if (!isPm) {
+  if (!canWrite) {
     return (
-      <div className="line-items-screen">
-        <p className="line-items-denied">Line items are set up by the project manager. Nothing to do here for your role.</p>
+      <div className="items-screen">
+        <p className="items-denied">Setting up items needs the create_items right on this contract.</p>
       </div>
     )
   }
 
   return (
-    <div className="line-items-screen">
-      <h1 className="line-items-title">Line items — {project.name}</h1>
+    <div className="items-screen">
+      <h1 className="items-title">Items — {contract.name}</h1>
 
-      <form className="line-items-add-form" onSubmit={handleAdd}>
-        <div className="line-items-add-field">
-          <label htmlFor="li-add-code">Code</label>
+      <form className="items-add-form" onSubmit={handleAdd}>
+        <div className="items-add-field">
+          <label htmlFor="li-add-code">Item #</label>
           <input
             id="li-add-code"
             ref={codeInputRef}
-            className="line-items-input line-items-input-mono"
-            value={form.itemNo}
-            onChange={(e) => setForm({ ...form, itemNo: e.target.value })}
+            className="items-input items-input-mono"
+            value={form.itemNumber}
+            onChange={(e) => setForm({ ...form, itemNumber: e.target.value })}
             onKeyDown={handleAddKeyDown}
             placeholder="05.03.03"
           />
         </div>
-        <div className="line-items-add-field line-items-add-field-description">
+        <div className="items-add-field items-add-field-description">
           <label htmlFor="li-add-description">Description</label>
           <input
             id="li-add-description"
-            className="line-items-input"
+            className="items-input"
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
             onKeyDown={handleAddKeyDown}
             placeholder="Asphalt paving, top lift"
           />
         </div>
-        <div className="line-items-add-field">
-          <label htmlFor="li-add-unit">Unit</label>
+        <div className="items-add-field">
+          <label htmlFor="li-add-unit">Unit of Measure</label>
           <select
             id="li-add-unit"
-            className="line-items-input"
+            className="items-input"
             value={form.unit}
             onChange={(e) => setForm({ ...form, unit: e.target.value })}
             onKeyDown={handleAddKeyDown}
@@ -178,44 +178,44 @@ export function LineItemsScreen() {
             ))}
           </select>
         </div>
-        <div className="line-items-add-field">
-          <label htmlFor="li-add-quantity">Contract quantity</label>
+        <div className="items-add-field">
+          <label htmlFor="li-add-quantity">Approximate quantity</label>
           <input
             id="li-add-quantity"
-            className="line-items-input line-items-input-mono"
+            className="items-input items-input-mono"
             type="number"
             inputMode="decimal"
             step="any"
-            value={form.bidQuantity || ''}
-            onChange={(e) => setForm({ ...form, bidQuantity: parseQuantity(e.target.value) })}
+            value={form.approximateQuantity || ''}
+            onChange={(e) => setForm({ ...form, approximateQuantity: parseQuantity(e.target.value) })}
             onKeyDown={handleAddKeyDown}
           />
         </div>
-        <button className="line-items-add-submit" type="submit" disabled={adding}>
+        <button className="items-add-submit" type="submit" disabled={adding}>
           {adding ? 'Adding…' : 'Add — Enter'}
         </button>
       </form>
-      {addError && <p className="line-items-error">{addError}</p>}
+      {addError && <p className="items-error">{addError}</p>}
 
-      {status === 'loading' && <p className="line-items-status">Loading…</p>}
-      {status === 'error' && <p className="line-items-error">{loadError}</p>}
+      {status === 'loading' && <p className="items-status">Loading…</p>}
+      {status === 'error' && <p className="items-error">{loadError}</p>}
 
       {status === 'ready' && (
-        <table className="line-items-table">
+        <table className="items-table">
           <thead>
             <tr>
-              <th>Code</th>
+              <th>Item #</th>
               <th>Description</th>
-              <th>Unit</th>
-              <th className="line-items-col-right">Contract qty</th>
+              <th>Unit of Measure</th>
+              <th className="items-col-right">Approximate Quantity</th>
               <th />
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td className="line-items-empty" colSpan={5}>
-                  No line items yet — add the first one above.
+                <td className="items-empty" colSpan={5}>
+                  No items yet — add the first one above.
                 </td>
               </tr>
             )}
@@ -223,24 +223,24 @@ export function LineItemsScreen() {
               editingId === item.id ? (
                 <tr key={item.id}>
                   <td colSpan={5}>
-                    <form className="line-items-edit-form" onSubmit={handleSaveEdit}>
+                    <form className="items-edit-form" onSubmit={handleSaveEdit}>
                       <input
-                        className="line-items-input line-items-input-mono"
-                        value={editForm.itemNo}
-                        onChange={(e) => setEditForm({ ...editForm, itemNo: e.target.value })}
-                        aria-label="Code"
+                        className="items-input items-input-mono"
+                        value={editForm.itemNumber}
+                        onChange={(e) => setEditForm({ ...editForm, itemNumber: e.target.value })}
+                        aria-label="Item #"
                       />
                       <input
-                        className="line-items-input line-items-edit-description"
+                        className="items-input items-edit-description"
                         value={editForm.description}
                         onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
                         aria-label="Description"
                       />
                       <select
-                        className="line-items-input"
+                        className="items-input"
                         value={editForm.unit}
                         onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })}
-                        aria-label="Unit"
+                        aria-label="Unit of Measure"
                       >
                         {UNITS.map((u) => (
                           <option key={u} value={u}>
@@ -249,32 +249,32 @@ export function LineItemsScreen() {
                         ))}
                       </select>
                       <input
-                        className="line-items-input line-items-input-mono"
+                        className="items-input items-input-mono"
                         type="number"
                         inputMode="decimal"
                         step="any"
-                        value={editForm.bidQuantity}
-                        onChange={(e) => setEditForm({ ...editForm, bidQuantity: parseQuantity(e.target.value) })}
-                        aria-label="Contract quantity"
+                        value={editForm.approximateQuantity}
+                        onChange={(e) => setEditForm({ ...editForm, approximateQuantity: parseQuantity(e.target.value) })}
+                        aria-label="Approximate quantity"
                       />
-                      <button type="submit" className="line-items-row-btn" disabled={savingEdit}>
+                      <button type="submit" className="items-row-btn" disabled={savingEdit}>
                         {savingEdit ? 'Saving…' : 'Save'}
                       </button>
-                      <button type="button" className="line-items-row-btn" onClick={() => setEditingId(null)}>
+                      <button type="button" className="items-row-btn" onClick={() => setEditingId(null)}>
                         Cancel
                       </button>
-                      {editError && <span className="line-items-error line-items-edit-error">{editError}</span>}
+                      {editError && <span className="items-error items-edit-error">{editError}</span>}
                     </form>
                   </td>
                 </tr>
               ) : (
                 <tr key={item.id}>
-                  <td className="line-items-input-mono">{item.itemNo}</td>
+                  <td className="items-input-mono">{item.itemNumber}</td>
                   <td>{item.description}</td>
                   <td>{item.unit}</td>
-                  <td className="line-items-col-right line-items-input-mono">{item.bidQuantity}</td>
-                  <td className="line-items-col-right">
-                    <button type="button" className="line-items-row-btn" onClick={() => startEdit(item)}>
+                  <td className="items-col-right items-input-mono">{item.approximateQuantity}</td>
+                  <td className="items-col-right">
+                    <button type="button" className="items-row-btn" onClick={() => startEdit(item)}>
                       Edit
                     </button>
                   </td>

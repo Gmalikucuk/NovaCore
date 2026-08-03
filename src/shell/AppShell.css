@@ -19,14 +19,14 @@
   font-weight: var(--font-weight-bold);
 }
 
-.app-shell-project-select,
-.app-shell-project-name {
+.app-shell-contract-select,
+.app-shell-contract-name {
   margin-left: auto;
   font-size: var(--font-size-sm);
   color: var(--color-periwinkle-light);
 }
 
-.app-shell-project-select {
+.app-shell-contract-select {
   background: transparent;
   border: 1px solid var(--color-navy-light);
   border-radius: var(--radius-sm);

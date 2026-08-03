@@ -1,71 +1,71 @@
 import { supabase } from './client'
 
-export interface LineItemPrice {
-  lineItemId: string
+export interface ItemPrice {
+  itemId: string
   costPrice: number | null
-  sellPrice: number | null
+  unitPrice: number | null
   updatedBy: string | null
   updatedAt: string
 }
 
 interface RawPriceRow {
-  line_item_id: string
+  item_id: string
   cost_price: string | null
-  sell_price: string | null
+  unit_price: string | null
   updated_by: string | null
   updated_at: string
 }
 
-const PRICE_SELECT = 'line_item_id, cost_price, sell_price, updated_by, updated_at'
+const PRICE_SELECT = 'item_id, cost_price, unit_price, updated_by, updated_at'
 
-function mapPriceRow(row: RawPriceRow): LineItemPrice {
+function mapPriceRow(row: RawPriceRow): ItemPrice {
   return {
-    lineItemId: row.line_item_id,
+    itemId: row.item_id,
     costPrice: row.cost_price === null ? null : Number(row.cost_price),
-    sellPrice: row.sell_price === null ? null : Number(row.sell_price),
+    unitPrice: row.unit_price === null ? null : Number(row.unit_price),
     updatedBy: row.updated_by,
     updatedAt: row.updated_at,
   }
 }
 
 /**
- * Every priced row for a project. RLS (prices_select_finance) returns this
+ * Every priced row for a contract. RLS (item_prices_select_right) returns this
  * empty for a field seat rather than erroring — the finance wall is
- * structural (line_item_prices has no field grant at all, see 0002), not
- * something this function needs to enforce itself. A line item with no row
+ * structural (item_prices has no field grant at all, see 0002), not
+ * something this function needs to enforce itself. An item with no row
  * here at all is unpriced — the Rates screen's "still unpriced" callout is a
- * set-difference against fetchLineItems(), not a flag on this row.
+ * set-difference against fetchItems(), not a flag on this row.
  */
-export async function fetchLineItemPrices(projectId: string): Promise<LineItemPrice[]> {
-  const { data, error } = await supabase.from('line_item_prices').select(PRICE_SELECT).eq('project_id', projectId)
+export async function fetchItemPrices(contractId: string): Promise<ItemPrice[]> {
+  const { data, error } = await supabase.from('item_prices').select(PRICE_SELECT).eq('contract_id', contractId)
   if (error) throw error
   return (data ?? []).map((row) => mapPriceRow(row as unknown as RawPriceRow))
 }
 
 /**
- * Upsert on line_item_id (the table's primary key) — a line item's first
+ * Upsert on item_id (the table's primary key) — an item's first
  * rate entry inserts the row, editing it later updates the same one.
- * costPrice/sellPrice stay null if left blank rather than defaulting to 0:
+ * costPrice/unitPrice stay null if left blank rather than defaulting to 0:
  * a missing rate is not a zero rate, and margin.ts's null-propagation
  * depends on that distinction reaching it intact. project_manager only, per
- * RLS (prices_insert_pm / prices_update_pm).
+ * RLS (item_prices_insert_right / item_prices_update_right).
  */
-export async function upsertLineItemPrice(input: {
-  lineItemId: string
-  projectId: string
+export async function upsertItemPrice(input: {
+  itemId: string
+  contractId: string
   costPrice: number | null
-  sellPrice: number | null
-}): Promise<LineItemPrice> {
+  unitPrice: number | null
+}): Promise<ItemPrice> {
   const { data, error } = await supabase
-    .from('line_item_prices')
+    .from('item_prices')
     .upsert(
       {
-        line_item_id: input.lineItemId,
-        project_id: input.projectId,
+        item_id: input.itemId,
+        contract_id: input.contractId,
         cost_price: input.costPrice,
-        sell_price: input.sellPrice,
+        unit_price: input.unitPrice,
       },
-      { onConflict: 'line_item_id' },
+      { onConflict: 'item_id' },
     )
     .select(PRICE_SELECT)
     .single()

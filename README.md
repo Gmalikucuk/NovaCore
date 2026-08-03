@@ -15,7 +15,13 @@ npm run dev
 
 ## Testing the RLS wall
 
-Copy `scripts/.env.probe.example` to `.env.probe` and fill in the four seat passwords, then run `./scripts/probe-rls.sh`. Re-run it after any migration that touches a policy or a trigger on `daily_entries` — it exits non-zero on any failure.
+Copy `scripts/.env.probe.example` to `.env.probe` and fill in the five fixture passwords, then run `./scripts/probe-rls.sh`. Re-run it after any migration that touches a policy or a trigger on `quantity_records` or `contract_members` — it exits non-zero on any failure.
+
+**Creating a test fixture user by hand** (as opposed to real signup): inserting directly into `auth.users` needs `email_change` set to `''`, not left `null`. A `null` there makes GoTrue's `/auth/v1/token` endpoint fail with an opaque `500 "Database error querying schema"` — no mention of `email_change` anywhere in the error, so it reads like a broken database rather than one malformed column on one row. Found while creating the `probe-correct-only` fixture for 0008's probe suite; model any new row's non-secret columns after an existing working user's (`select row_to_json(u) from auth.users u where email = '...'`) rather than guessing which columns GoTrue actually requires.
+
+**`CREATE OR REPLACE FUNCTION` cannot rename a parameter.** Changing an existing function's body while keeping its name and argument *types* the same does not require a preceding `DROP FUNCTION` — except renaming one of the parameters, which Postgres rejects outright: `ERROR: cannot change name of input parameter "p_x" (SQLSTATE 42P13)`, regardless of what depends on the function. Found while writing 0009's table-rename migration, trying to rename `is_member`/`has_right`'s `p_project` parameter to `p_contract` for readability alongside the table rename. The fix is either keep the old parameter name (it's internal to the function body, invisible to every caller since all call sites pass arguments positionally) or accept a real `DROP FUNCTION` — which then reintroduces the dependency-ordering hazard below, since a dropped function fails if anything still references it.
+
+**`DROP FUNCTION` fails if any live RLS policy still calls it (`SQLSTATE 2BP01`).** A function being dropped and recreated under a new name (or retired) must have every dependent policy dropped *first* — dropping the function while policies still reference it fails outright, it does not cascade or silently orphan them. Hit twice: 0008's `member_role()`/`can_see_finance()` retirement, and 0009's first draft of `is_member`/`has_right` (see above). Both times the failed `db push` rolled back transactionally with zero schema change — verified each time by re-listing tables/policies/functions immediately after the failure, not assumed. The reliable order is: drop dependent policies, then drop (or replace) the function, then recreate the policies.
 
 ## Stack
 

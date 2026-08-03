@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import type { MyProject } from '../../lib/supabase/projects'
+import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
 import { useLiveQuery } from '../../lib/sync/useLiveQuery'
-import { db, type QueuedDailyEntry } from '../../lib/db'
-import { enqueueEntry, importServerEntries, registerSyncListeners, syncQueuedEntries } from '../../lib/sync/dailyEntriesSync'
-import { confirmDailyEntry, fetchDistinctLocations, isLumpUnit } from '../../lib/supabase/entries'
-import { fetchLineItems, type LineItem } from '../../lib/supabase/lineItems'
+import { db, type QueuedQuantityRecord } from '../../lib/db'
+import { enqueueQuantityRecord, importServerQuantityRecords, registerSyncListeners, syncQueuedQuantityRecords } from '../../lib/sync/quantityRecordsSync'
+import { confirmQuantityRecord, fetchDistinctLocations, isLumpUnit } from '../../lib/supabase/quantityRecords'
+import { fetchItems, type Item } from '../../lib/supabase/items'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
@@ -16,16 +16,16 @@ import './EntryScreen.css'
 type StationMode = 'single' | 'range'
 
 export function EntryScreen() {
-  const project = useOutletContext<MyProject>()
+  const contract = useOutletContext<MyContract>()
   const session = useSession()
   const userId = session?.user.id ?? null
 
-  const [lineItems, setLineItems] = useState<LineItem[]>([])
+  const [items, setItems] = useState<Item[]>([])
   const [locations, setLocations] = useState<string[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  const [entryDate, setEntryDate] = useState(todayLocalDateString())
-  const [lineItemId, setLineItemId] = useState('')
+  const [workDate, setWorkDate] = useState(todayLocalDateString())
+  const [itemId, setItemId] = useState('')
   const [mode, setMode] = useState<StationMode>('range')
   const [stationFrom, setStationFrom] = useState('')
   const [stationTo, setStationTo] = useState('')
@@ -43,42 +43,42 @@ export function EntryScreen() {
 
   useEffect(() => {
     setLoadError(null)
-    void importServerEntries(project.id).catch((err: unknown) => {
+    void importServerQuantityRecords(contract.id).catch((err: unknown) => {
       // Offline on first load is fine — the local queue table still serves
       // whatever was imported last time. Only surfaced if there's nothing
       // local to fall back on.
-      console.warn('importServerEntries failed (likely offline):', err)
+      console.warn('importServerQuantityRecords failed (likely offline):', err)
     })
     // Drains anything still queued from a previous session (e.g. the app
     // was killed mid-sync) — registerSyncListeners only retries on a later
     // 'online'/'visibilitychange' event, which may never fire if the device
     // was already online and the tab was already visible on reload.
-    void syncQueuedEntries()
-    Promise.all([fetchLineItems(project.id), fetchDistinctLocations(project.id)])
-      .then(([items, locs]) => {
-        setLineItems(items)
+    void syncQueuedQuantityRecords()
+    Promise.all([fetchItems(contract.id), fetchDistinctLocations(contract.id)])
+      .then(([itemRows, locs]) => {
+        setItems(itemRows)
         setLocations(locs)
-        if (items.length > 0) setLineItemId((prev) => prev || items[0].id)
+        if (itemRows.length > 0) setItemId((prev) => prev || itemRows[0].id)
       })
       .catch((err: unknown) => setLoadError(errorMessage(err)))
-  }, [project.id])
+  }, [contract.id])
 
-  const dayEntries = useLiveQuery(
-    () => db.dailyEntries.where('projectId').equals(project.id).and((e) => e.entryDate === entryDate).sortBy('createdAt'),
-    [project.id, entryDate],
-    [] as QueuedDailyEntry[],
+  const dayRecords = useLiveQuery(
+    () => db.quantityRecords.where('contractId').equals(contract.id).and((r) => r.workDate === workDate).sortBy('createdAt'),
+    [contract.id, workDate],
+    [] as QueuedQuantityRecord[],
   )
 
-  const lineItemById = useMemo(() => new Map(lineItems.map((li) => [li.id, li])), [lineItems])
-  const selectedLineItem = lineItemById.get(lineItemId)
+  const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
+  const selectedItem = itemById.get(itemId)
 
   const supersededByConfirmed = useMemo(() => {
     const set = new Set<string>()
-    for (const e of dayEntries) {
-      if (e.supersedes && e.status === 'confirmed') set.add(e.supersedes)
+    for (const r of dayRecords) {
+      if (r.supersedes && r.status === 'confirmed') set.add(r.supersedes)
     }
     return set
-  }, [dayEntries])
+  }, [dayRecords])
 
   const reachMetres = useMemo(() => {
     if (mode !== 'range') return null
@@ -90,17 +90,17 @@ export function EntryScreen() {
 
   const chainageEntries: ChainageEntry[] = useMemo(
     () =>
-      dayEntries
-        .filter((e) => e.stationFrom !== null)
-        .map((e) => ({
-          id: e.id,
-          stationFrom: e.stationFrom as number,
-          stationTo: e.stationTo,
-          status: e.status,
-          itemNo: lineItemById.get(e.lineItemId)?.itemNo ?? '?',
-          quantity: e.quantity,
+      dayRecords
+        .filter((r) => r.stationFrom !== null)
+        .map((r) => ({
+          id: r.id,
+          stationFrom: r.stationFrom as number,
+          stationTo: r.stationTo,
+          status: r.status,
+          itemNumber: itemById.get(r.itemId)?.itemNumber ?? '?',
+          quantity: r.quantity,
         })),
-    [dayEntries, lineItemById],
+    [dayRecords, itemById],
   )
 
   function resetForRepeat() {
@@ -111,16 +111,16 @@ export function EntryScreen() {
     setCorrectingId(null)
   }
 
-  function startCorrection(entry: QueuedDailyEntry) {
-    setCorrectingId(entry.id)
-    setEntryDate(entry.entryDate)
-    setLineItemId(entry.lineItemId)
-    setMode(entry.stationTo !== null ? 'range' : 'single')
-    setStationFrom(entry.stationFrom !== null ? String(entry.stationFrom) : '')
-    setStationTo(entry.stationTo !== null ? String(entry.stationTo) : '')
-    setQuantity(String(entry.quantity))
-    setNote(entry.note ?? '')
-    setLocation(entry.location ?? '')
+  function startCorrection(record: QueuedQuantityRecord) {
+    setCorrectingId(record.id)
+    setWorkDate(record.workDate)
+    setItemId(record.itemId)
+    setMode(record.stationTo !== null ? 'range' : 'single')
+    setStationFrom(record.stationFrom !== null ? String(record.stationFrom) : '')
+    setStationTo(record.stationTo !== null ? String(record.stationTo) : '')
+    setQuantity(String(record.quantity))
+    setNote(record.note ?? '')
+    setLocation(record.location ?? '')
     setFormError(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -128,8 +128,8 @@ export function EntryScreen() {
   async function handleConfirm(id: string) {
     setConfirmingId(id)
     try {
-      await confirmDailyEntry(id)
-      await importServerEntries(project.id)
+      await confirmQuantityRecord(id)
+      await importServerQuantityRecords(contract.id)
     } catch (err) {
       setFormError(errorMessage(err))
     } finally {
@@ -145,8 +145,8 @@ export function EntryScreen() {
       setFormError('Not signed in.')
       return
     }
-    if (!lineItemId) {
-      setFormError('Choose a line item.')
+    if (!itemId) {
+      setFormError('Choose an item.')
       return
     }
     const qty = Number(quantity)
@@ -182,11 +182,11 @@ export function EntryScreen() {
 
     setSubmitting(true)
     try {
-      await enqueueEntry({
+      await enqueueQuantityRecord({
         id: crypto.randomUUID(),
-        projectId: project.id,
-        lineItemId,
-        entryDate,
+        contractId: contract.id,
+        itemId,
+        workDate,
         location: location.trim() || null,
         quantity: qty,
         note: note.trim() || null,
@@ -223,16 +223,16 @@ export function EntryScreen() {
         <label className="entry-label" htmlFor="entry-date">
           Date
         </label>
-        <input id="entry-date" className="entry-input entry-input-mono" type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} required />
+        <input id="entry-date" className="entry-input entry-input-mono" type="date" value={workDate} onChange={(e) => setWorkDate(e.target.value)} required />
 
-        <label className="entry-label" htmlFor="entry-line-item">
-          Line item
+        <label className="entry-label" htmlFor="entry-item">
+          Item
         </label>
-        <select id="entry-line-item" className="entry-input" value={lineItemId} onChange={(e) => setLineItemId(e.target.value)} required>
-          {lineItems.length === 0 && <option value="">No line items on this project</option>}
-          {lineItems.map((li) => (
-            <option key={li.id} value={li.id}>
-              {li.itemNo} — {li.description}
+        <select id="entry-item" className="entry-input" value={itemId} onChange={(e) => setItemId(e.target.value)} required>
+          {items.length === 0 && <option value="">No items on this contract</option>}
+          {items.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.itemNumber} — {item.description}
             </option>
           ))}
         </select>
@@ -278,10 +278,10 @@ export function EntryScreen() {
             </div>
           )}
         </div>
-        {mode === 'range' && <p className="entry-reach-readout">{reachMetres !== null ? `reach ${reachMetres.toFixed(1)} m` : ' '}</p>}
+        {mode === 'range' && <p className="entry-reach-readout">{reachMetres !== null ? `reach ${reachMetres.toFixed(1)} m` : ' '}</p>}
 
         <label className="entry-label" htmlFor="entry-quantity">
-          Quantity{selectedLineItem ? ` (${selectedLineItem.unit})` : ''}
+          Quantity{selectedItem ? ` (${selectedItem.unit})` : ''}
         </label>
         <input
           id="entry-quantity"
@@ -293,7 +293,7 @@ export function EntryScreen() {
           onChange={(e) => setQuantity(e.target.value)}
           required
         />
-        {selectedLineItem && isLumpUnit(selectedLineItem.unit) && <p className="entry-hint">Lump-sum item — quantity is a % or portion complete, per project convention.</p>}
+        {selectedItem && isLumpUnit(selectedItem.unit) && <p className="entry-hint">Lump-sum item — quantity is a % or portion complete, per contract convention.</p>}
 
         <label className="entry-label" htmlFor="entry-location">
           Location
@@ -325,38 +325,38 @@ export function EntryScreen() {
       </form>
 
       <div className="entry-day-list">
-        <h2 className="entry-day-list-title">{entryDate}</h2>
-        {dayEntries.length === 0 && <p className="entry-day-list-empty">No entries yet today.</p>}
-        {dayEntries.map((e) => {
-          const li = lineItemById.get(e.lineItemId)
+        <h2 className="entry-day-list-title">{workDate}</h2>
+        {dayRecords.length === 0 && <p className="entry-day-list-empty">No entries yet today.</p>}
+        {dayRecords.map((r) => {
+          const item = itemById.get(r.itemId)
           return (
-            <div key={e.id} className="entry-row">
+            <div key={r.id} className="entry-row">
               <div className="entry-row-main">
-                <span className="entry-row-item">{li?.itemNo ?? e.lineItemId.slice(0, 8)}</span>
+                <span className="entry-row-item">{item?.itemNumber ?? r.itemId.slice(0, 8)}</span>
                 <span className="entry-row-quantity entry-input-mono">
-                  {e.quantity}
-                  {li ? ` ${li.unit}` : ''}
+                  {r.quantity}
+                  {item ? ` ${item.unit}` : ''}
                 </span>
-                {e.stationFrom !== null && (
+                {r.stationFrom !== null && (
                   <span className="entry-row-station entry-input-mono">
-                    {e.stationFrom}
-                    {e.stationTo !== null ? `–${e.stationTo}` : ''}
+                    {r.stationFrom}
+                    {r.stationTo !== null ? `–${r.stationTo}` : ''}
                   </span>
                 )}
               </div>
               <div className="entry-row-meta">
-                {e.location && <span className="entry-row-location">{e.location}</span>}
-                <span className={`entry-chip entry-chip-${e.status}`}>{e.status}</span>
-                {e.pending && <span className="entry-chip entry-chip-pending">queued</span>}
-                {supersededByConfirmed.has(e.id) && <span className="entry-chip entry-chip-superseded">superseded</span>}
+                {r.location && <span className="entry-row-location">{r.location}</span>}
+                <span className={`entry-chip entry-chip-${r.status}`}>{r.status}</span>
+                {r.pending && <span className="entry-chip entry-chip-pending">queued</span>}
+                {supersededByConfirmed.has(r.id) && <span className="entry-chip entry-chip-superseded">superseded</span>}
               </div>
               <div className="entry-row-actions">
-                {e.status === 'draft' && e.pending === false && (
-                  <button type="button" className="entry-row-btn" disabled={confirmingId === e.id} onClick={() => void handleConfirm(e.id)}>
-                    {confirmingId === e.id ? 'Confirming…' : 'Confirm'}
+                {r.status === 'draft' && r.pending === false && (
+                  <button type="button" className="entry-row-btn" disabled={confirmingId === r.id} onClick={() => void handleConfirm(r.id)}>
+                    {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
                   </button>
                 )}
-                <button type="button" className="entry-row-btn" onClick={() => startCorrection(e)}>
+                <button type="button" className="entry-row-btn" onClick={() => startCorrection(r)}>
                   Correct
                 </button>
               </div>

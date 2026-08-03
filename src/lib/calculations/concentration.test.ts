@@ -4,18 +4,18 @@ import { concentrationByValue } from './concentration'
 describe('concentrationByValue', () => {
   it('sorts descending by value', () => {
     const rows = concentrationByValue([
-      { itemNo: 'a', value: 50 },
-      { itemNo: 'b', value: 100 },
-      { itemNo: 'c', value: 25 },
+      { itemNumber: 'a', value: 50 },
+      { itemNumber: 'b', value: 100 },
+      { itemNumber: 'c', value: 25 },
     ])
-    expect(rows.map((r) => r.itemNo)).toEqual(['b', 'a', 'c'])
+    expect(rows.map((r) => r.itemNumber)).toEqual(['b', 'a', 'c'])
   })
 
   it('computes a running cumulative share that reaches 1 at the end', () => {
     const rows = concentrationByValue([
-      { itemNo: 'a', value: 100 },
-      { itemNo: 'b', value: 50 },
-      { itemNo: 'c', value: 25 },
+      { itemNumber: 'a', value: 100 },
+      { itemNumber: 'b', value: 50 },
+      { itemNumber: 'c', value: 25 },
     ])
     expect(rows[0].cumulativeShare).toBeCloseTo(100 / 175, 5)
     expect(rows[1].cumulativeShare).toBeCloseTo(150 / 175, 5)
@@ -23,7 +23,7 @@ describe('concentrationByValue', () => {
   })
 
   it('does not divide by zero when total value is zero', () => {
-    const rows = concentrationByValue([{ itemNo: 'a', value: 0 }])
+    const rows = concentrationByValue([{ itemNumber: 'a', value: 0 }])
     expect(rows[0].cumulativeShare).toBe(0)
   })
 

@@ -4,7 +4,7 @@ export type Unit = (typeof UNITS)[number]
 
 const LUMP_UNITS: readonly string[] = ['Lump Sum', 'Prov. Sum']
 
-/** Lump Sum / Prov. Sum items don't have a meaningful percent-complete against their bid_quantity (typically 1) — see lineItemProgress.ts. */
+/** Lump Sum / Prov. Sum items don't have a meaningful percent-complete against their approximate_quantity (typically 1) — see itemProgress.ts. */
 export function isLumpUnit(unit: string): boolean {
   return LUMP_UNITS.includes(unit)
 }

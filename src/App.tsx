@@ -5,9 +5,9 @@ import { AppShell } from './shell/AppShell'
 import { DesktopShell } from './shell/DesktopShell'
 import { SignInScreen } from './screens/SignIn/SignInScreen'
 import { EntryScreen } from './screens/Entry/EntryScreen'
-import { LineItemsScreen } from './screens/LineItems/LineItemsScreen'
+import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
-import { DailyEntryScreen } from './screens/DailyEntry/DailyEntryScreen'
+import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
 import { DashboardScreen } from './screens/Dashboard/DashboardScreen'
 
 // The mobile field-capture route (index, "/") is built, deployed, and
@@ -42,7 +42,7 @@ function App() {
                 path="/line-items"
                 element={
                   <ErrorBoundary>
-                    <LineItemsScreen />
+                    <ItemsScreen />
                   </ErrorBoundary>
                 }
               />
@@ -58,7 +58,7 @@ function App() {
                 path="/daily-entry"
                 element={
                   <ErrorBoundary>
-                    <DailyEntryScreen />
+                    <QuantityRecordsScreen />
                   </ErrorBoundary>
                 }
               />

@@ -1,7 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 
 /**
- * Local, offline-first store for daily_entries. Mirrors the server table
+ * Local, offline-first store for quantity_records. Mirrors the server table
  * exactly, plus one local-only field: `pending`. Both server-confirmed rows
  * (imported on load) and locally-queued not-yet-synced entries live here
  * together — one local table is the entire source of truth for the entry
@@ -9,22 +9,22 @@ import Dexie, { type EntityTable } from 'dexie'
  * archived build's widthReadingsQueue; reused deliberately, not reinvented.
  *
  * `id` IS the primary key here, not a separate auto-increment localId with
- * a nullable serverId filled in after sync — daily_entries.id is a
+ * a nullable serverId filled in after sync — quantity_records.id is a
  * client-generated UUID decided at capture time (spec §3), so the local and
  * server id are the same value from the moment the row exists. There's
  * nothing to reconcile after sync beyond flipping `pending` to false.
  */
-export interface QueuedDailyEntry {
+export interface QueuedQuantityRecord {
   id: string
-  projectId: string
-  lineItemId: string
-  /** entry_date, YYYY-MM-DD — entered by the user, never read from the device clock. */
-  entryDate: string
+  contractId: string
+  itemId: string
+  /** work_date, YYYY-MM-DD — entered by the user, never read from the device clock. */
+  workDate: string
   location: string | null
   quantity: number
   note: string | null
   status: 'draft' | 'confirmed'
-  /** id of the entry this one corrects, if any. Never edit a synced row in place — a correction is a new row. */
+  /** id of the record this one corrects, if any. Never edit a synced row in place — a correction is a new row. */
   supersedes: string | null
   confirmedBy: string | null
   confirmedAt: string | null
@@ -40,14 +40,28 @@ export interface QueuedDailyEntry {
 }
 
 const db = new Dexie('novacore_v1') as Dexie & {
-  dailyEntries: EntityTable<QueuedDailyEntry, 'id'>
+  quantityRecords: EntityTable<QueuedQuantityRecord, 'id'>
 }
 
 // `pending` is deliberately not indexed — IndexedDB (and Dexie's
-// IndexableType) doesn't support boolean as a key; syncQueuedEntries filters
-// it in JS instead of `.where('pending')`.
+// IndexableType) doesn't support boolean as a key; syncQueuedQuantityRecords
+// filters it in JS instead of `.where('pending')`.
+//
+// v1 had this store as `dailyEntries` with `projectId`/`entryDate` keys —
+// same database name, different shape. A version bump (not a same-version
+// edit) is required so Dexie actually creates the new store for anyone with
+// an existing `novacore_v1` database in their browser; editing v1's
+// `.stores()` in place would leave `quantityRecords` undefined for them
+// (Dexie only re-runs the schema for versions higher than what's already on
+// disk). No upgrade() to carry rows over — pre-launch, no real user data yet,
+// and the field renames (project_id -> contract_id etc.) would need
+// transforming regardless. A stale v1 database is simply superseded.
 db.version(1).stores({
   dailyEntries: 'id, projectId, entryDate, status',
+})
+db.version(2).stores({
+  dailyEntries: null,
+  quantityRecords: 'id, contractId, workDate, status',
 })
 
 export { db }

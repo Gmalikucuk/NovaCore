@@ -1,6 +1,6 @@
 import { Navigate, Outlet } from 'react-router-dom'
 import { useSession } from '../lib/useSession'
-import { useCurrentProject } from '../lib/useCurrentProject'
+import { useCurrentContract } from '../lib/useCurrentContract'
 import { signOut } from '../lib/supabase/auth'
 import './AppShell.css'
 
@@ -14,7 +14,7 @@ import './AppShell.css'
  */
 export function AppShell() {
   const session = useSession()
-  const projectState = useCurrentProject()
+  const contractState = useCurrentContract()
 
   if (session === undefined) return null
   if (session === null) return <Navigate to="/sign-in" replace />
@@ -23,30 +23,30 @@ export function AppShell() {
     <div className="app-shell">
       <header className="app-shell-header">
         <span className="app-shell-wordmark">NovaCore</span>
-        {projectState.status === 'ready' && projectState.projects.length > 1 ? (
+        {contractState.status === 'ready' && contractState.contracts.length > 1 ? (
           <select
-            className="app-shell-project-select"
-            value={projectState.current?.id ?? ''}
-            onChange={(e) => projectState.setCurrentId(e.target.value)}
+            className="app-shell-contract-select"
+            value={contractState.current?.id ?? ''}
+            onChange={(e) => contractState.setCurrentId(e.target.value)}
           >
-            {projectState.projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
+            {contractState.contracts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
               </option>
             ))}
           </select>
-        ) : projectState.status === 'ready' && projectState.current ? (
-          <span className="app-shell-project-name">{projectState.current.name}</span>
+        ) : contractState.status === 'ready' && contractState.current ? (
+          <span className="app-shell-contract-name">{contractState.current.name}</span>
         ) : null}
         <button className="app-shell-sign-out" type="button" onClick={() => void signOut()}>
           Sign out
         </button>
       </header>
       <main className="app-shell-main">
-        {projectState.status === 'loading' && <p className="app-shell-status">Loading your projects…</p>}
-        {projectState.status === 'none' && <p className="app-shell-status">You aren't assigned to any project yet.</p>}
-        {projectState.status === 'error' && <p className="app-shell-status app-shell-status-error">{projectState.message}</p>}
-        {projectState.status === 'ready' && projectState.current && <Outlet context={projectState.current} />}
+        {contractState.status === 'loading' && <p className="app-shell-status">Loading your contracts…</p>}
+        {contractState.status === 'none' && <p className="app-shell-status">You aren't assigned to any contract yet.</p>}
+        {contractState.status === 'error' && <p className="app-shell-status app-shell-status-error">{contractState.message}</p>}
+        {contractState.status === 'ready' && contractState.current && <Outlet context={contractState.current} />}
       </main>
     </div>
   )

@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { percentComplete, placedToDateByItem } from './lineItemProgress'
+import { percentComplete, placedToDateByItem } from './itemProgress'
 
 describe('placedToDateByItem', () => {
-  it('sums multiple rows for the same line item', () => {
+  it('sums multiple rows for the same item', () => {
     const totals = placedToDateByItem([
-      { lineItemId: 'a', quantity: 10 },
-      { lineItemId: 'a', quantity: 15 },
+      { itemId: 'a', quantity: 10 },
+      { itemId: 'a', quantity: 15 },
     ])
     expect(totals.get('a')).toBe(25)
   })
 
-  it('keeps totals for different line items separate', () => {
+  it('keeps totals for different items separate', () => {
     const totals = placedToDateByItem([
-      { lineItemId: 'a', quantity: 10 },
-      { lineItemId: 'b', quantity: 5 },
+      { itemId: 'a', quantity: 10 },
+      { itemId: 'b', quantity: 5 },
     ])
     expect(totals.get('a')).toBe(10)
     expect(totals.get('b')).toBe(5)
@@ -23,24 +23,24 @@ describe('placedToDateByItem', () => {
     expect(placedToDateByItem([]).size).toBe(0)
   })
 
-  // The scenario daily_entries_effective exists for: an item with a
+  // The scenario quantity_records_effective exists for: an item with a
   // confirmed original (42.5) and a still-draft correction contributes only
   // the original — the aggregation just sums whatever effective rows it's
   // handed, so this is really asserting that a caller who correctly filtered
   // to the effective set gets the right total, not re-testing the filter
   // itself (see effectiveEntries.test.ts for that).
   it('reflects only the effective row when a correction is still under review', () => {
-    const totals = placedToDateByItem([{ lineItemId: 'a', quantity: 42.5 }])
+    const totals = placedToDateByItem([{ itemId: 'a', quantity: 42.5 }])
     expect(totals.get('a')).toBe(42.5)
   })
 })
 
 describe('percentComplete', () => {
-  it('computes placed / bidQuantity for a normal unit', () => {
+  it('computes placed / approximateQuantity for a normal unit', () => {
     expect(percentComplete(50, 200, 'Tonne')).toBe(0.25)
   })
 
-  it('is null for a Lump Sum item regardless of bid quantity', () => {
+  it('is null for a Lump Sum item regardless of approximate quantity', () => {
     expect(percentComplete(5, 1, 'Lump Sum')).toBeNull()
   })
 
@@ -48,7 +48,7 @@ describe('percentComplete', () => {
     expect(percentComplete(0, 1, 'Prov. Sum')).toBeNull()
   })
 
-  it('is null when bid quantity is zero, not a divide-by-zero', () => {
+  it('is null when approximate quantity is zero, not a divide-by-zero', () => {
     expect(percentComplete(10, 0, 'Tonne')).toBeNull()
   })
 

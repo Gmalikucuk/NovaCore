@@ -5,7 +5,7 @@ export interface ChainageEntry {
   stationFrom: number
   stationTo: number | null
   status: 'draft' | 'confirmed'
-  itemNo: string
+  itemNumber: string
   quantity: number
 }
 
@@ -22,7 +22,7 @@ function km(v: number): string {
  * from whatever's actually been entered, the prototype's own fallback path
  * for an unbounded site.
  *
- * Scoped to the whole day, not one line item or location: the point is
+ * Scoped to the whole day, not one item or location: the point is
  * making a wrong station visible against everything else entered that day,
  * not just within whatever's currently selected.
  */
@@ -54,7 +54,7 @@ export function ChainageStrip({ entries }: { entries: ChainageEntry[] }) {
           return (
             <div
               key={e.id}
-              title={`${e.itemNo}  ${km(e.stationFrom)}${e.stationTo != null ? '–' + km(e.stationTo) : ''}  ${e.quantity}`}
+              title={`${e.itemNumber}  ${km(e.stationFrom)}${e.stationTo != null ? '–' + km(e.stationTo) : ''}  ${e.quantity}`}
               className={'chainage-strip-reach' + (e.status === 'confirmed' ? ' chainage-strip-reach-confirmed' : ' chainage-strip-reach-draft')}
               style={{ left: `${left}%`, width: `${width}%` }}
             />

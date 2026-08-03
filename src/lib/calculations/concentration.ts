@@ -1,5 +1,5 @@
 export interface ConcentrationInput {
-  itemNo: string
+  itemNumber: string
   value: number
 }
 
