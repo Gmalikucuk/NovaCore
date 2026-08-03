@@ -311,6 +311,68 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null &
 check "quantities: v_item_progress_rate returns rows (no view_rates needed)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# Progress estimate reconciliation (0010) — finance material even without a
+# price column: certified quantities and paid amounts reveal Unit Prices by
+# arithmetic, so reads gate on view_rates, not mere membership. Nothing else
+# ever populates these tables (0010's own header: no UI for entering estimates
+# yet), so `full` (confirm_quantity) upserts one estimate + one reconciliation
+# row here purely to give the checks below real data to be correctly blocked
+# from — plain INSERT would 409 on a second run against the same period
+# (progress_estimates' own unique(contract_id, period_start, period_end)), so
+# this is the one setup step in the suite using on_conflict=merge-duplicates
+# instead of the shared request() helper, deliberately, for idempotent reruns.
+# =============================================================================
+echo
+echo "=== Progress estimate reconciliation (0010) ==="
+
+upsert_resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/progress_estimates?on_conflict=contract_id,period_start,period_end" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $FULL_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-01-01\",\"period_end\":\"2026-01-31\"}")
+STATUS=$(printf '%s' "$upsert_resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$upsert_resp" | sed '$d')
+ESTIMATE_ID=$(json_field "$BODY_OUT" 0 id)
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ -n "$ESTIMATE_ID" ] && ok=1
+check "full: upsert progress_estimates (setup — real data for the wall below)" "200 or 201" "$ok" "$STATUS $BODY_OUT"
+
+upsert_resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/progress_estimate_items?on_conflict=progress_estimate_id,item_id" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $FULL_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"progress_estimate_id\":\"$ESTIMATE_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"certified_quantity\":100}")
+STATUS=$(printf '%s' "$upsert_resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$upsert_resp" | sed '$d')
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && ok=1
+check "full: upsert progress_estimate_items (setup)" "200 or 201" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimates?select=*" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: progress_estimates (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimate_items?select=*" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: progress_estimate_items (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_progress_estimate_reconciliation?select=*&contract_id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: v_progress_estimate_reconciliation (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimates?select=*&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: progress_estimates on sandbox project (zero rights)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_progress_estimate_reconciliation?select=*&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: v_progress_estimate_reconciliation on sandbox project" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_progress_estimate_reconciliation?select=*&contract_id=eq.$PROJECT_ID" "$VIEWER_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "viewer: v_progress_estimate_reconciliation sees the row (view_rates)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request POST "progress_estimates" "$QUANTITIES_TOKEN" "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-02-01\",\"period_end\":\"2026-02-28\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: insert progress_estimates rejected (no confirm_quantity)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # Positive controls — prove the seats can still do their jobs. A suite that
 # only asserts "empty"/"rejected" passes just as well when auth is silently
 # broken; these are the checks that would actually catch that.

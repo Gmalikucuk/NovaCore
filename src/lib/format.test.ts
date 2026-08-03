@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { money, percent, quantity, rate, station } from './format'
+import { money, parseStation, percent, quantity, rate, station, stationDecimal } from './format'
 
 describe('quantity', () => {
   it('drops a bare .0', () => {
@@ -54,15 +54,51 @@ describe('percent', () => {
   })
 })
 
-describe('station', () => {
+describe('stationDecimal', () => {
   it('defaults to three decimals, no thousands separator', () => {
-    expect(station(12500.5)).toBe('12500.500')
+    expect(stationDecimal(12500.5)).toBe('12500.500')
   })
   it('accepts a narrower digit count for compressed axis labels', () => {
-    expect(station(12500.5, 0)).toBe('12501')
-    expect(station(12500.5, 1)).toBe('12500.5')
+    expect(stationDecimal(12500.5, 0)).toBe('12501')
+    expect(stationDecimal(12500.5, 1)).toBe('12500.5')
   })
   it('renders null as an em dash', () => {
+    expect(stationDecimal(null)).toBe('—')
+  })
+})
+
+describe('station', () => {
+  it('formats whole km, +, three-digit metres', () => {
+    expect(station(19.385)).toBe('19+385')
+  })
+  it('pads metres under 100', () => {
+    expect(station(4.007)).toBe('4+007')
+  })
+  it('applies the same notation to a reach (a length, not just a point)', () => {
+    expect(station(0.51)).toBe('0+510')
+  })
+  it('carries a rounding-up metres value into the next km', () => {
+    expect(station(12.9996)).toBe('13+000')
+  })
+  it('renders null/undefined as an em dash', () => {
     expect(station(null)).toBe('—')
+    expect(station(undefined)).toBe('—')
+  })
+})
+
+describe('parseStation', () => {
+  it('parses the + notation', () => {
+    expect(parseStation('19+385')).toBeCloseTo(19.385, 6)
+  })
+  it('parses a plain decimal km', () => {
+    expect(parseStation('19.385')).toBeCloseTo(19.385, 6)
+  })
+  it('parses both forms to the same stored value', () => {
+    expect(parseStation('4+007')).toBeCloseTo(parseStation('4.007') as number, 6)
+  })
+  it('returns null for an empty or unparseable input', () => {
+    expect(parseStation('')).toBeNull()
+    expect(parseStation('abc')).toBeNull()
+    expect(parseStation('12+abc')).toBeNull()
   })
 })

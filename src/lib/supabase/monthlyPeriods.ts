@@ -159,3 +159,74 @@ export async function fetchItemProgressRate(contractId: string): Promise<ItemPro
     }
   })
 }
+
+/**
+ * Every field on `v_item_progress` — unlike `v_item_progress_rate` above
+ * (built on top of it, but only for the "needs attention" rate math), this
+ * carries `percentComplete`/`provisionalSum`/`authorizedValue`, which the
+ * Tracker needs for Lump Sum and Provisional Sum Items (neither has a
+ * meaningful quantity). No `view_rates` gate — the view carries no money,
+ * same as `v_item_progress_rate`.
+ */
+export interface ItemProgress {
+  itemId: string
+  contractId: string
+  itemNumber: string
+  description: string
+  unit: string
+  itemKind: ItemKind
+  approximateQuantity: number
+  percentComplete: number | null
+  provisionalSum: number | null
+  authorizedValue: number | null
+  quantityToDate: number
+  proportionComplete: number | null
+  recordCount: number
+  lastWorkDate: string | null
+}
+
+interface RawItemProgressRow {
+  item_id: string
+  contract_id: string
+  item_number: string
+  description: string
+  unit: string
+  item_kind: ItemKind
+  approximate_quantity: string
+  percent_complete: string | null
+  provisional_sum: string | null
+  authorized_value: string | null
+  quantity_to_date: string
+  proportion_complete: string | null
+  record_count: number
+  last_work_date: string | null
+}
+
+export async function fetchItemProgress(contractId: string): Promise<ItemProgress[]> {
+  const { data, error } = await supabase
+    .from('v_item_progress')
+    .select(
+      'item_id, contract_id, item_number, description, unit, item_kind, approximate_quantity, percent_complete, provisional_sum, authorized_value, quantity_to_date, proportion_complete, record_count, last_work_date',
+    )
+    .eq('contract_id', contractId)
+  if (error) throw error
+  return (data ?? []).map((row) => {
+    const r = row as unknown as RawItemProgressRow
+    return {
+      itemId: r.item_id,
+      contractId: r.contract_id,
+      itemNumber: r.item_number,
+      description: r.description,
+      unit: r.unit,
+      itemKind: r.item_kind,
+      approximateQuantity: Number(r.approximate_quantity),
+      percentComplete: r.percent_complete === null ? null : Number(r.percent_complete),
+      provisionalSum: r.provisional_sum === null ? null : Number(r.provisional_sum),
+      authorizedValue: r.authorized_value === null ? null : Number(r.authorized_value),
+      quantityToDate: Number(r.quantity_to_date),
+      proportionComplete: r.proportion_complete === null ? null : Number(r.proportion_complete),
+      recordCount: r.record_count,
+      lastWorkDate: r.last_work_date,
+    }
+  })
+}

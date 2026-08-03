@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareItemCodes } from './naturalSort'
+import { compareItemCodes, sectionLabel, sectionPrefix } from './naturalSort'
 
 describe('compareItemCodes', () => {
   it('sorts zero-padded numeric segments numerically, not lexicographically', () => {
@@ -33,5 +33,28 @@ describe('compareItemCodes', () => {
 
   it('falls back to string comparison for non-numeric segments', () => {
     expect(compareItemCodes('A.01', 'B.01')).toBeLessThan(0)
+  })
+})
+
+describe('sectionPrefix', () => {
+  it('reads the leading two-digit prefix off an item number', () => {
+    expect(sectionPrefix('05.03.03')).toBe('05')
+    expect(sectionPrefix('04.10')).toBe('04')
+  })
+
+  it('pads an unpadded single-digit prefix', () => {
+    expect(sectionPrefix('5.03.03')).toBe('05')
+  })
+})
+
+describe('sectionLabel', () => {
+  it('maps a known prefix to its real Schedule 7 name', () => {
+    expect(sectionLabel('01')).toBe('01 General')
+    expect(sectionLabel('05')).toBe('05 Paving')
+    expect(sectionLabel('06')).toBe('06 Signing')
+  })
+
+  it('falls back to a generated label for an unknown prefix', () => {
+    expect(sectionLabel('99')).toBe('Section 99')
   })
 })

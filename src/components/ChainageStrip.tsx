@@ -1,4 +1,4 @@
-import { quantity as fmtQuantity, station } from '../lib/format'
+import { quantity as fmtQuantity, station, stationDecimal } from '../lib/format'
 
 export interface ChainageEntry {
   id: string
@@ -66,7 +66,7 @@ export function ChainageStrip({ entries }: { entries: ChainageEntry[] }) {
         {ticks.map((t) => (
           <div key={t} className="absolute top-[26px] flex -translate-x-1/2 flex-col items-center" style={{ left: `${pct(t)}%` }}>
             <div className="h-[5px] w-px bg-nc-border" />
-            <div className="nc-numeric mt-0.5 whitespace-nowrap text-[10px] text-nc-text-muted">{station(t, span > 4 ? 0 : 1)}</div>
+            <div className="nc-numeric mt-0.5 whitespace-nowrap text-[10px] text-nc-text-muted">{stationDecimal(t, span > 4 ? 0 : 1)}</div>
           </div>
         ))}
       </div>

@@ -11,6 +11,7 @@ import { RatesScreen } from './screens/Rates/RatesScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
 import { OverviewScreen } from './screens/Overview/OverviewScreen'
 import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
+import { TrackerScreen } from './screens/Tracker/TrackerScreen'
 
 function App() {
   return (
@@ -77,6 +78,14 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <OverviewScreen />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/tracker"
+                element={
+                  <ErrorBoundary>
+                    <TrackerScreen />
                   </ErrorBoundary>
                 }
               />

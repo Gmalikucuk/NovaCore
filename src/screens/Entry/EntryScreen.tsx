@@ -12,7 +12,7 @@ import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
 import { ChainageStrip, type ChainageEntry } from '../../components/ChainageStrip'
 import { Button, Card, EmptyState, Input, NotificationBanner, PageHeader, Select, StatusBadge, Textarea } from '../../components/ui'
-import { quantity as fmtQuantity, station } from '../../lib/format'
+import { quantity as fmtQuantity, parseStation, station } from '../../lib/format'
 
 type StationMode = 'single' | 'range'
 
@@ -91,9 +91,9 @@ export function EntryScreen() {
 
   const reachMetres = useMemo(() => {
     if (mode !== 'range') return null
-    const from = Number(stationFrom)
-    const to = Number(stationTo)
-    if (stationFrom === '' || stationTo === '' || Number.isNaN(from) || Number.isNaN(to)) return null
+    const from = parseStation(stationFrom)
+    const to = parseStation(stationTo)
+    if (from === null || to === null) return null
     return to - from
   }, [mode, stationFrom, stationTo])
 
@@ -163,9 +163,9 @@ export function EntryScreen() {
       setFormError('Enter a quantity greater than zero.')
       return
     }
-    const from = stationFrom === '' ? null : Number(stationFrom)
-    if (stationFrom !== '' && Number.isNaN(from)) {
-      setFormError('Station From is not a valid number.')
+    const from = stationFrom === '' ? null : parseStation(stationFrom)
+    if (stationFrom !== '' && from === null) {
+      setFormError('Station From is not a valid station — try 12+400 or 12.400.')
       return
     }
     let to: number | null = null
@@ -174,9 +174,9 @@ export function EntryScreen() {
         setFormError('Enter a Station To, or switch to single-station mode.')
         return
       }
-      to = Number(stationTo)
-      if (Number.isNaN(to)) {
-        setFormError('Station To is not a valid number.')
+      to = parseStation(stationTo)
+      if (to === null) {
+        setFormError('Station To is not a valid station — try 12+910 or 12.910.')
         return
       }
       if (from === null) {
@@ -281,9 +281,9 @@ export function EntryScreen() {
                   <Input
                     id="entry-station-from"
                     className="nc-numeric"
-                    type="number"
+                    type="text"
                     inputMode="decimal"
-                    step="0.001"
+                    placeholder="12+400"
                     value={stationFrom}
                     onChange={(e) => setStationFrom(e.target.value)}
                     disabled={!formUsable}
@@ -297,9 +297,9 @@ export function EntryScreen() {
                     <Input
                       id="entry-station-to"
                       className="nc-numeric"
-                      type="number"
+                      type="text"
                       inputMode="decimal"
-                      step="0.001"
+                      placeholder="12+910"
                       value={stationTo}
                       onChange={(e) => setStationTo(e.target.value)}
                       disabled={!formUsable}
@@ -307,7 +307,7 @@ export function EntryScreen() {
                   </div>
                 )}
               </div>
-              {mode === 'range' && <p className="nc-numeric -mt-1 min-h-[1.2em] text-sm text-nc-accent">{reachMetres !== null ? `reach ${station(reachMetres, 1)} m` : ' '}</p>}
+              {mode === 'range' && <p className="nc-numeric -mt-1 min-h-[1.2em] text-sm text-nc-accent">{reachMetres !== null ? `reach ${station(reachMetres)}` : ' '}</p>}
 
               <div>
                 <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-quantity">

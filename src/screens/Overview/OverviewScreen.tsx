@@ -398,7 +398,27 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
                 {monthRows.map((r) => (
                   <TR key={r.item.id}>
                     <TD className="nc-numeric">{r.item.itemNumber}</TD>
-                    <TD prose>{r.item.description}</TD>
+                    {/* Fixed width, not left to the table's auto-layout: unconstrained, this
+                        column measured 506px wide in the period column set vs 352px in the
+                        to-date set for the exact same text — auto-layout balances its width
+                        against whichever numeric columns happen to be visible, so it silently
+                        pushed the period set to 1321px of real content inside a 1154px
+                        container (measured, not estimated) at 1440px. `title` is mouse-hover-only
+                        and shows nothing on a touch screen — fine here since this table is
+                        desktop-only, but don't copy the pattern onto a touch-reachable screen
+                        without a tap-to-reveal alternative. */}
+                    <TD prose>
+                      {/* The truncate/max-width lives on this inner div, not
+                          the TD itself — a <td>'s own max-width is not
+                          reliably respected by an auto-layout table (this
+                          table isn't table-layout: fixed), but a fixed-width
+                          block INSIDE it is, since the browser only needs to
+                          make room for that block's width, not the text's
+                          natural content width. */}
+                      <div className="max-w-[280px] truncate" title={r.item.description}>
+                        {r.item.description}
+                      </div>
+                    </TD>
                     {monthView === 'period' ? (
                       <>
                         <TD align="right" className="nc-numeric">
@@ -446,7 +466,12 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
                 <tfoot>
                   <tr>
                     <td colSpan={2} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-xs text-nc-text-muted">
-                      Contract totals for {formatMonthLabel(selectedMonth)} — quantity columns aren't summed (mixed units across items); the $ columns are.
+                      {/* Width-capped for the same reason as the Description column above: an
+                          unconstrained colSpan cell's content width feeds into the auto-layout
+                          algorithm for BOTH columns it spans — this exact sentence, unwrapped,
+                          was the actual source of Description's 506px width, not the row
+                          descriptions themselves (already capped and had no effect alone). */}
+                      <div className="max-w-[420px]">Contract totals for {formatMonthLabel(selectedMonth)} — quantity columns aren't summed (mixed units across items); the $ columns are.</div>
                     </td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.value)}</td>

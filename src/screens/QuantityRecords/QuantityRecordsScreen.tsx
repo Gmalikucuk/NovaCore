@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { IconCalendarPlus } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { confirmQuantityRecord, fetchDistinctLocations, fetchQuantityRecordsForDate, pushQuantityRecord } from '../../lib/supabase/quantityRecords'
+import { fetchItemMonths } from '../../lib/supabase/monthlyPeriods'
 import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
-import { quantity as fmtQuantity, station } from '../../lib/format'
+import { parseStation, quantity as fmtQuantity, station } from '../../lib/format'
 import { Button, EmptyState, Input, NotificationBanner, PageHeader, Select, Spinner, StatusBadge, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 type DayRecord = Omit<QueuedQuantityRecord, 'pending' | 'lastError'>
@@ -41,6 +42,8 @@ export function QuantityRecordsScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const stationFromRef = useRef<HTMLInputElement>(null)
+  const [searchParams] = useSearchParams()
+  const hasAppliedDeepLink = useRef(false)
 
   useEffect(() => {
     fetchItems(contract.id)
@@ -55,6 +58,31 @@ export function QuantityRecordsScreen() {
         /* autocomplete only — not worth surfacing as a page error */
       })
   }, [contract.id])
+
+  // Deep link from the Tracker: a month/Item cell links here with ?itemId=
+  // &period= (period_month, "YYYY-MM-01"). Lands on the period's FIRST
+  // working day — reading a period forward from its start is the natural
+  // direction, versus landing at the end and working backwards to
+  // reconstruct the total. Runs once; a ref guard rather than an empty dep
+  // array so it still waits for contract.id to be available.
+  useEffect(() => {
+    if (hasAppliedDeepLink.current) return
+    const deepLinkItemId = searchParams.get('itemId')
+    const deepLinkPeriod = searchParams.get('period')
+    if (!deepLinkItemId && !deepLinkPeriod) return
+    hasAppliedDeepLink.current = true
+    if (deepLinkItemId) setItemId(deepLinkItemId)
+    if (deepLinkItemId && deepLinkPeriod) {
+      fetchItemMonths(contract.id)
+        .then((months) => {
+          const match = months.find((m) => m.itemId === deepLinkItemId && m.periodMonth === deepLinkPeriod)
+          if (match) setWorkDate(match.firstWorkDate)
+        })
+        .catch(() => {
+          /* deep link is a convenience — falls back to today's date, not a page error */
+        })
+    }
+  }, [contract.id, searchParams])
 
   function reload() {
     setStatus('loading')
@@ -82,9 +110,9 @@ export function QuantityRecordsScreen() {
   }, [records])
 
   const reachMetres = useMemo(() => {
-    const from = Number(fields.stationFrom)
-    const to = Number(fields.stationTo)
-    if (fields.stationFrom === '' || fields.stationTo === '' || Number.isNaN(from) || Number.isNaN(to)) return null
+    const from = parseStation(fields.stationFrom)
+    const to = parseStation(fields.stationTo)
+    if (from === null || to === null) return null
     return to - from
   }, [fields.stationFrom, fields.stationTo])
 
@@ -139,16 +167,16 @@ export function QuantityRecordsScreen() {
       setFormError('Enter a quantity greater than zero.')
       return
     }
-    const from = fields.stationFrom === '' ? null : Number(fields.stationFrom)
-    if (fields.stationFrom !== '' && Number.isNaN(from)) {
-      setFormError('Station From is not a valid number.')
+    const from = fields.stationFrom === '' ? null : parseStation(fields.stationFrom)
+    if (fields.stationFrom !== '' && from === null) {
+      setFormError('Station From is not a valid station — try 12+400 or 12.400.')
       return
     }
     let to: number | null = null
     if (fields.stationTo !== '') {
-      to = Number(fields.stationTo)
-      if (Number.isNaN(to)) {
-        setFormError('Station To is not a valid number.')
+      to = parseStation(fields.stationTo)
+      if (to === null) {
+        setFormError('Station To is not a valid station — try 12+910 or 12.910.')
         return
       }
       if (from === null) {
@@ -292,8 +320,9 @@ export function QuantityRecordsScreen() {
                   id="de-station-from"
                   ref={stationFromRef}
                   className="nc-numeric"
-                  type="number"
-                  step="0.001"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="12+400"
                   value={fields.stationFrom}
                   onChange={(e) => setFields({ ...fields, stationFrom: e.target.value })}
                   onKeyDown={handleFormKeyDown}
@@ -307,8 +336,9 @@ export function QuantityRecordsScreen() {
                 <Input
                   id="de-station-to"
                   className="nc-numeric"
-                  type="number"
-                  step="0.001"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="12+910"
                   value={fields.stationTo}
                   onChange={(e) => setFields({ ...fields, stationTo: e.target.value })}
                   onKeyDown={handleFormKeyDown}
@@ -316,8 +346,8 @@ export function QuantityRecordsScreen() {
                 />
               </div>
               <div className="w-20">
-                <p className="mb-1 text-xs text-nc-text-muted">Reach (m)</p>
-                <p className="nc-numeric px-3 py-2 text-sm text-nc-text-muted">{reachMetres !== null ? station(reachMetres, 1) : '—'}</p>
+                <p className="mb-1 text-xs text-nc-text-muted">Reach</p>
+                <p className="nc-numeric px-3 py-2 text-sm text-nc-text-muted">{reachMetres !== null ? station(reachMetres) : '—'}</p>
               </div>
               <div className="w-28">
                 <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-quantity">

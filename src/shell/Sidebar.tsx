@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconLayoutDashboard, IconListDetails, IconLogout } from '@tabler/icons-react'
+import { IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconLayoutDashboard, IconListDetails, IconLogout, IconTable } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
@@ -121,6 +121,10 @@ export function Sidebar() {
               <NavLink to="/overview" className={navLinkClass}>
                 <IconLayoutDashboard size={18} stroke={1.75} />
                 Overview
+              </NavLink>
+              <NavLink to="/tracker" className={navLinkClass}>
+                <IconTable size={18} stroke={1.75} />
+                Tracker
               </NavLink>
               {contract.createItems && (
                 <NavLink to="/line-items" className={navLinkClass}>

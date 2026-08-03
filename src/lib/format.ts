@@ -38,8 +38,38 @@ export function percent(n: number | null | undefined): string {
   return `${(n * 100).toFixed(1)}%`
 }
 
-/** A chainage/station value in km — always a fixed decimal count (3 by default, matching a station's usual precision), never a thousands separator. `digits` narrows it for a compressed display (ChainageStrip's axis ticks use 0 or 1 depending on how much of the contract is on screen at once). */
-export function station(n: number | null | undefined, digits = 3): string {
+/** The old fixed-decimal-km display — kept only for ChainageStrip's compressed axis ticks, where `digits` narrows to 0 or 1 for a tight visual scale. Reduced precision has no equivalent in the `+` notation below (metres are always 3 digits), so this stays a plain decimal. Nothing else should call this. */
+export function stationDecimal(n: number | null | undefined, digits = 3): string {
   if (n === null || n === undefined || Number.isNaN(n)) return '—'
   return n.toFixed(digits)
+}
+
+/**
+ * A station/chainage or reach, in km, as the notation Keywest and the
+ * Ministry actually use for distance along a road generally — not only a
+ * point on it, which is why a reach (a length) gets the same treatment as a
+ * station (a position): whole kilometres, `+`, then metres to three digits.
+ * 19.385 -> "19+385".
+ */
+export function station(km: number | null | undefined): string {
+  if (km === null || km === undefined || Number.isNaN(km)) return '—'
+  const totalMetres = Math.round(km * 1000)
+  const wholeKm = Math.trunc(totalMetres / 1000)
+  const metres = Math.abs(totalMetres % 1000)
+  return `${wholeKm}+${String(metres).padStart(3, '0')}`
+}
+
+/** Accepts either `station()`'s own `+` notation or a plain decimal km ("19+385" or "19.385") and normalises both to the stored km number, so a user typing either form gets the same value. Returns null if neither form parses. */
+export function parseStation(input: string): number | null {
+  const trimmed = input.trim()
+  if (trimmed === '') return null
+  const plusIndex = trimmed.indexOf('+')
+  if (plusIndex === -1) {
+    const n = Number(trimmed)
+    return Number.isNaN(n) ? null : n
+  }
+  const km = Number(trimmed.slice(0, plusIndex))
+  const metres = Number(trimmed.slice(plusIndex + 1))
+  if (Number.isNaN(km) || Number.isNaN(metres)) return null
+  return km + metres / 1000
 }

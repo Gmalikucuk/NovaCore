@@ -157,7 +157,7 @@ interface AlignProp {
 }
 
 export function TH({ align = 'left', className = '', ...props }: ThHTMLAttributes<HTMLTableCellElement> & AlignProp) {
-  return <th className={`bg-nc-secondary px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-nc-text-muted ${align === 'right' ? 'text-right' : 'text-left'} ${className}`} {...props} />
+  return <th className={`text-label bg-nc-secondary px-4 py-2.5 font-semibold uppercase tracking-wide text-nc-text-muted ${align === 'right' ? 'text-right' : 'text-left'} ${className}`} {...props} />
 }
 
 interface DenseProp {
