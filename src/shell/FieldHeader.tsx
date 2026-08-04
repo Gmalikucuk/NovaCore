@@ -37,11 +37,13 @@ import { OwnerScreen } from '../screens/Owner/OwnerScreen'
  * correct_quantity has no use for EntryScreen — historically they'd still
  * land on it (a working-looking form that could never save) with no way to
  * reach anything else at all, since Sidebar's 220px layout is deliberately
- * never shown on this device class (see Sidebar's own comment). That seat is
- * the owner, so it gets OwnerScreen: a surface built for this device and
- * this question, not the desktop Overview reflowed. Rendered directly here
- * rather than via <Navigate>, which would route into that same unreachable
- * Sidebar layout.
+ * never shown on this device class (see Sidebar's own comment). So that seat
+ * gets OwnerScreen instead: a surface built for this device, rendered
+ * directly here rather than via <Navigate>, which would route into that same
+ * unreachable Sidebar layout.
+ *
+ * WHICH seat that is, though, is a proxy and not a settled decision — see
+ * the comment on canUseFieldEntry below before relying on it.
  */
 export function FieldHeader() {
   const contractState = useOutletContext<CurrentContractState>()
@@ -51,6 +53,38 @@ export function FieldHeader() {
   if (mode === 'office') return <Navigate to="/portfolio" replace />
   if (!contract) return null
 
+  // THIS CONDITION IS A PROXY. It is standing in for "this seat wants the
+  // condensed, one-question-per-scroll view rather than the full one" — and
+  // it is NOT the same statement. What it literally tests is "this seat does
+  // not enter or correct quantities," which today happens to select the
+  // owner only because he is currently the sole seat holding no field
+  // rights. Once member seating exists, an estimator mid-tender, an admin,
+  // or a coordinator will all satisfy it too, and all three will land on a
+  // surface built for one man's attention span. Revisit it then.
+  //
+  // Do NOT resolve this by deriving a role. Rights replaced roles in 0008
+  // deliberately (member_role() was dropped, and its removal is the reason
+  // "correct_quantity without enter_quantity" is expressible at all); a
+  // derived role helper reintroduces exactly what that migration removed,
+  // one call site at a time.
+  //
+  // No existing right expresses it either — checked against all eight
+  // per-contract rights and both company-wide ones, none of which fits, for
+  // a structural reason rather than an accident of which ones exist: every
+  // one of them authorises an ACTION on contract data, and "wants less on
+  // screen" is a statement about how a person reads, not about what they may
+  // do. Those are different axes. view_rates comes closest and still fails
+  // in both directions — the CFO and the estimator hold it, and OwnerScreen
+  // is deliberately built to work without it (margin omitted, not blanked).
+  // extract_report arguably points the opposite way: a seat that exports the
+  // whole workbook wants more detail, not less. The honest answer is that
+  // this belongs in a per-seat PREFERENCE, not in the rights vocabulary —
+  // but adding one is a decision for the member-seating work, not a thing to
+  // invent here.
+  //
+  // Not a trap in the meantime: a misrouted seat can reach the full app via
+  // FieldHeaderBar's "Switch to office view", which sets the useViewMode
+  // override and is honoured by the mode === 'office' redirect above.
   const canUseFieldEntry = contract.enterQuantity || contract.correctQuantity
 
   return (

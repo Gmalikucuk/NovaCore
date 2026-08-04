@@ -23,6 +23,10 @@ import { Button, NotificationBanner, Select, Spinner } from '../../components/ui
  * affords. This is one cluster per scroll position, read with one thumb in
  * portrait.
  *
+ * Which seats actually land here is a separate, unsettled question — the
+ * routing condition in FieldHeader is a proxy, and its own comment explains
+ * what for. Read that before assuming the audience is only the owner.
+ *
  * NO COMPLETION METRIC, deliberately, and this is not an oversight to fix
  * later: the quantity-weighted "Contract complete" card was removed (0015)
  * because it weighted Mobilization the same as paving. Do not reintroduce
