@@ -7,7 +7,7 @@ import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase
 import { isOutlier, prospectiveOverage } from '../../lib/calculations/confirmations'
 import { errorMessage } from '../../lib/errorMessage'
 import { quantity as fmtQuantity, station } from '../../lib/format'
-import { Button, Card, EmptyState, NotificationBanner, PageHeader, Spinner } from '../../components/ui'
+import { Button, Card, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Spinner } from '../../components/ui'
 
 const RECENT_SAMPLE_SIZE = 10
 
@@ -119,11 +119,7 @@ export function ConfirmQueueScreen() {
     return (
       <div>
         <PageHeader title="Confirm" subtitle={contract.name} />
-        {contract.isSandbox && (
-          <NotificationBanner tone="danger" className="mb-4">
-            This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-          </NotificationBanner>
-        )}
+        <SandboxBanner contract={contract} variant="working" />
         <EmptyState title="Confirming quantity records needs confirm_quantity on this contract." />
       </div>
     )
@@ -135,14 +131,7 @@ export function ConfirmQueueScreen() {
     <div>
       <PageHeader title="Confirm" subtitle={subtitle} />
 
-      {/* Same danger tone as Overview/Tracker/Rates/Items, without their
-          font-medium weight — a working/review screen, not a read-once
-          reading screen (see QuantityRecordsScreen's identical reasoning). */}
-      {contract.isSandbox && (
-        <NotificationBanner tone="danger" className="mb-4">
-          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-        </NotificationBanner>
-      )}
+      <SandboxBanner contract={contract} variant="working" />
 
       {status === 'loading' && (
         <div className="flex items-center gap-2 py-8 text-nc-text-muted">

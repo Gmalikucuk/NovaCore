@@ -8,7 +8,7 @@ import { margin, sumOrNull } from '../../lib/calculations/margin'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, quantity as fmtQuantity } from '../../lib/format'
-import { EmptyState, Input, NotificationBanner, PageHeader, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 interface Draft {
   cost: string
@@ -179,11 +179,7 @@ export function RatesScreen() {
     <div>
       <PageHeader title="Rates" subtitle={subtitle} />
 
-      {contract.isSandbox && (
-        <NotificationBanner tone="danger" className="mb-4 font-medium">
-          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-        </NotificationBanner>
-      )}
+      <SandboxBanner contract={contract} />
 
       {!contract.viewRates ? (
         <EmptyState title="Viewing rates needs the view_rates right on this contract." />

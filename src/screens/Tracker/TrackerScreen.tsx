@@ -14,7 +14,7 @@ import { formatDayLabel } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportTrackerWorkbook } from '../../lib/export/trackerExport'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
-import { Button, EmptyState, NotificationBanner, PageHeader, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 function periodLabel(period: string): string {
   const [y, m] = period.split('-').map(Number)
@@ -202,11 +202,7 @@ export function TrackerScreen() {
         </NotificationBanner>
       )}
 
-      {contract.isSandbox && (
-        <NotificationBanner tone="danger" className="mb-4 font-medium">
-          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-        </NotificationBanner>
-      )}
+      <SandboxBanner contract={contract} />
 
       {status === 'loading' && (
         <div className="flex items-center gap-2 py-8 text-nc-text-muted">

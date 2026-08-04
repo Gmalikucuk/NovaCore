@@ -269,3 +269,43 @@ interface NotificationBannerProps {
 export function NotificationBanner({ tone = 'info', children, className = '' }: NotificationBannerProps) {
   return <div className={`rounded-md px-4 py-3 text-sm ${BANNER_CLASSES[tone]} ${className}`}>{children}</div>
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// SandboxBanner — the standing rule: a sandbox contract's fictional status
+// must be unmissable on every screen that shows it. One copy instead of
+// eight, after the nav-restructure pass duplicated this same banner into
+// every reading screen (Overview, Tracker, Rates, Items) plus every
+// working screen (Daily Entry, Confirm, mobile Field entry) under time
+// pressure the night before a demo — mechanical to merge, and the seven-
+// files-changed-eighth-missed failure mode duplication invites otherwise.
+//
+// Renders nothing for a real contract — callers pass the whole contract
+// unconditionally rather than gating with `contract.isSandbox &&` at each
+// call site themselves; one fewer place to get that check wrong or forget.
+//
+// The portfolio's row-level "Sandbox" chip is deliberately NOT this
+// component — a banner is the wrong shape for one row in a list of many
+// (see PortfolioScreen's own comment); that's a second, smaller marker for
+// a different surface, not an eighth call site to fold in here.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface SandboxBannerProps {
+  contract: { isSandbox: boolean; name: string }
+  /**
+   * 'reading' (default): Overview/Tracker/Rates/Items — looked at, not
+   * worked in, so the bold treatment is warranted. 'working': Daily Entry,
+   * Confirm, mobile Field entry — re-visited all day doing data entry, so
+   * the same danger tone without the extra weight reads as unmissable
+   * without reading as more alarm than the situation warrants on repeat.
+   */
+  variant?: 'reading' | 'working'
+}
+
+export function SandboxBanner({ contract, variant = 'reading' }: SandboxBannerProps) {
+  if (!contract.isSandbox) return null
+  return (
+    <NotificationBanner tone="danger" className={`mb-4 ${variant === 'reading' ? 'font-medium' : ''}`}>
+      This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+    </NotificationBanner>
+  )
+}

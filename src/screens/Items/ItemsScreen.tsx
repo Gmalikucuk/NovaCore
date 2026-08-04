@@ -7,7 +7,7 @@ import { UNITS } from '../../lib/itemUnits'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { quantity as fmtQuantity } from '../../lib/format'
-import { Button, EmptyState, Input, NotificationBanner, PageHeader, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 const BLANK_FORM: ItemInput = { itemNumber: '', description: '', unit: UNITS[0], approximateQuantity: 0 }
 
@@ -139,11 +139,7 @@ export function ItemsScreen() {
     <div>
       <PageHeader title="Items" subtitle={subtitle} />
 
-      {contract.isSandbox && (
-        <NotificationBanner tone="danger" className="mb-4 font-medium">
-          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-        </NotificationBanner>
-      )}
+      <SandboxBanner contract={contract} />
 
       {!canWrite ? (
         <EmptyState title="Setting up items needs the create_items right on this contract." />

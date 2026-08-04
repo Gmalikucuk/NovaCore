@@ -22,7 +22,7 @@ import {
 import { margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
-import { Button, Card, NotificationBanner, PageHeader, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, Card, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 const ATTENTION_CAP = 5
 
@@ -218,11 +218,7 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
         Value of Work is recorded quantity × tendered Unit Price — the Contractor's own measure, not a Ministry-approved progress estimate.
       </p>
 
-      {contract.isSandbox && (
-        <NotificationBanner tone="danger" className="mb-4 font-medium">
-          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-        </NotificationBanner>
-      )}
+      <SandboxBanner contract={contract} />
 
       {status === 'loading' && (
         <div className="flex items-center gap-2 py-8 text-nc-text-muted">

@@ -11,7 +11,7 @@ import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { todayLocalDateString } from '../../lib/dateFormat'
 import { parseStation, quantity as fmtQuantity, station } from '../../lib/format'
-import { Button, EmptyState, Input, NotificationBanner, PageHeader, Select, Spinner, StatusBadge, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatusBadge, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 type DayRecord = Omit<QueuedQuantityRecord, 'pending' | 'lastError'>
 
@@ -298,16 +298,8 @@ export function QuantityRecordsScreen() {
         }
       />
 
-      {/* Same danger tone as Overview/Tracker/Rates/Items (unmissable is
-          the requirement), but without their font-medium weight — this is
-          a working screen a crew re-enters all day, not a screen someone
-          reads once and moves on from, so the full bold treatment reads as
-          more alarm than the situation warrants repeated dozens of times. */}
-      {contract.isSandbox && (
-        <NotificationBanner tone="danger" className="mb-4">
-          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-        </NotificationBanner>
-      )}
+      {/* 'working' — a screen a crew re-enters all day, not read-once. */}
+      <SandboxBanner contract={contract} variant="working" />
 
       {!canEnter && !canCorrect ? (
         <EmptyState title="Desk entry needs enter_quantity or correct_quantity on this contract." />

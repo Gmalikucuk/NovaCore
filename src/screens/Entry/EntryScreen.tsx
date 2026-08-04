@@ -12,7 +12,7 @@ import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { formatDayLabel, todayLocalDateString } from '../../lib/dateFormat'
 import { ChainageStrip, type ChainageEntry } from '../../components/ChainageStrip'
-import { Button, Card, EmptyState, Input, NotificationBanner, PageHeader, Select, StatusBadge, Textarea } from '../../components/ui'
+import { Button, Card, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, StatusBadge, Textarea } from '../../components/ui'
 import { quantity as fmtQuantity, parseStation, percent, station } from '../../lib/format'
 
 type StationMode = 'single' | 'range'
@@ -286,11 +286,7 @@ export function EntryScreen() {
     <div className="mx-auto flex max-w-2xl flex-col gap-5 p-4">
       <PageHeader title="Field entry" subtitle={contract.name} />
 
-      {contract.isSandbox && (
-        <NotificationBanner tone="danger" className="mb-4 font-medium">
-          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
-        </NotificationBanner>
-      )}
+      <SandboxBanner contract={contract} />
 
       {!canEnter && !canCorrect ? (
         <EmptyState title="Field entry needs enter_quantity or correct_quantity on this contract." />
