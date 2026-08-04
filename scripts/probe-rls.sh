@@ -465,6 +465,95 @@ check "quantities: unpin own row" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
 request DELETE "pinned_items?id=eq.$READONLY_PIN_ID" "$READONLY_TOKEN" "{}"
 
 echo
+echo "=== Jobs and contract dates (0016) — full holds manage_schedule on the sandbox project (0017 seed) ==="
+
+# Upsert, not a plain insert — unlike pinned_items (which has no UPDATE grant
+# at all, see that section's own comment), jobs DOES have an UPDATE grant and
+# policy for the same manage_schedule right, so on_conflict resolving through
+# an UPDATE is a real, safe merge here, not a hole. Makes this probe rerun-
+# safe without a DELETE step, which jobs has no grant for at all. Needs the
+# shared request() helper's own raw curl call bypassed for one line: PostgREST
+# only actually MERGES on a genuine conflict when Prefer: resolution=merge-
+# duplicates is sent — on_conflict alone (what request() sends) still hits
+# the raw unique constraint on a second run, 409, confirmed by running this
+# once before adding the header.
+resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/jobs?on_conflict=contract_id,name" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $FULL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"contract_id\":\"$PROJECT_ID\",\"name\":\"PROBE Insert Test Job\",\"planned_start\":\"2026-05-01\",\"planned_end\":\"2026-06-01\"}")
+STATUS=$(printf '%s' "$resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$resp" | sed '$d')
+ok=0
+if [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; then
+  [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
+fi
+check "full: create/upsert a Job (manage_schedule)" "201/200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# quantities holds no manage_schedule on the sandbox project — creating a Job
+# is rejected, same shape as every other right-gated write in this suite.
+request POST "jobs?on_conflict=contract_id,name" "$QUANTITIES_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"name\":\"PROBE Quantities Should Not Create\",\"planned_start\":\"2026-05-01\",\"planned_end\":\"2026-06-01\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: create a Job rejected (no manage_schedule)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# readonly (seated, zero rights) can still see Jobs — membership, not a
+# right, same positive control as items/quantity_records/pinned_items.
+request GET "jobs?select=id&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  n=$(json_len "$BODY_OUT")
+  [ "$n" != "-1" ] && [ "$n" -ge 1 ] 2>/dev/null && ok=1
+fi
+check "readonly: select jobs (membership, not a right)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+# A Job's planned dates OUTSIDE its contract's own planned range still
+# succeeds — proves the containment rule is a warning today, not a hard
+# block, rather than only asserting it in a migration comment. The sandbox
+# project's own planned_end is 2026-11-30 (0017 seed); this pushes a Job
+# well past it.
+request PATCH "jobs?contract_id=eq.$PROJECT_ID&name=eq.PROBE%20Job" "$FULL_TOKEN" \
+  '{"planned_end":"2027-06-30"}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  moved=$(json_field "$BODY_OUT" 0 planned_end)
+  [ "$moved" = "2027-06-30" ] && ok=1
+fi
+check "full: Job planned_end outside contract's planned range still succeeds" "200, changed" "$ok" "$STATUS $BODY_OUT"
+
+# manage_schedule covers Keywest's own planned_start/planned_end on the
+# contract row itself.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"planned_end":"2026-12-01"}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  moved=$(json_field "$BODY_OUT" 0 planned_end)
+  [ "$moved" = "2026-12-01" ] && ok=1
+fi
+check "full: update contracts.planned_end (manage_schedule)" "200, changed" "$ok" "$STATUS $BODY_OUT"
+
+# ...but NOT the Ministry's contract_start/contract_end — manage_schedule
+# alone is not manage_members, and guard_contract_date_columns() (0016)
+# raises rather than silently no-op'ing. A trigger-raised exception, not a
+# bare RLS denial — same >=400 pattern this suite already uses below for
+# guard_entry_transitions' un-confirm rejection.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"contract_end":"2026-12-20"}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: update contracts.contract_end rejected (manage_schedule alone is not enough)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# quantities (neither manage_schedule nor manage_members) can't move either
+# date pair on contracts. USING excludes the row outright (no right matches),
+# so this is PostgREST's "0 rows visible to update" shape — 200 with an
+# empty body, not a 403 — same as "quantities: status update rejected"
+# and "viewer: update item_prices rejected" elsewhere in this suite. The
+# full-seat probes above got 403/>=400 instead because THEY are members with
+# SOME matching right (manage_schedule), so USING passes and it's WITH CHECK
+# or the trigger that then blocks the specific column — a different failure
+# point with a different shape.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"planned_start":"2026-04-01"}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: update contracts.planned_start rejected" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+echo
 echo "=== Positive controls ==="
 
 request GET "v_item_progress?select=*" "$QUANTITIES_TOKEN"

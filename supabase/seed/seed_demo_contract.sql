@@ -22,12 +22,20 @@
 --   * single-station and from–to reach records
 --   * a Lump Sum Item with percent_complete set
 --   * a Provisional Sum Item with authorized_value below its provisional_sum
+--   * contract_start/contract_end and planned_start/planned_end set, planned
+--     CONTAINED within given (0016)
+--   * two Jobs: Job A contained within the contract's planned range, Job B
+--     deliberately extending past it — proving the containment rule is a
+--     warning today, not a hard block (see 0016)
+--   * one Item assigned to each Job (job_id set), the rest left unassigned
+--     on a contract that DOES have Jobs — proving job_id is optional even
+--     then
 --
 -- TO DELETE ENTIRELY:
 --   delete from public.contracts where contract_no = '26914-0000';
---   (cascades to items, item_prices, quantity_records, contract_members)
+--   (cascades to items, item_prices, quantity_records, contract_members, jobs)
 --
--- Requires migrations through 0012. Idempotent.
+-- Requires migrations through 0016. Idempotent.
 -- =============================================================================
 
 do $$
@@ -48,21 +56,41 @@ begin
   -- Rebuild from scratch each run so the demo state is reproducible.
   delete from public.contracts where contract_no = '26914-0000';
 
+  -- Dates (0016) — DISCLOSED-FICTIONAL, same umbrella as the rest of this
+  -- contract's invented figures (see SandboxBanner: "not a real contract").
+  -- Illustrative, plausible for a BC paving season, and deliberately
+  -- CONTAINED at the contract level (planned sits inside given) so the
+  -- well-formed state has somewhere real to render.
   insert into public.contracts
-    (contract_name, contract_no, created_by, is_sandbox)
+    (contract_name, contract_no, created_by, is_sandbox,
+     contract_start, contract_end, planned_start, planned_end)
   values
-    ('Hwy 97C Pennask Summit Resurfacing', '26914-0000', v_creator, true)
+    ('Hwy 97C Pennask Summit Resurfacing', '26914-0000', v_creator, true,
+     '2026-05-01', '2026-11-30', '2026-05-15', '2026-10-31')
   returning id into v_contract;
 
   insert into public.contract_members
     (contract_id, user_id, create_items, set_cost, set_unit_price,
      enter_quantity, correct_quantity, confirm_quantity, view_rates,
-     extract_report)
-  values (v_contract, v_creator, true, true, true, true, true, true, true, true)
+     extract_report, manage_schedule)
+  values (v_contract, v_creator, true, true, true, true, true, true, true, true, true)
   on conflict (contract_id, user_id) do update set
     create_items = true, set_cost = true, set_unit_price = true,
     enter_quantity = true, correct_quantity = true, confirm_quantity = true,
-    view_rates = true, extract_report = true;
+    view_rates = true, extract_report = true, manage_schedule = true;
+
+  -- Jobs (0016) — illustrative, not from any tender document (Hwy 97C has
+  -- none; this whole contract is fictional). Job A sits INSIDE the
+  -- contract's own planned_start/planned_end above. Job B is deliberately
+  -- pushed past planned_end — proving, not just asserting, that a Job
+  -- outside its contract's planned range is a WARNING today, not a write
+  -- that gets rejected (see 0016's migration header).
+  insert into public.jobs (contract_id, name, planned_start, planned_end)
+  values
+    (v_contract, 'Job A', '2026-05-15', '2026-07-31'),
+    (v_contract, 'Job B', '2026-08-01', '2026-11-15')
+  on conflict (contract_id, name) do update set
+    planned_start = excluded.planned_start, planned_end = excluded.planned_end;
 
   -- ---------------------------------------------------------------------------
   -- Items
@@ -98,6 +126,22 @@ begin
     (v_contract, '05.03.01', 'Level Course', 'Tonne', 2260, 'unit_price', null, null, null, '7'),
     (v_contract, '05.03.03', 'Top Lift', 'Tonne', 14800, 'unit_price', null, null, null, '7'),
     (v_contract, '06.01', 'Supply and Install New Signs (Single Post)', 'Each', 14, 'unit_price', null, null, null, null);
+
+  -- Item -> Job assignment (0016) — illustrative, same fictional umbrella as
+  -- the Jobs themselves. 05.03.03 Top Lift under Job A deliberately echoes
+  -- Hwy 5's real Job A Top Lift (05.03.03 there too) — the exact Item the
+  -- brief that introduced Jobs points at for Table 502-H. Everything else
+  -- stays unassigned (job_id null), demonstrating that a jobbed contract
+  -- doesn't require every Item to have one.
+  update public.items i
+  set job_id = j.id
+  from public.jobs j
+  where i.contract_id = v_contract
+    and j.contract_id = v_contract
+    and (
+      (j.name = 'Job A' and i.item_number = '05.03.03')
+      or (j.name = 'Job B' and i.item_number = '04.06.01')
+    );
 
   -- ---------------------------------------------------------------------------
   -- Unit Prices and costs
@@ -267,9 +311,10 @@ begin
          'Corrected: 260 m² double-counted at the tie-in'
   from public.quantity_records where id = v_rec_id;
 
-  raise notice 'Demo contract seeded: % Items, % records',
+  raise notice 'Demo contract seeded: % Items, % records, % Jobs',
     (select count(*) from public.items where contract_id = v_contract),
-    (select count(*) from public.quantity_records where contract_id = v_contract);
+    (select count(*) from public.quantity_records where contract_id = v_contract),
+    (select count(*) from public.jobs where contract_id = v_contract);
 
 end $$;
 
@@ -289,6 +334,10 @@ end $$;
 --    still includes the ORIGINAL 1,180 t. Confirm the correction and the total
 --    drops by 86 t — nothing is ever in neither row.
 -- 7. Several draft records across items — these do NOT count until confirmed.
+-- 8. Job A (05.03.03) sits inside the contract's planned range; Job B
+--    (04.06.01) deliberately runs past planned_end — insertable today
+--    without rejection, proving the containment rule is a warning, not yet
+--    a hard block (0016).
 --
 -- TO DELETE: delete from public.contracts where contract_no = '26914-0000';
 -- =============================================================================

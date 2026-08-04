@@ -18,7 +18,7 @@
 -- "Integral". Noted here because a line-by-line comparison against Schedule 7
 -- will show a difference on that row.
 --
--- Requires migrations through 0012.
+-- Requires migrations through 0016.
 -- Idempotent: safe to re-run.
 -- =============================================================================
 
@@ -57,13 +57,30 @@ begin
   insert into public.contract_members
     (contract_id, user_id, create_items, set_cost, set_unit_price,
      enter_quantity, correct_quantity, confirm_quantity, view_rates,
-     extract_report)
+     extract_report, manage_schedule)
   values
-    (v_contract, v_creator, true, true, true, true, true, true, true, true)
+    (v_contract, v_creator, true, true, true, true, true, true, true, true, true)
   on conflict (contract_id, user_id) do update set
     create_items = true, set_cost = true, set_unit_price = true,
     enter_quantity = true, correct_quantity = true, confirm_quantity = true,
-    view_rates = true, extract_report = true;
+    view_rates = true, extract_report = true, manage_schedule = true;
+
+  -- ---------------------------------------------------------------------------
+  -- Jobs — A, B, C. Real (0016): several Items below are literally suffixed
+  -- "Job A"/"Job B"/"Job C" in their own Schedule 7 description, e.g.
+  -- 05.03.03 "Top Lift Job A" — the same Item the brief that introduced Jobs
+  -- points at directly (Table 502-H's "Top Lift of Multiple Lifts" column
+  -- applies to Job A's Top Lift and not the others').
+  --
+  -- No planned dates: Keywest's own start/end per Job is not in anything
+  -- this file has seen, and is left null rather than invented — the exact
+  -- same standing rule as this file's refusal to invent Unit Prices below.
+  -- ---------------------------------------------------------------------------
+  insert into public.jobs (contract_id, name) values
+    (v_contract, 'Job A'),
+    (v_contract, 'Job B'),
+    (v_contract, 'Job C')
+  on conflict (contract_id, name) do nothing;
 
   -- ---------------------------------------------------------------------------
   -- The 48 Items, in Schedule 7 order.
@@ -150,8 +167,43 @@ begin
     provisional_sum      = excluded.provisional_sum,
     dfpa_category        = excluded.dfpa_category;
 
-  raise notice 'Hwy 5 Snowshed Hill seeded: % Items',
-    (select count(*) from public.items where contract_id = v_contract);
+  -- ---------------------------------------------------------------------------
+  -- Item -> Job assignment (0016)
+  --
+  -- Derived from the "Job A/B/C" suffix already present in each Item's own
+  -- Schedule 7 description above — read off the source text, not guessed.
+  -- An Item with no such suffix is shared across Jobs, or Schedule 7 simply
+  -- doesn't split it by Job, and is deliberately left unassigned (job_id
+  -- null) rather than forced onto one — see 0016's own migration header for
+  -- why "every Item gets a job_id the moment the contract has any" was
+  -- rejected as an invariant.
+  --
+  -- 03.01.02 "Asphalt Medium Mix Aggregate Job B and C" is the one real gap
+  -- this surfaces: Schedule 7 states it covers TWO Jobs, and this schema
+  -- carries exactly one job_id per Item. Left unassigned rather than
+  -- silently picked as B or C — a wrong single answer would be worse than
+  -- no answer. Splitting that one Schedule 7 line into two Items so each
+  -- half could carry its own Job is a real, deliberate change for whoever
+  -- owns Schedule 7 data entry, not something to do silently in a seed
+  -- script.
+  -- ---------------------------------------------------------------------------
+  update public.items i
+  set job_id = j.id
+  from public.jobs j
+  where i.contract_id = v_contract
+    and j.contract_id = v_contract
+    and (
+      (j.name = 'Job A' and i.item_number in (
+        '03.01.01', '04.03', '04.04.03', '04.04.04', '04.04.05', '04.05.01',
+        '04.05.02', '04.05.03', '04.05.06', '05.03.02', '05.03.03'))
+      or (j.name = 'Job B' and i.item_number in ('04.04.02', '05.03.04'))
+      or (j.name = 'Job C' and i.item_number in ('05.03.05'))
+    );
+
+  raise notice 'Hwy 5 Snowshed Hill seeded: % Items, % Jobs, % Items assigned to a Job',
+    (select count(*) from public.items where contract_id = v_contract),
+    (select count(*) from public.jobs where contract_id = v_contract),
+    (select count(*) from public.items where contract_id = v_contract and job_id is not null);
 
 end $$;
 
@@ -160,6 +212,12 @@ end $$;
 --
 --   select count(*) from items i join contracts c on c.id = i.contract_id
 --   where c.contract_no = '26607-0000';                       -- expect 48
+--
+--   select name from jobs j join contracts c on c.id = j.contract_id
+--   where c.contract_no = '26607-0000' order by name;          -- expect A, B, C
+--
+--   select count(*) from items i join contracts c on c.id = i.contract_id
+--   where c.contract_no = '26607-0000' and job_id is not null; -- expect 14
 --
 --   select item_kind, count(*) from items i
 --   join contracts c on c.id = i.contract_id
