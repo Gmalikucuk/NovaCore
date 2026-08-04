@@ -57,13 +57,14 @@ begin
   insert into public.contract_members
     (contract_id, user_id, create_items, set_cost, set_unit_price,
      enter_quantity, correct_quantity, confirm_quantity, view_rates,
-     extract_report, manage_schedule)
+     extract_report, manage_schedule, record_actual_cost)
   values
-    (v_contract, v_creator, true, true, true, true, true, true, true, true, true)
+    (v_contract, v_creator, true, true, true, true, true, true, true, true, true, true)
   on conflict (contract_id, user_id) do update set
     create_items = true, set_cost = true, set_unit_price = true,
     enter_quantity = true, correct_quantity = true, confirm_quantity = true,
-    view_rates = true, extract_report = true, manage_schedule = true;
+    view_rates = true, extract_report = true, manage_schedule = true,
+    record_actual_cost = true;
 
   -- ---------------------------------------------------------------------------
   -- Jobs — A, B, C. Real (0016): several Items below are literally suffixed

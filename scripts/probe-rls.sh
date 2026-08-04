@@ -554,6 +554,73 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "quantities: update contracts.planned_start rejected" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 echo
+echo "=== Actual cost (0018) — behind the finance wall exactly as item_prices, gated to write by record_actual_cost ==="
+
+# quantities holds no view_rates — same wall as item_prices, by construction
+# (actual_cost_entries' own SELECT policy) and independently on the view
+# (inner join on item_prices).
+request GET "actual_cost_entries?select=*" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: actual_cost_entries direct select" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_actual_cost?select=*" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: v_item_actual_cost" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "actual_cost_entries?select=*" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: actual_cost_entries on sandbox project" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# viewer holds view_rates but not record_actual_cost — reads the ledger
+# (0018's own seed on the sandbox project's item ...0001) but cannot write
+# to it.
+request GET "v_item_actual_cost?select=*&item_id=eq.c0ffee00-c0de-0000-0000-000000000001" "$VIEWER_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  actual=$(json_field "$BODY_OUT" 0 actual_cost_to_date)
+  [ -n "$actual" ] && ok=1
+fi
+check "viewer: v_item_actual_cost sees the seeded entry (view_rates)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request POST "actual_cost_entries" "$VIEWER_TOKEN" \
+  '{"contract_id":"c0ffee00-c0de-0000-0000-000000000000","item_id":"c0ffee00-c0de-0000-0000-000000000002","amount":10,"incurred_date":"2026-08-01"}'
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer: insert actual cost rejected (view_rates alone is not record_actual_cost)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# quantities holds neither view_rates nor record_actual_cost.
+request POST "actual_cost_entries" "$QUANTITIES_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"item_id\":\"c0ffee00-c0de-0000-0000-000000000002\",\"amount\":10,\"incurred_date\":\"2026-08-01\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: insert actual cost rejected (no record_actual_cost)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# full holds record_actual_cost (0018 seed) — a genuine insert against item
+# ...0002 (the "stays absent" fixture item, otherwise untouched), so this
+# probe's own write is exactly what flips it from absent to a real, non-null
+# actual_cost_to_date the first time this suite runs, and adds another
+# ledger entry on every rerun thereafter — same accepted, ever-accumulating-
+# on-purpose shape as the quantities write path below has always had on this
+# dedicated sandbox project.
+request POST "actual_cost_entries" "$FULL_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"item_id\":\"c0ffee00-c0de-0000-0000-000000000002\",\"amount\":25,\"incurred_date\":\"2026-08-01\",\"note\":\"probe-rls\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full: insert actual cost (record_actual_cost)" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# Absent, not zero — item ...0003 has never had a ledger entry.
+request GET "v_item_actual_cost?select=actual_cost_to_date,cost_variance&item_id=eq.c0ffee00-c0de-0000-0000-000000000003" "$FULL_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  actual=$(json_field "$BODY_OUT" 0 actual_cost_to_date)
+  [ -z "$actual" ] && ok=1
+fi
+check "full: v_item_actual_cost absent (no entries) reads null, not zero" "200, null" "$ok" "$STATUS $BODY_OUT"
+
+# No update or delete grant at all — append-only, corrections are a new
+# signed entry, never an edit.
+request PATCH "actual_cost_entries?contract_id=eq.$PROJECT_ID&limit=1" "$FULL_TOKEN" '{"amount":1}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: update actual_cost_entries rejected (no grant, append-only)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+echo
 echo "=== Positive controls ==="
 
 request GET "v_item_progress?select=*" "$QUANTITIES_TOKEN"
