@@ -185,6 +185,15 @@ export function RatesScreen() {
         <EmptyState title="Viewing rates needs the view_rates right on this contract." />
       ) : (
         <>
+          {/* The one line the brief asks for, plainly: Cost here is Keywest's
+              own bid figure, not a measured fact. NovaCore has never recorded
+              what work actually cost — every "Cost"/"Margin" label on this
+              screen and its downstream surfaces is an estimate against that
+              bid, not a result. */}
+          <NotificationBanner tone="info" className="mb-4">
+            Cost and margin below are Keywest's own bid estimate, entered on this screen — actual cost isn't recorded in NovaCore yet.
+          </NotificationBanner>
+
           {status === 'loading' && (
             <div className="flex items-center gap-2 py-8 text-nc-text-muted">
               <Spinner />
@@ -205,8 +214,8 @@ export function RatesScreen() {
                 )}
                 {pricedCount < unitPriceRows.length && (
                   <NotificationBanner tone="warning" className="mb-4">
-                    {unitPriceRows.length - pricedCount} of {unitPriceRows.length} unit-price items still unpriced — the contract margin total below reflects priced items only, not the whole
-                    contract.
+                    {unitPriceRows.length - pricedCount} of {unitPriceRows.length} unit-price items still unpriced — the estimated contract margin total below reflects priced items only, not the
+                    whole contract.
                   </NotificationBanner>
                 )}
 
@@ -223,12 +232,12 @@ export function RatesScreen() {
                           replaced, which is measured in characters against the rendered font —
                           coupling the fix to a token this same pass already changed once). */}
                       <TH align="right" style={{ width: 130 }}>
-                        Cost / unit
+                        Est. cost / unit
                       </TH>
                       <TH align="right" style={{ width: 130 }}>
                         Unit Price
                       </TH>
-                      <TH align="right">Contract margin</TH>
+                      <TH align="right">Est. contract margin</TH>
                     </TR>
                   </THead>
                   <TBody>
@@ -300,7 +309,7 @@ export function RatesScreen() {
                   <tfoot>
                     <tr>
                       <td colSpan={5} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                        Contract margin ({pricedCount} of {unitPriceRows.length} unit-price items priced)
+                        Est. contract margin ({pricedCount} of {unitPriceRows.length} unit-price items priced)
                       </td>
                       <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(totalMargin)}</td>
                     </tr>

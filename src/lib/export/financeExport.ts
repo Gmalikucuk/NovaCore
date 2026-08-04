@@ -72,7 +72,8 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
   const sandboxRowCount = contract.isSandbox ? 1 : 0
   const freshnessRowNum = 2 + sandboxRowCount
   const captionRowNum = 3 + sandboxRowCount
-  const headerRowNum = 4 + sandboxRowCount
+  const costCaptionRowNum = 4 + sandboxRowCount
+  const headerRowNum = 5 + sandboxRowCount
   const dataStartRow = headerRowNum + 1
 
   const workbook = new ExcelJS.Workbook()
@@ -83,14 +84,14 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
     'Description',
     `Quantity — ${periodLabel}`,
     `Value — ${periodLabel}`,
-    `Cost — ${periodLabel}`,
-    `Margin — ${periodLabel}`,
+    `Est. Cost — ${periodLabel}`,
+    `Est. Margin — ${periodLabel}`,
     `Value — ${previousPeriodLabel}`,
-    `Margin — ${previousPeriodLabel}`,
+    `Est. Margin — ${previousPeriodLabel}`,
     'Quantity to date',
     'Value to date',
-    'Cost to date',
-    'Margin to date',
+    'Est. Cost to date',
+    'Est. Margin to date',
     'Approximate Quantity',
     'Remaining',
   ]
@@ -130,6 +131,15 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
   const captionCell = sheet.getCell(captionRowNum, 1)
   captionCell.value = 'Value of Work is recorded quantity × tendered Unit Price — the Contractor’s own measure, not a Ministry-approved progress estimate.'
   captionCell.font = { italic: true, size: 9 }
+
+  // Every "Cost"/"Margin" column below is Keywest's own bid estimate, not a
+  // measured fact — NovaCore has never recorded what work actually cost.
+  // Same wording as the equivalent note on Rates; a workbook forwarded out
+  // of context has no screen nearby to supply this caveat on its own.
+  sheet.mergeCells(costCaptionRowNum, 1, costCaptionRowNum, colCount)
+  const costCaptionCell = sheet.getCell(costCaptionRowNum, 1)
+  costCaptionCell.value = 'Cost and margin figures are Keywest’s own bid estimate — actual cost is not yet recorded in NovaCore.'
+  costCaptionCell.font = { italic: true, size: 9 }
 
   // Column headers.
   const headerRow = sheet.getRow(headerRowNum)

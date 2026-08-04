@@ -108,7 +108,7 @@ export function PortfolioScreen() {
             <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <StatCard label="Portfolio value to date" value={money(portfolioValue)} sub="Real contracts only — sandbox excluded" />
               <StatCard
-                label="Portfolio margin to date"
+                label="Est. portfolio margin to date"
                 value={<span className={portfolioMargin !== null && portfolioMargin < 0 ? 'text-nc-danger-text' : ''}>{money(portfolioMargin)}</span>}
                 sub="Real contracts only — sandbox excluded"
               />
@@ -120,7 +120,7 @@ export function PortfolioScreen() {
                   <TH>Contract</TH>
                   <TH align="right">Complete</TH>
                   <TH align="right">Value to date</TH>
-                  <TH align="right">Margin to date</TH>
+                  <TH align="right">Est. margin to date</TH>
                   <TH />
                 </TR>
               </THead>

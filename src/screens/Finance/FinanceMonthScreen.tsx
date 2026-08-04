@@ -249,7 +249,7 @@ export function FinanceMonthScreen() {
                       }
                     />
                     <StatCard
-                      label="Margin"
+                      label="Est. margin"
                       value={<span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{money(marginThisMonth)}</span>}
                       sub={
                         <>
@@ -261,13 +261,13 @@ export function FinanceMonthScreen() {
                 ) : (
                   <>
                     <StatCard label="Value of Work" value="—" sub={`No records yet for ${formatMonthLabel(selectedMonth)}`} />
-                    <StatCard label="Margin" value="—" sub={`No records yet for ${formatMonthLabel(selectedMonth)}`} />
+                    <StatCard label="Est. margin" value="—" sub={`No records yet for ${formatMonthLabel(selectedMonth)}`} />
                   </>
                 )
               ) : (
                 <>
                   <StatCard label="Value of Work" value="—" sub="Needs view_rates" />
-                  <StatCard label="Margin" value="—" sub="Needs view_rates" />
+                  <StatCard label="Est. margin" value="—" sub="Needs view_rates" />
                 </>
               )}
             </div>
@@ -319,18 +319,18 @@ export function FinanceMonthScreen() {
                   {contract.viewRates && (
                     <>
                       <TH align="right">Value — {formatMonthLabel(selectedMonth)}</TH>
-                      <TH align="right">Cost — {formatMonthLabel(selectedMonth)}</TH>
-                      <TH align="right">Margin — {formatMonthLabel(selectedMonth)}</TH>
+                      <TH align="right">Est. cost — {formatMonthLabel(selectedMonth)}</TH>
+                      <TH align="right">Est. margin — {formatMonthLabel(selectedMonth)}</TH>
                       <TH align="right">Value — {formatMonthLabel(previousSelectedMonth)}</TH>
-                      <TH align="right">Margin — {formatMonthLabel(previousSelectedMonth)}</TH>
+                      <TH align="right">Est. margin — {formatMonthLabel(previousSelectedMonth)}</TH>
                     </>
                   )}
                   <TH align="right">Qty to date</TH>
                   {contract.viewRates && (
                     <>
                       <TH align="right">Value to date</TH>
-                      <TH align="right">Cost to date</TH>
-                      <TH align="right">Margin to date</TH>
+                      <TH align="right">Est. cost to date</TH>
+                      <TH align="right">Est. margin to date</TH>
                     </>
                   )}
                   <TH align="right">Approx. Qty</TH>

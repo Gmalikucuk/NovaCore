@@ -345,7 +345,7 @@ export function OverviewScreen() {
                             </p>
                             {contract.viewRates && (
                               <p className="text-sm text-nc-text-muted">
-                                Margin to date: <span className="nc-numeric">{money(pinMargin)}</span>
+                                Est. margin to date: <span className="nc-numeric">{money(pinMargin)}</span>
                               </p>
                             )}
                           </div>
@@ -450,7 +450,7 @@ export function OverviewScreen() {
                             <div className="nc-numeric text-sm font-semibold text-nc-text">{money(fm.value)}</div>
                           </div>
                           <div className="text-right">
-                            <div className="text-xs text-nc-text-muted">Margin</div>
+                            <div className="text-xs text-nc-text-muted">Est. margin</div>
                             <div className={`nc-numeric text-sm font-semibold ${fm.margin !== null && fm.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}>{money(fm.margin)}</div>
                           </div>
                         </div>

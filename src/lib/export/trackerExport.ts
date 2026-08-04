@@ -139,10 +139,6 @@ function sortedItemsBySection(items: Item[]) {
 }
 
 function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
-  // Freeze extends through row 3 now — title, month-group header, and the
-  // Qty/Value sub-header beneath it all stay put on scroll, same idea as
-  // freezing at C3 before, just one row deeper for the added header row.
-  const sheet = workbook.addWorksheet('Tracker', { views: [{ state: 'frozen', xSplit: 2, ySplit: 3 }] })
   const { items, progressByItem, priceByItem, itemMonthByKey, reconciliation, periods, periodsWithData, dateRange } = data
   const sections = sortedItemsBySection(items)
 
@@ -151,11 +147,22 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   // the less-frequently-needed money/MoT figures trailing at the end —
   // matching the reference workbook's own ordering, not a database dump's.
   const baseHeaders = ['Item #', 'Description', 'UOM', 'Contract Qty', 'Done to Date', 'Remaining', '% Complete']
-  const trailingHeaders = contract.viewRates ? ['Authorized Value', 'Provisional Sum', 'Value to Date', 'Cost to Date', 'Margin', 'MoT Qty', 'MoT Total'] : []
+  const trailingHeaders = contract.viewRates ? ['Authorized Value', 'Provisional Sum', 'Value to Date', 'Est. Cost to Date', 'Est. Margin to Date', 'MoT Qty', 'MoT Total'] : []
   const monthHeaderCount = periods.length * (contract.viewRates ? 2 : 1)
   const colCount = baseHeaders.length + monthHeaderCount + trailingHeaders.length
   const periodStartCol = baseHeaders.length + 1
   const trailingStartCol = periodStartCol + monthHeaderCount
+
+  // A cost caption row (viewRates contracts only — no Cost/Margin column
+  // exists at all otherwise) shifts the grouped header and every data row
+  // down by one, same "genuinely different shape" reasoning as the Finance
+  // export's own sandbox row.
+  const costCaptionRowCount = contract.viewRates ? 1 : 0
+  const headerRow2Num = 2 + costCaptionRowCount
+  const headerRow3Num = headerRow2Num + 1
+  const dataStartRowNum = headerRow3Num + 1
+
+  const sheet = workbook.addWorksheet('Tracker', { views: [{ state: 'frozen', xSplit: 2, ySplit: headerRow3Num }] })
 
   // Row 1 — title, merged across the sheet. Company name isn't in the
   // schema (this is a single-tenant app built for Keywest specifically,
@@ -171,26 +178,36 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }
 
-  // Rows 2–3 — two-row header for the grouped month columns: row 2 carries
-  // a cell merged across each month's Qty/Value pair reading e.g. "May
-  // 2026" (a real date, formatted to hide the day, not a string — sorting
-  // and filtering on it still works); row 3 carries "Qty"/"Value" beneath
+  // Row 2 (viewRates contracts only) — every "Est. Cost"/"Est. Margin"
+  // column below is Keywest's own bid estimate, not a measured fact; same
+  // wording as Rates and the Finance export's equivalent note.
+  if (contract.viewRates) {
+    sheet.mergeCells(2, 1, 2, colCount)
+    const costCaptionCell = sheet.getCell(2, 1)
+    costCaptionCell.value = 'Cost and margin figures are Keywest’s own bid estimate — actual cost is not yet recorded in NovaCore.'
+    costCaptionCell.font = { italic: true, size: 9 }
+  }
+
+  // Two-row header for the grouped month columns: the first carries a cell
+  // merged across each month's Qty/Value pair reading e.g. "May 2026" (a
+  // real date, formatted to hide the day, not a string — sorting and
+  // filtering on it still works); the second carries "Qty"/"Value" beneath
   // it. Standard treatment for grouped columns — the only arrangement in
   // which a paired column reads, since otherwise the second column of the
   // pair has nothing tying it to its month. Non-grouped columns (the base
   // and trailing blocks) merge vertically across both rows instead, so
   // their header reads once, at normal height, same as every other column.
-  const headerRow2 = sheet.getRow(2)
-  const headerRow3 = sheet.getRow(3)
+  const headerRow2 = sheet.getRow(headerRow2Num)
+  const headerRow3 = sheet.getRow(headerRow3Num)
   for (let i = 0; i < baseHeaders.length; i++) {
     const c = i + 1
-    sheet.mergeCells(2, c, 3, c)
+    sheet.mergeCells(headerRow2Num, c, headerRow3Num, c)
     headerRow2.getCell(c).value = baseHeaders[i]
   }
   let col = periodStartCol
   for (const period of periods) {
     const monthSpan = contract.viewRates ? 2 : 1
-    sheet.mergeCells(2, col, 2, col + monthSpan - 1)
+    sheet.mergeCells(headerRow2Num, col, headerRow2Num, col + monthSpan - 1)
     const monthCell = headerRow2.getCell(col)
     monthCell.value = periodDate(period)
     monthCell.numFmt = MONTH_FORMAT
@@ -200,7 +217,7 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   }
   for (let i = 0; i < trailingHeaders.length; i++) {
     const c = trailingStartCol + i
-    sheet.mergeCells(2, c, 3, c)
+    sheet.mergeCells(headerRow2Num, c, headerRow3Num, c)
     headerRow2.getCell(c).value = trailingHeaders[i]
   }
   for (let c = 1; c <= colCount; c++) {
@@ -221,7 +238,7 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   for (let c = periodStartCol; c < trailingStartCol; c++) sheet.getColumn(c).width = 12
   for (let c = trailingStartCol; c <= colCount; c++) sheet.getColumn(c).width = 14
 
-  let rowNum = 4
+  let rowNum = dataStartRowNum
   for (const section of sections) {
     const sectionRow = sheet.getRow(rowNum++)
     sectionRow.getCell(1).value = section.prefix
@@ -365,12 +382,28 @@ function buildRecordsSheet(workbook: ExcelJS.Workbook, data: LoadedData) {
 }
 
 function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
-  const sheet = workbook.addWorksheet('Summary', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] })
   const { items, progressByItem, priceByItem } = data
   const sortedItems = [...items].sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber))
 
-  const headers = ['Item #', 'Description', 'Approx. Qty', 'Qty to Date', 'Remaining', '% Complete', ...(contract.viewRates ? ['Unit Price', 'Value to Date', 'Cost to Date', 'Margin'] : [])]
-  const headerRow = sheet.getRow(1)
+  const headers = ['Item #', 'Description', 'Approx. Qty', 'Qty to Date', 'Remaining', '% Complete', ...(contract.viewRates ? ['Unit Price', 'Value to Date', 'Est. Cost to Date', 'Est. Margin to Date'] : [])]
+
+  // A cost caption row (viewRates contracts only) shifts the header and
+  // every data row down by one — same reasoning as the Tracker sheet's own
+  // equivalent row above.
+  const costCaptionRowCount = contract.viewRates ? 1 : 0
+  const headerRowNum = 1 + costCaptionRowCount
+  const dataStartRowNum = headerRowNum + 1
+
+  const sheet = workbook.addWorksheet('Summary', { views: [{ state: 'frozen', xSplit: 2, ySplit: headerRowNum }] })
+
+  if (contract.viewRates) {
+    sheet.mergeCells(1, 1, 1, headers.length)
+    const costCaptionCell = sheet.getCell(1, 1)
+    costCaptionCell.value = 'Cost and margin figures are Keywest’s own bid estimate — actual cost is not yet recorded in NovaCore.'
+    costCaptionCell.font = { italic: true, size: 9 }
+  }
+
+  const headerRow = sheet.getRow(headerRowNum)
   headers.forEach((h, i) => (headerRow.getCell(i + 1).value = h))
   styleHeaderRow(headerRow)
 
@@ -391,7 +424,7 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
     const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
     const qtyFmt = quantityFormat(item.unit)
 
-    const row = sheet.getRow(i + 2)
+    const row = sheet.getRow(dataStartRowNum + i)
     let c = 1
     row.getCell(c++).value = item.itemNumber
     row.getCell(c++).value = item.description

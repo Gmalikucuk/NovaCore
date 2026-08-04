@@ -227,7 +227,7 @@ export function OwnerScreen({ contract }: { contract: MyContract }) {
 
                     {contract.viewRates && (
                       <p className="mt-2 border-t border-nc-border pt-2 text-sm text-nc-text-muted">
-                        Margin to date <span className="nc-numeric font-semibold text-nc-text">{money(pinMargin)}</span>
+                        Est. margin to date <span className="nc-numeric font-semibold text-nc-text">{money(pinMargin)}</span>
                       </p>
                     )}
                   </article>
