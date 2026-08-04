@@ -31,11 +31,36 @@
 --     on a contract that DOES have Jobs — proving job_id is optional even
 --     then
 --
--- TO DELETE ENTIRELY:
---   delete from public.contracts where contract_no = '26914-0000';
---   (cascades to items, item_prices, quantity_records, contract_members, jobs)
+-- IDEMPOTENT — actually, this time. Previously this file opened with
+-- `delete from public.contracts where contract_no = '26914-0000'`, which
+-- CASCADEs through every table that has ever come to reference contracts.id:
+-- contract_members, items, jobs, progress_estimates, quantity_records
+-- directly, and transitively through items to item_prices, pinned_items, and
+-- actual_cost_entries. Every rerun also minted a fresh contract UUID, so
+-- nothing that had ever referenced the old one survived even in spirit. That
+-- destroyed real data twice this session — a seat's manually-granted rights
+-- (contract_members) and, silently, any pins a seat had made through the UI
+-- (pinned_items) — because "rebuild from scratch" doesn't distinguish the
+-- seed's own synthetic rows from anything real that accumulated since the
+-- last run. See the git history around the "rights regression on Hwy 97C"
+-- investigation for the incident this fixes.
 --
--- Requires migrations through 0016. Idempotent.
+-- Now: the contract row is found-or-inserted once and never deleted, every
+-- table this script owns is upserted, and quantity_records — the one part
+-- that can't use a natural key, since a work event has no unique identity of
+-- its own — is cleared and rebuilt by device_id = 'seed-demo' ONLY, the
+-- same scoped-marker pattern 0005/0006 already used for exactly this
+-- reason. Nothing this script doesn't own (contract_members rows other than
+-- the creator's, pinned_items, actual_cost_entries, progress_estimates) is
+-- ever touched by a rerun.
+--
+-- TO DELETE ENTIRELY (a deliberate, manual act — not what a rerun does):
+--   delete from public.contracts where contract_no = '26914-0000';
+--   (cascades to contract_members, items, jobs, progress_estimates,
+--    quantity_records, and transitively item_prices, pinned_items,
+--    actual_cost_entries)
+--
+-- Requires migrations through 0018.
 -- =============================================================================
 
 do $$
@@ -53,21 +78,29 @@ begin
     raise exception 'No profile holds create_projects. Seat an account first.';
   end if;
 
-  -- Rebuild from scratch each run so the demo state is reproducible.
-  delete from public.contracts where contract_no = '26914-0000';
+  -- Found-or-created, never deleted — see header. Mutable/illustrative
+  -- fields (name, dates) are updated in place below so editing this file
+  -- and rerunning it still applies, without ever touching the row's
+  -- identity or anything that references it.
+  select id into v_contract from public.contracts where contract_no = '26914-0000';
+
+  if v_contract is null then
+    insert into public.contracts (contract_name, contract_no, created_by, is_sandbox)
+    values ('Hwy 97C Pennask Summit Resurfacing', '26914-0000', v_creator, true)
+    returning id into v_contract;
+  end if;
 
   -- Dates (0016) — DISCLOSED-FICTIONAL, same umbrella as the rest of this
   -- contract's invented figures (see SandboxBanner: "not a real contract").
   -- Illustrative, plausible for a BC paving season, and deliberately
   -- CONTAINED at the contract level (planned sits inside given) so the
   -- well-formed state has somewhere real to render.
-  insert into public.contracts
-    (contract_name, contract_no, created_by, is_sandbox,
-     contract_start, contract_end, planned_start, planned_end)
-  values
-    ('Hwy 97C Pennask Summit Resurfacing', '26914-0000', v_creator, true,
-     '2026-05-01', '2026-11-30', '2026-05-15', '2026-10-31')
-  returning id into v_contract;
+  update public.contracts set
+    contract_name  = 'Hwy 97C Pennask Summit Resurfacing',
+    is_sandbox     = true,
+    contract_start = '2026-05-01', contract_end = '2026-11-30',
+    planned_start  = '2026-05-15', planned_end  = '2026-10-31'
+  where id = v_contract;
 
   insert into public.contract_members
     (contract_id, user_id, create_items, set_cost, set_unit_price,
@@ -79,6 +112,21 @@ begin
     enter_quantity = true, correct_quantity = true, confirm_quantity = true,
     view_rates = true, extract_report = true, manage_schedule = true,
     record_actual_cost = true;
+
+  -- Preservation fixture for probe-rls.sh (probe-correct-only@novacore.test)
+  -- — a deliberately narrow, plausible combination granted ONCE via DO
+  -- NOTHING, never touched again by a rerun of this script. This is the
+  -- point: the creator's grant above is unconditionally RE-asserted every
+  -- run by design, which makes it structurally unable to reveal a
+  -- regression — it always passes regardless of what else broke. This row
+  -- is the opposite on purpose. If a future change to this script, or to a
+  -- migration, ever resets, widens, or drops this seat's rights, the
+  -- "preservation" probe built against it goes red immediately. See the
+  -- "rights regression on Hwy 97C" investigation this exists to catch a
+  -- repeat of.
+  insert into public.contract_members (contract_id, user_id, enter_quantity, view_rates)
+  values (v_contract, '7d074e48-ccdb-4b3c-9dd2-1d4176967c03', true, true)
+  on conflict (contract_id, user_id) do nothing;
 
   -- Jobs (0016) — illustrative, not from any tender document (Hwy 97C has
   -- none; this whole contract is fictional). Job A sits INSIDE the
@@ -126,7 +174,16 @@ begin
     (v_contract, '05.02.02', 'Supply and Apply Tack Coat', 'Litre', 47200, 'unit_price', null, null, null, null),
     (v_contract, '05.03.01', 'Level Course', 'Tonne', 2260, 'unit_price', null, null, null, '7'),
     (v_contract, '05.03.03', 'Top Lift', 'Tonne', 14800, 'unit_price', null, null, null, '7'),
-    (v_contract, '06.01', 'Supply and Install New Signs (Single Post)', 'Each', 14, 'unit_price', null, null, null, null);
+    (v_contract, '06.01', 'Supply and Install New Signs (Single Post)', 'Each', 14, 'unit_price', null, null, null, null)
+  on conflict (contract_id, item_number) do update set
+    description           = excluded.description,
+    unit                  = excluded.unit,
+    approximate_quantity  = excluded.approximate_quantity,
+    item_kind             = excluded.item_kind,
+    provisional_sum       = excluded.provisional_sum,
+    authorized_value      = excluded.authorized_value,
+    percent_complete      = excluded.percent_complete,
+    dfpa_category         = excluded.dfpa_category;
 
   -- Item -> Job assignment (0016) — illustrative, same fictional umbrella as
   -- the Jobs themselves. 05.03.03 Top Lift under Job A deliberately echoes
@@ -153,6 +210,10 @@ begin
   --
   -- 04.08.02 and 06.01 are deliberately LEFT UNPRICED, so the dashboard's
   -- partial-margin warning has something to report.
+  --
+  -- item_prices.item_id is its own primary key — upserted on it, not
+  -- inserted blind, now that a rerun finds the same Item rows rather than
+  -- fresh ones from a cascade-recreated contract.
   -- ---------------------------------------------------------------------------
   insert into public.item_prices (item_id, contract_id, cost_price, unit_price)
   select i.id, i.contract_id, p.cost, p.sell
@@ -177,10 +238,21 @@ begin
     ('05.03.03',   101.20,    127.80)
     -- 04.08.02 and 06.01 intentionally absent
   ) as p(item_number, cost, sell) on p.item_number = i.item_number
-  where i.contract_id = v_contract;
+  where i.contract_id = v_contract
+  on conflict (item_id) do update set
+    cost_price = excluded.cost_price,
+    unit_price = excluded.unit_price;
 
   -- ---------------------------------------------------------------------------
   -- Quantity records
+  --
+  -- No natural key exists for a work event, so unlike items/jobs/prices
+  -- above this can't be upserted row-by-row. Instead: delete exactly the
+  -- rows THIS script owns (device_id = 'seed-demo', the same scoped-marker
+  -- pattern 0005/0006 used to clean up acceptance-test data without
+  -- touching anything real) and rebuild them fresh. Anything a real seat
+  -- ever enters through the UI carries a real device_id and is never
+  -- matched by this delete.
   --
   -- Progress profile, deliberately uneven — milling ahead of paving, as it runs
   -- in reality:
@@ -196,6 +268,9 @@ begin
   --   03.01.02, 04.04.01, 04.05.04 lightly started
   --   04.08.02, 06.01           no records at all
   -- ---------------------------------------------------------------------------
+  delete from public.quantity_records
+  where contract_id = v_contract and device_id = 'seed-demo';
+
   for r in
     select * from (values
       -- item,     date,         qty,    loc,                 st_from, st_to,  status
@@ -340,5 +415,6 @@ end $$;
 --    without rejection, proving the containment rule is a warning, not yet
 --    a hard block (0016).
 --
--- TO DELETE: delete from public.contracts where contract_no = '26914-0000';
+-- TO DELETE ENTIRELY (manual, deliberate — see header):
+--   delete from public.contracts where contract_no = '26914-0000';
 -- =============================================================================

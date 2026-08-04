@@ -18,7 +18,7 @@
 -- "Integral". Noted here because a line-by-line comparison against Schedule 7
 -- will show a difference on that row.
 --
--- Requires migrations through 0016.
+-- Requires migrations through 0018.
 -- Idempotent: safe to re-run.
 -- =============================================================================
 

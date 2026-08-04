@@ -621,6 +621,46 @@ ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
 check "full: update actual_cost_entries rejected (no grant, append-only)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
 echo
+echo "=== Preservation, not just denial (rights regression on Hwy 97C) ==="
+# Every probe above proves the wall holds (a right-less seat is denied) or
+# that a fixture WITH a right succeeds. None of them prove a right present
+# before a change is still present after it — which is exactly how 60/60
+# stayed green while seed_demo_contract.sql was silently deleting real
+# grants on every rerun. The creator seat on the sandbox contract can't
+# close this gap: seed_demo_contract.sql unconditionally RE-GRANTS it every
+# right on every run, by design, so it is structurally immune to this class
+# of failure and would pass even if the rerun had just destroyed someone
+# else's row. correct_only's Hwy 97C membership is the opposite on purpose
+# — granted once, on_conflict do nothing, in seed_demo_contract.sql, never
+# re-asserted. If a future migration or seed rerun ever touches it, this
+# probe is what turns that into a red line instead of a silent loss.
+
+request GET "contract_members?select=contract_id,contracts!inner(contract_no)&contracts.contract_no=eq.26914-0000&user_id=eq.$CORRECT_ONLY_ID" "$CORRECT_ONLY_TOKEN"
+DEMO_CONTRACT_ID=$(json_field "$BODY_OUT" 0 contract_id)
+if [ -z "$DEMO_CONTRACT_ID" ]; then
+  echo "FATAL: correct_only is not seated on the Hwy 97C demo contract — seed_demo_contract.sql's preservation-fixture grant is missing, cannot run this probe" >&2
+  exit 1
+fi
+
+request GET "contract_members?select=create_items,set_cost,set_unit_price,enter_quantity,correct_quantity,confirm_quantity,view_rates,extract_report,manage_schedule,record_actual_cost&contract_id=eq.$DEMO_CONTRACT_ID&user_id=eq.$CORRECT_ONLY_ID" "$CORRECT_ONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  exact=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+expected = {
+  'create_items': False, 'set_cost': False, 'set_unit_price': False,
+  'enter_quantity': True, 'correct_quantity': False, 'confirm_quantity': False,
+  'view_rates': True, 'extract_report': False,
+  'manage_schedule': False, 'record_actual_cost': False,
+}
+print('1' if len(d) == 1 and d[0] == expected else '0')
+" "$BODY_OUT")
+  [ "$exact" = "1" ] && ok=1
+fi
+check "correct_only: Hwy 97C rights are EXACTLY {enter_quantity, view_rates} — survived every rerun" "exact match" "$ok" "$STATUS $BODY_OUT"
+
+echo
 echo "=== Positive controls ==="
 
 request GET "v_item_progress?select=*" "$QUANTITIES_TOKEN"
