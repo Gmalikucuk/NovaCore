@@ -21,3 +21,8 @@ export function daysAgo(dateStr: string): number {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   return Math.round((startOfToday.getTime() - date.getTime()) / (1000 * 60 * 60 * 24))
 }
+
+/** A confirmed_at timestamptz as the moment it actually was, not just which day — "Aug 3, 2026, 2:14 PM". The one place this app shows WHEN data was last confirmed rather than which work_date it's for. */
+export function formatConfirmedAt(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}

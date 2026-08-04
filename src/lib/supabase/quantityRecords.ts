@@ -67,6 +67,31 @@ export async function fetchQuantityRecordsForDate(
   return (data ?? []).map((row) => mapQuantityRecordRow(row as unknown as RawQuantityRecordRow))
 }
 
+/**
+ * The most recent confirmed_at across every confirmed record on the
+ * contract — the freshness figure a finance manager asks for ("as of when
+ * are these numbers current"), distinct from a page-load timestamp. Every
+ * money figure on the Finance tab is derived from quantity_records_effective,
+ * which only ever counts confirmed rows, so this single MAX is an honest
+ * answer for the whole surface rather than something computed per-Item.
+ * Null if nothing has been confirmed yet. A targeted order+limit(1) query,
+ * not a fetch of every record just to take its max — quantity_records has
+ * no view_rates gate (membership grants visibility of quantities, same as
+ * everywhere else in this schema), so this needs no separate right check.
+ */
+export async function fetchLastConfirmedAt(contractId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('quantity_records')
+    .select('confirmed_at')
+    .eq('contract_id', contractId)
+    .eq('status', 'confirmed')
+    .order('confirmed_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data?.confirmed_at ?? null
+}
+
 /** Distinct free-text location values already used on this contract, for the location field's autocomplete. No sites table in v1 (spec amendment, 2026-07-30). */
 export async function fetchDistinctLocations(contractId: string): Promise<string[]> {
   const { data, error } = await supabase

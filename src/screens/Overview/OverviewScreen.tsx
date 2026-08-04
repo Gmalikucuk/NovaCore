@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { IconAlertTriangle, IconClockPause, IconFlag, IconMinus, IconTrendingDown, IconTrendingUp } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchContractMonths, fetchItemMonths, fetchItemProgressRate, type ContractMonth, type ItemMonth, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
+import { fetchLastConfirmedAt } from '../../lib/supabase/quantityRecords'
 import { fetchPinnedItems, pinItem, unpinItem, type PinnedItem } from '../../lib/supabase/pinnedItems'
 import {
   BEHIND_RATE_THRESHOLD_DAYS,
@@ -21,7 +22,9 @@ import {
 } from '../../lib/calculations/overview'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
+import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
+import { exportFinanceWorkbook, type FinanceExportRow } from '../../lib/export/financeExport'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
 import { Button, Card, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
@@ -104,11 +107,11 @@ function ProblemIcon({ kind }: { kind: ProblemItem['kind'] }) {
   return <IconFlag size={16} stroke={1.75} className="text-nc-info-text" />
 }
 
-type MonthView = 'period' | 'to-date'
 type OverviewTab = 'progress' | 'finance'
 
 export function OverviewScreen() {
   const contract = useOutletContext<MyContract>()
+  const navigate = useNavigate()
 
   const [items, setItems] = useState<Item[]>([])
   const [prices, setPrices] = useState<ItemPrice[]>([])
@@ -116,8 +119,12 @@ export function OverviewScreen() {
   const [itemMonths, setItemMonths] = useState<ItemMonth[]>([])
   const [progressRate, setProgressRate] = useState<ItemProgressRate[]>([])
   const [pins, setPins] = useState<PinnedItem[]>([])
+  const [lastConfirmedAt, setLastConfirmedAt] = useState<string | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
+
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   // Pin picker + pin/unpin in-flight state — separate from the page's own
   // load/error state, since a failed pin shouldn't blank the whole screen
@@ -129,7 +136,6 @@ export function OverviewScreen() {
 
   const nowMonthKey = useMemo(() => monthKeyFromDate(new Date()), [])
   const [selectedMonth, setSelectedMonth] = useState<MonthKey>(nowMonthKey)
-  const [monthView, setMonthView] = useState<MonthView>('period')
   const [attentionExpanded, setAttentionExpanded] = useState(false)
   // "How far along are we" vs "what does that come to" — the split is by
   // question, not by role (the PM's own work already lives in Confirm/Daily
@@ -155,14 +161,20 @@ export function OverviewScreen() {
       fetchItemMonths(contract.id),
       fetchItemProgressRate(contract.id),
       fetchPinnedItems(contract.id),
+      // Not gated on viewRates — this is a fact about the records
+      // (quantity_records has no finance-wall gate; membership alone grants
+      // visibility of quantities, same as everywhere else in this schema),
+      // and is only ever displayed alongside the money it explains.
+      fetchLastConfirmedAt(contract.id),
     ])
-      .then(([itemRows, priceRows, contractMonthRows, itemMonthRows, progressRows, pinRows]) => {
+      .then(([itemRows, priceRows, contractMonthRows, itemMonthRows, progressRows, pinRows, lastConfirmed]) => {
         setItems(itemRows)
         setPrices(priceRows)
         setContractMonths(contractMonthRows)
         setItemMonths(itemMonthRows)
         setProgressRate(progressRows)
         setPins(pinRows)
+        setLastConfirmedAt(lastConfirmed)
         setStatus('ready')
 
         if (!hasAutoSelectedMonth.current && itemMonthRows.length > 0) {
@@ -213,7 +225,14 @@ export function OverviewScreen() {
   const marginThisMonth = currentContractMonth?.marginInPeriod ?? 0
   const marginLastMonth = previousContractMonth?.marginInPeriod ?? 0
 
-  // Band 4 — month detail table.
+  // Band 4 — Item detail. The billing-industry vocabulary a finance manager
+  // already thinks in: this period, previous period, to date, remaining.
+  // No % complete, no weighting — Remaining is a plain Approximate Quantity
+  // minus quantity to date, same arithmetic the brief calls for and nothing
+  // more invented than that.
+  const previousSelectedMonth = useMemo(() => previousMonth(selectedMonth), [selectedMonth])
+  const previousSelectedPeriod = monthKeyToPeriod(previousSelectedMonth)
+
   const availableMonths = useMemo(() => {
     const keys = new Set(itemMonths.map((m) => m.periodMonth))
     keys.add(monthKeyToPeriod(nowMonthKey))
@@ -221,31 +240,39 @@ export function OverviewScreen() {
   }, [itemMonths, nowMonthKey])
 
   const itemMonthByItem = useMemo(() => new Map(itemMonths.filter((m) => m.periodMonth === selectedPeriod).map((m) => [m.itemId, m])), [itemMonths, selectedPeriod])
+  const previousItemMonthByItem = useMemo(() => new Map(itemMonths.filter((m) => m.periodMonth === previousSelectedPeriod).map((m) => [m.itemId, m])), [itemMonths, previousSelectedPeriod])
 
   const monthRows = useMemo(
     () =>
       items.map((item) => {
         const inPeriod = itemMonthByItem.get(item.id)
+        const inPreviousPeriod = previousItemMonthByItem.get(item.id)
         const price = priceByItem.get(item.id)
         const progress = progressByItem.get(item.id)
         const unitPriced = item.itemKind === 'unit_price'
         const quantityInPeriod = unitPriced ? (inPeriod?.quantityInPeriod ?? 0) : null
+        const quantityInPreviousPeriod = unitPriced ? (inPreviousPeriod?.quantityInPeriod ?? 0) : null
         const cost = unitPriced ? (price?.costPrice ?? null) : null
         const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
+        const quantityToDate = unitPriced ? (progress?.quantityToDate ?? 0) : null
         return {
           item,
           quantityInPeriod,
           valueInPeriod: unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null,
           costInPeriod: cost !== null && quantityInPeriod !== null ? quantityInPeriod * cost : null,
           marginInPeriod: unitPriced ? computeMargin(quantityInPeriod ?? 0, cost, unitPrice) : null,
-          quantityToDate: unitPriced ? (progress?.quantityToDate ?? 0) : null,
+          previousValueInPeriod: unitPrice !== null && quantityInPreviousPeriod !== null ? quantityInPreviousPeriod * unitPrice : null,
+          previousMarginInPeriod: unitPriced ? computeMargin(quantityInPreviousPeriod ?? 0, cost, unitPrice) : null,
+          quantityToDate,
+          valueToDate: unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null,
+          costToDate: cost !== null && quantityToDate !== null ? quantityToDate * cost : null,
+          marginToDate: unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice) : null,
           approximateQuantity: unitPriced ? item.approximateQuantity : null,
-          remaining: unitPriced ? item.approximateQuantity - (progress?.quantityToDate ?? 0) : null,
-          proportionComplete: unitPriced ? (progress?.proportionComplete ?? null) : null,
+          remaining: unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null,
           isOverQuantity: unitPriced ? (progress?.isOverQuantity ?? false) : false,
         }
       }),
-    [items, itemMonthByItem, priceByItem, progressByItem],
+    [items, itemMonthByItem, previousItemMonthByItem, priceByItem, progressByItem],
   )
 
   const monthTotals = useMemo(
@@ -253,9 +280,56 @@ export function OverviewScreen() {
       value: sumOrNull(monthRows.map((r) => r.valueInPeriod)),
       cost: sumOrNull(monthRows.map((r) => r.costInPeriod)),
       margin: sumOrNull(monthRows.map((r) => r.marginInPeriod)),
+      previousValue: sumOrNull(monthRows.map((r) => r.previousValueInPeriod)),
+      previousMargin: sumOrNull(monthRows.map((r) => r.previousMarginInPeriod)),
+      toDateValue: sumOrNull(monthRows.map((r) => r.valueToDate)),
+      toDateCost: sumOrNull(monthRows.map((r) => r.costToDate)),
+      toDateMargin: sumOrNull(monthRows.map((r) => r.marginToDate)),
     }),
     [monthRows],
   )
+
+  async function handleFinanceExport() {
+    setExporting(true)
+    setExportError(null)
+    try {
+      const unitPriceRows: FinanceExportRow[] = monthRows
+        .filter((r): r is typeof r & { quantityToDate: number; approximateQuantity: number; remaining: number } => r.item.itemKind === 'unit_price')
+        .map((r) => ({
+          itemId: r.item.id,
+          itemNumber: r.item.itemNumber,
+          description: r.item.description,
+          unit: r.item.unit,
+          quantityInPeriod: r.quantityInPeriod,
+          valueInPeriod: r.valueInPeriod,
+          costInPeriod: r.costInPeriod,
+          marginInPeriod: r.marginInPeriod,
+          previousValueInPeriod: r.previousValueInPeriod,
+          previousMarginInPeriod: r.previousMarginInPeriod,
+          quantityToDate: r.quantityToDate,
+          valueToDate: r.valueToDate,
+          costToDate: r.costToDate,
+          marginToDate: r.marginToDate,
+          approximateQuantity: r.approximateQuantity,
+          remaining: r.remaining,
+          isOverQuantity: r.isOverQuantity,
+        }))
+      await exportFinanceWorkbook({
+        contract,
+        periodLabel: formatMonthLabel(selectedMonth),
+        previousPeriodLabel: formatMonthLabel(previousSelectedMonth),
+        lastConfirmedAt,
+        selectedPeriod,
+        rows: unitPriceRows,
+        totals: monthTotals,
+        appOrigin: window.location.origin,
+      })
+    } catch (err) {
+      setExportError(errorMessage(err))
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const unitPriceItems = useMemo(() => items.filter((i) => i.itemKind === 'unit_price'), [items])
   const hasNoRatesAtAll = contract.viewRates && unitPriceItems.length > 0 && !unitPriceItems.some((i) => priceByItem.get(i.id)?.unitPrice != null)
@@ -464,10 +538,16 @@ export function OverviewScreen() {
                 </NotificationBanner>
               )}
 
-              {/* Band 3 — money, for the CFO. Keyed to selectedMonth (see
-                  above) — same period Band 4's dropdown shows, always. */}
-              <section className="mb-8">
-                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money — {formatMonthLabel(selectedMonth)}</h2>
+              {/* Band 3 — money, for the finance manager. Keyed to
+                  selectedMonth (see above) — same period Band 4's table
+                  shows, always. The freshness line is the answer to "as of
+                  when" — not a page-load timestamp, the actual moment the
+                  records behind these figures were confirmed. */}
+              <section className="mb-6">
+                <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money — {formatMonthLabel(selectedMonth)}</h2>
+                  <p className="text-xs text-nc-text-muted">{lastConfirmedAt ? <>Confirmed records as of {formatConfirmedAt(lastConfirmedAt)}</> : 'No confirmed records yet'}</p>
+                </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {contract.viewRates ? (
                     currentContractMonth ? (
@@ -506,94 +586,111 @@ export function OverviewScreen() {
                 </div>
               </section>
 
-              {/* Band 4 — month detail table. Not reachable single-column, so
-                  hidden entirely below sm: rather than squeezed. */}
+              {/* Band 4 — Item detail. The vocabulary this table now uses —
+                  this period, previous period, to date, remaining — is the
+                  one the unit-price billing industry already uses; no
+                  toggle between a "period" view and a "to date" view any
+                  more, because the answer to "what did we earn" and the
+                  answer to "can I defend it" are never in two different
+                  places. Not reachable single-column, so hidden entirely
+                  below sm: rather than squeezed. */}
               <section className="hidden sm:block">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-4">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Month detail</h2>
-              <div className="flex items-center gap-3">
-                <div className="flex gap-2" role="group" aria-label="Column set">
-                  <Button type="button" variant={monthView === 'period' ? 'primary' : 'secondary'} onClick={() => setMonthView('period')}>
-                    This month
-                  </Button>
-                  <Button type="button" variant={monthView === 'to-date' ? 'primary' : 'secondary'} onClick={() => setMonthView('to-date')}>
-                    To date
-                  </Button>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-4">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Item detail</h2>
+                  <div className="flex items-center gap-3">
+                    <Select
+                      className="w-auto"
+                      value={selectedPeriod}
+                      onChange={(e) => {
+                        const [y, m] = e.target.value.split('-').map(Number)
+                        setSelectedMonth({ year: y, month: m })
+                      }}
+                      aria-label="Month"
+                    >
+                      {availableMonths.map((period) => {
+                        const [y, m] = period.split('-').map(Number)
+                        return (
+                          <option key={period} value={period}>
+                            {formatMonthLabel({ year: y, month: m })}
+                          </option>
+                        )
+                      })}
+                    </Select>
+                    <Button type="button" variant="secondary" disabled={exporting} onClick={() => void handleFinanceExport()}>
+                      {exporting ? 'Exporting…' : 'Export to Excel'}
+                    </Button>
+                  </div>
                 </div>
-                <Select
-                  className="w-auto"
-                  value={selectedPeriod}
-                  onChange={(e) => {
-                    const [y, m] = e.target.value.split('-').map(Number)
-                    setSelectedMonth({ year: y, month: m })
-                  }}
-                  aria-label="Month"
-                >
-                  {availableMonths.map((period) => {
-                    const [y, m] = period.split('-').map(Number)
-                    return (
-                      <option key={period} value={period}>
-                        {formatMonthLabel({ year: y, month: m })}
-                      </option>
-                    )
-                  })}
-                </Select>
-              </div>
-            </div>
 
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Item #</TH>
-                  <TH>Description</TH>
-                  {monthView === 'period' ? (
-                    <>
-                      <TH align="right">Quantity this month</TH>
+                {exportError && (
+                  <NotificationBanner tone="danger" className="mb-3">
+                    {exportError}
+                  </NotificationBanner>
+                )}
+
+                <Table>
+                  <THead>
+                    <TR>
+                      <TH>Item #</TH>
+                      <TH>Description</TH>
+                      <TH align="right">Qty — {formatMonthLabel(selectedMonth)}</TH>
                       {contract.viewRates && (
                         <>
-                          <TH align="right">Value this month</TH>
-                          <TH align="right">Cost this month</TH>
-                          <TH align="right">Margin this month</TH>
+                          <TH align="right">Value — {formatMonthLabel(selectedMonth)}</TH>
+                          <TH align="right">Cost — {formatMonthLabel(selectedMonth)}</TH>
+                          <TH align="right">Margin — {formatMonthLabel(selectedMonth)}</TH>
+                          <TH align="right">Value — {formatMonthLabel(previousSelectedMonth)}</TH>
+                          <TH align="right">Margin — {formatMonthLabel(previousSelectedMonth)}</TH>
                         </>
                       )}
-                    </>
-                  ) : (
-                    <>
-                      <TH align="right">Quantity to date</TH>
-                      <TH align="right">Approximate Quantity</TH>
+                      <TH align="right">Qty to date</TH>
+                      {contract.viewRates && (
+                        <>
+                          <TH align="right">Value to date</TH>
+                          <TH align="right">Cost to date</TH>
+                          <TH align="right">Margin to date</TH>
+                        </>
+                      )}
+                      <TH align="right">Approx. Qty</TH>
                       <TH align="right">Remaining</TH>
-                      <TH align="right">% complete</TH>
-                    </>
-                  )}
-                </TR>
-              </THead>
-              <TBody>
-                {monthRows.map((r) => (
-                  <TR key={r.item.id}>
-                    <TD className="nc-numeric">{r.item.itemNumber}</TD>
-                    {/* Fixed width, not left to the table's auto-layout: unconstrained, this
-                        column measured 506px wide in the period column set vs 352px in the
-                        to-date set for the exact same text — auto-layout balances its width
-                        against whichever numeric columns happen to be visible, so it silently
-                        pushed the period set to 1321px of real content inside a 1154px
-                        container (measured, not estimated) at 1440px. `title` is mouse-hover-only
-                        and shows nothing on a touch screen — fine here since this table is
-                        desktop-only, but don't copy the pattern onto a touch-reachable screen
-                        without a tap-to-reveal alternative. */}
-                    <TD prose>
-                      {/* The truncate/max-width lives on this inner div, not
-                          the TD itself — a <td>'s own max-width is not
-                          reliably respected by an auto-layout table (this
-                          table isn't table-layout: fixed), but a fixed-width
-                          block INSIDE it is, since the browser only needs to
-                          make room for that block's width, not the text's
-                          natural content width. */}
-                      <div className="max-w-[280px] truncate" title={r.item.description}>
-                        {r.item.description}
-                      </div>
-                    </TD>
-                    {monthView === 'period' ? (
-                      <>
+                    </TR>
+                  </THead>
+                  <TBody>
+                    {monthRows.map((r) => (
+                      <TR key={r.item.id}>
+                        {/* Item # is the drill-down: the same ?itemId=&period=
+                            deep link the Tracker screen already uses to reach
+                            Daily Entry, not a new drill-down framework — the
+                            shortest honest path from a figure on this row to
+                            the confirmed records behind it. */}
+                        <TD className="nc-numeric">
+                          <button
+                            type="button"
+                            className="text-nc-info-text underline decoration-dotted hover:decoration-solid"
+                            onClick={() => navigate(`/daily-entry?itemId=${r.item.id}&period=${selectedPeriod}`)}
+                            title={`View ${formatMonthLabel(selectedMonth)}'s confirmed records for ${r.item.itemNumber}`}
+                          >
+                            {r.item.itemNumber}
+                          </button>
+                        </TD>
+                        {/* Fixed width, not left to the table's auto-layout: unconstrained, this
+                            column measured 506px wide in an earlier column set for the exact same
+                            text — auto-layout balances its width against whichever numeric columns
+                            happen to be visible. `title` is mouse-hover-only and shows nothing on a
+                            touch screen — fine here since this table is desktop-only, but don't copy
+                            the pattern onto a touch-reachable screen without a tap-to-reveal alternative. */}
+                        <TD prose>
+                          {/* The truncate/max-width lives on this inner div, not
+                              the TD itself — a <td>'s own max-width is not
+                              reliably respected by an auto-layout table (this
+                              table isn't table-layout: fixed), but a fixed-width
+                              block INSIDE it is, since the browser only needs to
+                              make room for that block's width, not the text's
+                              natural content width. */}
+                          <div className="max-w-[220px] truncate" title={r.item.description}>
+                            {r.item.description}
+                          </div>
+                        </TD>
                         <TD align="right" className="nc-numeric">
                           {fmtQuantity(r.quantityInPeriod, r.item.unit)}
                         </TD>
@@ -608,56 +705,97 @@ export function OverviewScreen() {
                             <TD align="right" className={`nc-numeric ${r.marginInPeriod !== null && r.marginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
                               {r.marginInPeriod === null ? '—' : money(r.marginInPeriod)}
                             </TD>
+                            <TD align="right" className="nc-numeric">
+                              {money(r.previousValueInPeriod)}
+                            </TD>
+                            <TD align="right" className={`nc-numeric ${r.previousMarginInPeriod !== null && r.previousMarginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                              {r.previousMarginInPeriod === null ? '—' : money(r.previousMarginInPeriod)}
+                            </TD>
                           </>
                         )}
-                      </>
-                    ) : (
-                      <>
                         <TD align="right" className="nc-numeric">
-                          {fmtQuantity(r.quantityToDate)}
+                          <button
+                            type="button"
+                            className="text-nc-info-text underline decoration-dotted hover:decoration-solid"
+                            onClick={() => navigate(`/daily-entry?itemId=${r.item.id}`)}
+                            title={`View ${r.item.itemNumber}'s confirmed records`}
+                          >
+                            {fmtQuantity(r.quantityToDate)}
+                          </button>
                         </TD>
+                        {contract.viewRates && (
+                          <>
+                            <TD align="right" className="nc-numeric">
+                              {money(r.valueToDate)}
+                            </TD>
+                            <TD align="right" className="nc-numeric">
+                              {money(r.costToDate)}
+                            </TD>
+                            <TD align="right" className={`nc-numeric ${r.marginToDate !== null && r.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                              {r.marginToDate === null ? '—' : money(r.marginToDate)}
+                            </TD>
+                          </>
+                        )}
                         <TD align="right" className="nc-numeric">
                           {r.approximateQuantity === null ? '—' : fmtQuantity(r.approximateQuantity)}
                         </TD>
-                        {/* A negative Remaining reads as a deficit (recorded
-                            past the Approximate Quantity), not a stray minus
-                            sign — the over tone on both cells is the same
-                            signal used everywhere else over-quantity shows up
-                            (StatusBadge, the problem list above). */}
+                        {/* Over quantity: the existing violet "over" tone, but
+                            colour is never the only signal — an icon plus "…
+                            over" reads correctly even in greyscale, same
+                            phrasing OwnerScreen already uses for the same
+                            condition. */}
                         <TD align="right" className={`nc-numeric ${r.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
-                          {r.remaining === null ? '—' : fmtQuantity(r.remaining)}
+                          {r.remaining === null ? (
+                            '—'
+                          ) : r.isOverQuantity ? (
+                            <span className="inline-flex items-center justify-end gap-1">
+                              <IconAlertTriangle size={13} stroke={1.75} />
+                              {fmtQuantity(Math.abs(r.remaining))} over
+                            </span>
+                          ) : (
+                            fmtQuantity(r.remaining)
+                          )}
                         </TD>
-                        <TD align="right" className={`nc-numeric ${r.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
-                          {percent(r.proportionComplete)}
-                        </TD>
-                      </>
-                    )}
-                  </TR>
-                ))}
-              </TBody>
-              {monthView === 'period' && contract.viewRates && (
-                <tfoot>
-                  <tr>
-                    <td colSpan={2} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-xs text-nc-text-muted">
-                      {/* Width-capped for the same reason as the Description column above: an
-                          unconstrained colSpan cell's content width feeds into the auto-layout
-                          algorithm for BOTH columns it spans — this exact sentence, unwrapped,
-                          was the actual source of Description's 506px width, not the row
-                          descriptions themselves (already capped and had no effect alone). */}
-                      <div className="max-w-[420px]">Contract totals for {formatMonthLabel(selectedMonth)} — quantity columns aren't summed (mixed units across items); the $ columns are.</div>
-                    </td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.value)}</td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.cost)}</td>
-                    <td
-                      className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin !== null && monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
-                    >
-                      {money(monthTotals.margin)}
-                    </td>
-                  </tr>
-                </tfoot>
-              )}
-            </Table>
+                      </TR>
+                    ))}
+                  </TBody>
+                  {contract.viewRates && (
+                    <tfoot>
+                      <tr>
+                        <td colSpan={2} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-xs text-nc-text-muted">
+                          {/* Width-capped for the same reason as the Description column above: an
+                              unconstrained colSpan cell's content width feeds into the auto-layout
+                              algorithm for BOTH columns it spans. */}
+                          <div className="max-w-[200px]">Totals — quantity columns aren't summed (mixed units across Items); the $ columns are.</div>
+                        </td>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.value)}</td>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.cost)}</td>
+                        <td
+                          className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin !== null && monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                        >
+                          {money(monthTotals.margin)}
+                        </td>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.previousValue)}</td>
+                        <td
+                          className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.previousMargin !== null && monthTotals.previousMargin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                        >
+                          {money(monthTotals.previousMargin)}
+                        </td>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.toDateValue)}</td>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.toDateCost)}</td>
+                        <td
+                          className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.toDateMargin !== null && monthTotals.toDateMargin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                        >
+                          {money(monthTotals.toDateMargin)}
+                        </td>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
+                      </tr>
+                    </tfoot>
+                  )}
+                </Table>
               </section>
             </>
           )}
