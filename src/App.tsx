@@ -12,6 +12,7 @@ import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
 import { OverviewScreen } from './screens/Overview/OverviewScreen'
+import { FinanceMonthScreen } from './screens/Finance/FinanceMonthScreen'
 import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
 import { TrackerScreen } from './screens/Tracker/TrackerScreen'
 
@@ -92,6 +93,17 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <OverviewScreen />
+                  </ErrorBoundary>
+                }
+              />
+              {/* Reached only by opening a month row on the Finance tab — no
+                  nav link of its own, same convention as the Tracker's own
+                  ?itemId=&period= deep link into /daily-entry. */}
+              <Route
+                path="/finance/:period"
+                element={
+                  <ErrorBoundary>
+                    <FinanceMonthScreen />
                   </ErrorBoundary>
                 }
               />
