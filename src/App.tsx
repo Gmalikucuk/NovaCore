@@ -2,10 +2,12 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { AuthGate } from './shell/AuthGate'
+import { CompanyShell } from './shell/CompanyShell'
 import { Sidebar } from './shell/Sidebar'
 import { FieldHeader } from './shell/FieldHeader'
 import { SignInScreen } from './screens/SignIn/SignInScreen'
 import { EntryScreen } from './screens/Entry/EntryScreen'
+import { PortfolioScreen } from './screens/Portfolio/PortfolioScreen'
 import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
@@ -40,6 +42,18 @@ function App() {
                 }
               />
             </Route>
+            {/* Company level — the portfolio across every contract. */}
+            <Route element={<CompanyShell />}>
+              <Route
+                path="/portfolio"
+                element={
+                  <ErrorBoundary>
+                    <PortfolioScreen />
+                  </ErrorBoundary>
+                }
+              />
+            </Route>
+            {/* Contract level — one contract at a time. */}
             <Route element={<Sidebar />}>
               <Route
                 path="/line-items"

@@ -64,6 +64,7 @@ function ProblemIcon({ kind }: { kind: ProblemItem['kind'] }) {
 }
 
 type MonthView = 'period' | 'to-date'
+type OverviewTab = 'progress' | 'finance'
 
 /**
  * `contract` is an optional override for the one caller that isn't reached
@@ -90,7 +91,11 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
   const [selectedMonth, setSelectedMonth] = useState<MonthKey>(nowMonthKey)
   const [monthView, setMonthView] = useState<MonthView>('period')
   const [attentionExpanded, setAttentionExpanded] = useState(false)
-  const [moneyOpen, setMoneyOpen] = useState(false)
+  // "How far along are we" vs "what does that come to" — the split is by
+  // question, not by role (the PM's own work already lives in Confirm/Daily
+  // Entry, not here). One tab visible at a time, on every viewport size —
+  // not a mobile-only collapse, an actual navigational split.
+  const [activeTab, setActiveTab] = useState<OverviewTab>('progress')
   // Fires once, the first time real data lands — so the month selector
   // opens on the latest month with any records instead of sitting on
   // today's (likely empty-so-far) calendar month, without fighting a user
@@ -229,113 +234,125 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
 
       {status === 'ready' && (
         <>
-          {hasNoRatesAtAll && (
-            <NotificationBanner tone="warning" className="mb-4">
-              No Unit Prices are set on this contract yet — every money figure below is empty because no rate has been entered, not because there's no work.
-            </NotificationBanner>
-          )}
-
-          {/* Band 1 — progress, the owner's question: are we on pace against
-              the contract. Largest type on the page, top, no scrolling
-              required, single column on a phone. */}
-          <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Card className="p-6">
-              <div className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Contract complete</div>
-              <div className="nc-numeric mt-2 text-4xl font-semibold text-nc-text sm:text-5xl">{percent(contractComplete)}</div>
-              <div className="mt-1 text-xs text-nc-text-muted">Quantity-weighted, Unit Price Items</div>
-            </Card>
-            <Card className="p-6">
-              <div className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Items in progress</div>
-              <div className="nc-numeric mt-2 text-4xl font-semibold text-nc-text sm:text-5xl">
-                {inProgress.started} <span className="text-2xl text-nc-text-muted sm:text-3xl">of {inProgress.total}</span>
-              </div>
-              <div className="mt-1 text-xs text-nc-text-muted">Started, not yet finished</div>
-            </Card>
+          {/* The split is by question, not by role — "how far along are we"
+              (Progress) versus "what does that come to" (Finance). One
+              visible at a time, at every viewport size: this is real
+              navigation, not a mobile-only collapse of one long page. */}
+          <div className="mb-6 flex gap-2" role="group" aria-label="Overview section">
+            <Button type="button" variant={activeTab === 'progress' ? 'primary' : 'secondary'} onClick={() => setActiveTab('progress')}>
+              Progress
+            </Button>
+            <Button type="button" variant={activeTab === 'finance' ? 'primary' : 'secondary'} onClick={() => setActiveTab('finance')}>
+              Finance
+            </Button>
           </div>
 
-          {/* Band 2 — what's wrong, worst consequence first: over quantity
-              (cost exposure), then behind rate, then stalled. */}
-          <section className="mb-8">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Needs attention</h2>
-            {problemList.length === 0 ? (
-              <p className="text-sm text-nc-text">Every Unit Price Item is progressing normally — nothing over quantity, nothing behind the recent rate, nothing stalled.</p>
-            ) : (
-              <>
-                <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
-                  {visibleProblems.map((p) => (
-                    <div key={`${p.kind}-${p.row.itemId}`} className="flex items-start gap-3 px-4 py-3">
-                      <ProblemIcon kind={p.kind} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm">
-                          <span className="nc-numeric font-semibold text-nc-text">{p.row.itemNumber}</span>{' '}
-                          <span className="text-nc-text-muted">{p.row.description}</span>
-                        </p>
-                        <p className="text-sm text-nc-text-muted">{problemSentence(p, costByItem)}</p>
-                      </div>
-                      <span className="shrink-0 rounded-full bg-nc-secondary px-2 py-0.5 text-xs font-medium text-nc-text-muted">{PROBLEM_KIND_LABEL[p.kind]}</span>
-                    </div>
-                  ))}
-                </div>
-                {hiddenProblemCount > 0 && (
-                  <Button type="button" variant="ghost" className="mt-2" onClick={() => setAttentionExpanded(true)}>
-                    and {hiddenProblemCount} more
-                  </Button>
-                )}
-              </>
-            )}
-          </section>
+          {activeTab === 'progress' && (
+            <>
+              {/* Band 1 — progress, the owner's question: are we on pace
+                  against the contract. Largest type on the page, top, no
+                  scrolling required, single column on a phone. */}
+              <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Card className="p-6">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Contract complete</div>
+                  <div className="nc-numeric mt-2 text-4xl font-semibold text-nc-text sm:text-5xl">{percent(contractComplete)}</div>
+                  <div className="mt-1 text-xs text-nc-text-muted">Quantity-weighted, Unit Price Items</div>
+                </Card>
+                <Card className="p-6">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Items in progress</div>
+                  <div className="nc-numeric mt-2 text-4xl font-semibold text-nc-text sm:text-5xl">
+                    {inProgress.started} <span className="text-2xl text-nc-text-muted sm:text-3xl">of {inProgress.total}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-nc-text-muted">Started, not yet finished</div>
+                </Card>
+              </div>
 
-          {/* Band 3 — money, for the CFO. Collapsed by default on a phone
-              (a control, not the default view); always open at sm: and
-              above. */}
-          <section className="mb-8">
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money</h2>
-              <Button type="button" variant="ghost" className="sm:hidden" onClick={() => setMoneyOpen((v) => !v)}>
-                {moneyOpen ? 'Hide' : 'Show'} money figures
-              </Button>
-            </div>
-            <div className={moneyOpen ? 'grid grid-cols-1 gap-3 sm:grid-cols-2' : 'hidden grid-cols-1 gap-3 sm:grid sm:grid-cols-2'}>
-              {contract.viewRates ? (
-                currentContractMonth ? (
-                  <>
-                    <StatCard
-                      label="Value of Work this month"
-                      value={money(valueThisMonth)}
-                      sub={
-                        <>
-                          <DirectionBadge direction={monthDirection(valueThisMonth, valueLastMonth)} /> {money(valueLastMonth)} last month
-                        </>
-                      }
-                    />
-                    <StatCard
-                      label="Margin this month"
-                      value={<span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{money(marginThisMonth)}</span>}
-                      sub={
-                        <>
-                          <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {money(marginLastMonth)} last month
-                        </>
-                      }
-                    />
-                  </>
+              {/* Band 2 — what's wrong, worst consequence first: over
+                  quantity (cost exposure), then behind rate, then stalled. */}
+              <section className="mb-8">
+                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Needs attention</h2>
+                {problemList.length === 0 ? (
+                  <p className="text-sm text-nc-text">Every Unit Price Item is progressing normally — nothing over quantity, nothing behind the recent rate, nothing stalled.</p>
                 ) : (
                   <>
-                    <StatCard label="Value of Work this month" value="—" sub={`No records yet for ${formatMonthLabel(nowMonthKey)}`} />
-                    <StatCard label="Margin this month" value="—" sub={`No records yet for ${formatMonthLabel(nowMonthKey)}`} />
+                    <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
+                      {visibleProblems.map((p) => (
+                        <div key={`${p.kind}-${p.row.itemId}`} className="flex items-start gap-3 px-4 py-3">
+                          <ProblemIcon kind={p.kind} />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm">
+                              <span className="nc-numeric font-semibold text-nc-text">{p.row.itemNumber}</span>{' '}
+                              <span className="text-nc-text-muted">{p.row.description}</span>
+                            </p>
+                            <p className="text-sm text-nc-text-muted">{problemSentence(p, costByItem)}</p>
+                          </div>
+                          <span className="shrink-0 rounded-full bg-nc-secondary px-2 py-0.5 text-xs font-medium text-nc-text-muted">{PROBLEM_KIND_LABEL[p.kind]}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {hiddenProblemCount > 0 && (
+                      <Button type="button" variant="ghost" className="mt-2" onClick={() => setAttentionExpanded(true)}>
+                        and {hiddenProblemCount} more
+                      </Button>
+                    )}
                   </>
-                )
-              ) : (
-                <>
-                  <StatCard label="Value of Work this month" value="—" sub="Needs view_rates" />
-                  <StatCard label="Margin this month" value="—" sub="Needs view_rates" />
-                </>
-              )}
-            </div>
-          </section>
+                )}
+              </section>
+            </>
+          )}
 
-          {/* Band 4 — month detail table. Not reachable single-column, so
-              hidden entirely below sm: rather than squeezed. */}
-          <section className="hidden sm:block">
+          {activeTab === 'finance' && (
+            <>
+              {hasNoRatesAtAll && (
+                <NotificationBanner tone="warning" className="mb-4">
+                  No Unit Prices are set on this contract yet — every money figure below is empty because no rate has been entered, not because there's no work.
+                </NotificationBanner>
+              )}
+
+              {/* Band 3 — money, for the CFO. */}
+              <section className="mb-8">
+                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money</h2>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {contract.viewRates ? (
+                    currentContractMonth ? (
+                      <>
+                        <StatCard
+                          label="Value of Work this month"
+                          value={money(valueThisMonth)}
+                          sub={
+                            <>
+                              <DirectionBadge direction={monthDirection(valueThisMonth, valueLastMonth)} /> {money(valueLastMonth)} last month
+                            </>
+                          }
+                        />
+                        <StatCard
+                          label="Margin this month"
+                          value={<span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{money(marginThisMonth)}</span>}
+                          sub={
+                            <>
+                              <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {money(marginLastMonth)} last month
+                            </>
+                          }
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <StatCard label="Value of Work this month" value="—" sub={`No records yet for ${formatMonthLabel(nowMonthKey)}`} />
+                        <StatCard label="Margin this month" value="—" sub={`No records yet for ${formatMonthLabel(nowMonthKey)}`} />
+                      </>
+                    )
+                  ) : (
+                    <>
+                      <StatCard label="Value of Work this month" value="—" sub="Needs view_rates" />
+                      <StatCard label="Margin this month" value="—" sub="Needs view_rates" />
+                    </>
+                  )}
+                </div>
+              </section>
+
+              {/* Band 4 — month detail table. Not reachable single-column, so
+                  hidden entirely below sm: rather than squeezed. */}
+              <section className="hidden sm:block">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-4">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Month detail</h2>
               <div className="flex items-center gap-3">
@@ -485,7 +502,9 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
                 </tfoot>
               )}
             </Table>
-          </section>
+              </section>
+            </>
+          )}
         </>
       )}
     </div>

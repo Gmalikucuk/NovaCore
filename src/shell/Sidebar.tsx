@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconLayoutDashboard, IconListDetails, IconLogout, IconTable } from '@tabler/icons-react'
+import { IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconHome, IconLayoutDashboard, IconListDetails, IconLogout, IconTable } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
@@ -17,12 +17,19 @@ function NavGroupHeading({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The single office shell — one fixed 220px navy sidebar, no top bar
- * anywhere, replacing the old AppShell (header only) + DesktopShell (nav
- * row beneath it) pair. The field-capture route (EntryScreen) does not use
- * this: a 220px fixed sidebar would eat more than half of a real phone's
- * width, so it keeps its own minimal FieldHeader instead — see App.tsx for
- * how the two are switched between.
+ * The CONTRACT level's shell — one contract at a time, the PM's view (see
+ * CompanyShell for the portfolio/company level this sits below). One fixed
+ * 220px navy sidebar, no top bar anywhere, replacing the old AppShell
+ * (header only) + DesktopShell (nav row beneath it) pair. The field-capture
+ * route (EntryScreen) does not use this: a 220px fixed sidebar would eat
+ * more than half of a real phone's width, so it keeps its own minimal
+ * FieldHeader instead — see App.tsx for how the two are switched between.
+ *
+ * No contract switcher here anymore — now that a company level exists,
+ * switching contracts means going back to the Portfolio (the Home link
+ * below) and entering a different one, not picking from a dropdown while
+ * still inside a contract. The name shown here is always plain text, not a
+ * control, regardless of how many contracts the seat holds.
  *
  * Each link is gated on the specific right that screen needs, per 0008 —
  * no bundled role check standing in for all three. Items needs
@@ -44,7 +51,7 @@ function NavGroupHeading({ children }: { children: React.ReactNode }) {
  */
 export function Sidebar() {
   const contractState = useOutletContext<CurrentContractState>()
-  const { contracts, current: contract, setCurrentId, companyRights } = contractState
+  const { current: contract, companyRights } = contractState
   const session = useSession()
   const navigate = useNavigate()
   const { mode, setOverride } = useViewMode()
@@ -86,32 +93,17 @@ export function Sidebar() {
         </div>
 
         <div className="px-5 pb-4">
-          {contracts.length > 1 ? (
-            // The closed control can only show one line of text — a bare
-            // name truncates mid-word once it's longer than ~180px
-            // ("Hwy 97C Pennask Summ▾"), so the contract number leads
-            // (short, unique, never truncates) and the browser's own
-            // ellipsis lands in the descriptive tail instead. `title` gives
-            // the full name on hover, same as the single-contract case
-            // below gets from its own truncate.
-            <select
-              className="w-full rounded-md border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white"
-              value={contract.id}
-              title={contract.name}
-              onChange={(e) => setCurrentId(e.target.value)}
-            >
-              {contracts.map((c) => (
-                <option key={c.id} value={c.id} className="text-nc-text">
-                  {c.contractNo ? `${c.contractNo} — ${c.name}` : c.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <div title={contract.name}>
-              <p className="truncate text-sm font-medium text-white">{contract.name}</p>
-              {contract.contractNo && <p className="text-xs text-white/50">{contract.contractNo}</p>}
-            </div>
-          )}
+          <NavLink
+            to="/portfolio"
+            className="mb-3 flex items-center gap-1.5 text-xs font-medium text-white/60 hover:text-white"
+          >
+            <IconHome size={14} stroke={1.75} />
+            Portfolio
+          </NavLink>
+          <div title={contract.name}>
+            <p className="truncate text-sm font-medium text-white">{contract.name}</p>
+            {contract.contractNo && <p className="text-xs text-white/50">{contract.contractNo}</p>}
+          </div>
         </div>
 
         {/* min-h-0 is load-bearing: a flex child's default min-height is

@@ -21,7 +21,10 @@ import { OverviewScreen } from '../screens/Overview/OverviewScreen'
  * redirect that used to live in App.tsx's IndexRoute — this is the only
  * route that renders at "/", so the decision belongs here, re-evaluated on
  * every render (reactive to the view-mode override, same as the old
- * viewport-width version was reactive to resize).
+ * viewport-width version was reactive to resize). Redirects to /portfolio,
+ * not /overview — the company level is the true root of the office
+ * experience now; a specific contract is somewhere you drill into, not
+ * where "/" lands.
  *
  * useViewMode() is called exactly ONCE, here, and setOverride is passed
  * down to FieldHeaderBar as a prop rather than each component calling the
@@ -48,7 +51,7 @@ export function FieldHeader() {
   const { current: contract } = contractState
   const { mode, setOverride } = useViewMode()
 
-  if (mode === 'office') return <Navigate to="/overview" replace />
+  if (mode === 'office') return <Navigate to="/portfolio" replace />
   if (!contract) return null
 
   const canUseFieldEntry = contract.enterQuantity || contract.correctQuantity
