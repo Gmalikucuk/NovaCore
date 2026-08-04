@@ -107,18 +107,8 @@ function ProblemIcon({ kind }: { kind: ProblemItem['kind'] }) {
 type MonthView = 'period' | 'to-date'
 type OverviewTab = 'progress' | 'finance'
 
-/**
- * `contract` is an optional override for the one caller that isn't reached
- * through Sidebar's nested `<Outlet context={contract}>` — FieldHeader
- * renders this directly (in place of EntryScreen) for a phone user with no
- * field-entry rights, and at that point in the tree useOutletContext()
- * would resolve to AuthGate's CurrentContractState, not a MyContract. Every
- * other caller (the /overview route) passes nothing and falls back to the
- * outlet context exactly as before.
- */
-export function OverviewScreen({ contract: contractProp }: { contract?: MyContract } = {}) {
-  const outletContract = useOutletContext<MyContract>()
-  const contract = contractProp ?? outletContract
+export function OverviewScreen() {
+  const contract = useOutletContext<MyContract>()
 
   const [items, setItems] = useState<Item[]>([])
   const [prices, setPrices] = useState<ItemPrice[]>([])

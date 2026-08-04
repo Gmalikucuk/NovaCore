@@ -3,7 +3,7 @@ import { Navigate, Outlet, useNavigate, useOutletContext } from 'react-router-do
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode, type ViewMode } from '../lib/useViewMode'
 import { signOut } from '../lib/supabase/auth'
-import { OverviewScreen } from '../screens/Overview/OverviewScreen'
+import { OwnerScreen } from '../screens/Owner/OwnerScreen'
 
 /**
  * Chrome for the field-capture route only ("/", index) — deliberately not
@@ -36,15 +36,12 @@ import { OverviewScreen } from '../screens/Overview/OverviewScreen'
  * A field-detected/overridden user with neither enter_quantity nor
  * correct_quantity has no use for EntryScreen — historically they'd still
  * land on it (a working-looking form that could never save) with no way to
- * reach Overview at all, since Sidebar's 220px layout is deliberately never
- * shown on this device class (see Sidebar's own comment). Rendering
- * OverviewScreen directly here — not via <Navigate to="/overview">, which
- * would put them in that same unreachable Sidebar layout — gets them a
- * screen they actually have a reason to look at, in the same minimal
- * chrome. OverviewScreen takes an explicit `contract` prop for exactly this
- * call site: rendered outside Sidebar's own nested <Outlet context={contract}>,
- * its default useOutletContext() read would otherwise resolve to this
- * route's CurrentContractState instead.
+ * reach anything else at all, since Sidebar's 220px layout is deliberately
+ * never shown on this device class (see Sidebar's own comment). That seat is
+ * the owner, so it gets OwnerScreen: a surface built for this device and
+ * this question, not the desktop Overview reflowed. Rendered directly here
+ * rather than via <Navigate>, which would route into that same unreachable
+ * Sidebar layout.
  */
 export function FieldHeader() {
   const contractState = useOutletContext<CurrentContractState>()
@@ -59,7 +56,7 @@ export function FieldHeader() {
   return (
     <div className="flex min-h-screen flex-col bg-nc-page">
       <FieldHeaderBar contractState={contractState} setOverride={setOverride} />
-      <main className="flex-1">{canUseFieldEntry ? <Outlet context={contract} /> : <OverviewScreen contract={contract} />}</main>
+      <main className="flex-1">{canUseFieldEntry ? <Outlet context={contract} /> : <OwnerScreen contract={contract} />}</main>
     </div>
   )
 }
