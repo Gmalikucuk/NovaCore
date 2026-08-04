@@ -119,6 +119,11 @@ export function ConfirmQueueScreen() {
     return (
       <div>
         <PageHeader title="Confirm" subtitle={contract.name} />
+        {contract.isSandbox && (
+          <NotificationBanner tone="danger" className="mb-4">
+            This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+          </NotificationBanner>
+        )}
         <EmptyState title="Confirming quantity records needs confirm_quantity on this contract." />
       </div>
     )
@@ -129,6 +134,15 @@ export function ConfirmQueueScreen() {
   return (
     <div>
       <PageHeader title="Confirm" subtitle={subtitle} />
+
+      {/* Same danger tone as Overview/Tracker/Rates/Items, without their
+          font-medium weight — a working/review screen, not a read-once
+          reading screen (see QuantityRecordsScreen's identical reasoning). */}
+      {contract.isSandbox && (
+        <NotificationBanner tone="danger" className="mb-4">
+          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+        </NotificationBanner>
+      )}
 
       {status === 'loading' && (
         <div className="flex items-center gap-2 py-8 text-nc-text-muted">

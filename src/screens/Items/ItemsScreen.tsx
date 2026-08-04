@@ -139,6 +139,12 @@ export function ItemsScreen() {
     <div>
       <PageHeader title="Items" subtitle={subtitle} />
 
+      {contract.isSandbox && (
+        <NotificationBanner tone="danger" className="mb-4 font-medium">
+          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+        </NotificationBanner>
+      )}
+
       {!canWrite ? (
         <EmptyState title="Setting up items needs the create_items right on this contract." />
       ) : (

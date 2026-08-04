@@ -286,6 +286,12 @@ export function EntryScreen() {
     <div className="mx-auto flex max-w-2xl flex-col gap-5 p-4">
       <PageHeader title="Field entry" subtitle={contract.name} />
 
+      {contract.isSandbox && (
+        <NotificationBanner tone="danger" className="mb-4 font-medium">
+          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+        </NotificationBanner>
+      )}
+
       {!canEnter && !canCorrect ? (
         <EmptyState title="Field entry needs enter_quantity or correct_quantity on this contract." />
       ) : (

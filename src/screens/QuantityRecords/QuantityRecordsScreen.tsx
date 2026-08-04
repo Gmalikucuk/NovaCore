@@ -298,6 +298,17 @@ export function QuantityRecordsScreen() {
         }
       />
 
+      {/* Same danger tone as Overview/Tracker/Rates/Items (unmissable is
+          the requirement), but without their font-medium weight — this is
+          a working screen a crew re-enters all day, not a screen someone
+          reads once and moves on from, so the full bold treatment reads as
+          more alarm than the situation warrants repeated dozens of times. */}
+      {contract.isSandbox && (
+        <NotificationBanner tone="danger" className="mb-4">
+          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+        </NotificationBanner>
+      )}
+
       {!canEnter && !canCorrect ? (
         <EmptyState title="Desk entry needs enter_quantity or correct_quantity on this contract." />
       ) : (
