@@ -3,7 +3,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { IconCalendarPlus } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
-import { fetchItems, type Item } from '../../lib/supabase/items'
+import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
 import { confirmQuantityRecord, fetchDistinctLocations, fetchQuantityRecordsForDate, pushQuantityRecord } from '../../lib/supabase/quantityRecords'
 import { fetchItemMonths } from '../../lib/supabase/monthlyPeriods'
 import type { QueuedQuantityRecord } from '../../lib/db'
@@ -49,7 +49,6 @@ export function QuantityRecordsScreen() {
     fetchItems(contract.id)
       .then((rows) => {
         setItems(rows)
-        setItemId((prev) => prev || rows[0]?.id || '')
       })
       .catch((err: unknown) => setLoadError(errorMessage(err)))
     fetchDistinctLocations(contract.id)
@@ -71,7 +70,10 @@ export function QuantityRecordsScreen() {
     const deepLinkPeriod = searchParams.get('period')
     if (!deepLinkItemId && !deepLinkPeriod) return
     hasAppliedDeepLink.current = true
-    if (deepLinkItemId) setItemId(deepLinkItemId)
+    if (deepLinkItemId) {
+      hasPickedItem.current = true
+      setItemId(deepLinkItemId)
+    }
     if (deepLinkItemId && deepLinkPeriod) {
       fetchItemMonths(contract.id)
         .then((months) => {
@@ -100,6 +102,31 @@ export function QuantityRecordsScreen() {
   useEffect(reload, [contract.id, workDate])
 
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
+  const selectedItem = itemById.get(itemId)
+
+  // Matches EntryScreen's field picker: a quantity_records row only
+  // measures something for a unit_price Item (GC 52.03) — Lump Sum and
+  // Provisional Sum are excluded from new entries here too, not just on
+  // the mobile screen.
+  const pickableItems = useMemo(() => items.filter(isUnitPriceItem), [items])
+
+  // Tracks a deliberate pick (onChange, or opening a correction) so the
+  // default selection can keep following pickableItems[0] until the user
+  // actually chooses something — same mechanism as EntryScreen's.
+  const hasPickedItem = useRef(false)
+
+  useEffect(() => {
+    if (!hasPickedItem.current && pickableItems.length > 0) setItemId(pickableItems[0].id)
+  }, [pickableItems])
+
+  // Two ways itemId can land on a Lump Sum/Provisional Sum item outside
+  // pickableItems: starting a correction against a historical record
+  // against one (startCorrection), or a Tracker deep link built before this
+  // screen excluded them from new entries. Either way the Select needs the
+  // item back as an option rather than left pointing at a value the
+  // dropdown doesn't offer — the submit-time guard below, not this list,
+  // is what actually decides whether a NEW entry against it is allowed.
+  const selectedItemOutsidePicker = selectedItem !== undefined && !isUnitPriceItem(selectedItem) ? selectedItem : null
 
   const supersededByConfirmed = useMemo(() => {
     const set = new Set<string>()
@@ -123,6 +150,7 @@ export function QuantityRecordsScreen() {
 
   function startCorrection(record: DayRecord) {
     setCorrectingId(record.id)
+    hasPickedItem.current = true
     setItemId(record.itemId)
     setFields({
       location: record.location ?? '',
@@ -160,6 +188,16 @@ export function QuantityRecordsScreen() {
     }
     if (!itemId) {
       setFormError('Choose an item.')
+      return
+    }
+    // Defense in depth, not redundant with the picker: pickableItems already
+    // excludes Lump Sum/Provisional Sum for a NEW entry (correctingId null),
+    // but this re-checks at the point of the actual write rather than
+    // trusting that the rendered options were never bypassed. A correction
+    // is exempted — it may legitimately target a historical record against
+    // one of these kinds (see selectedItemOutsidePicker above).
+    if (!correctingId && selectedItem !== undefined && !isUnitPriceItem(selectedItem)) {
+      setFormError('Choose a Unit Price item — Lump Sum and Provisional Sum items are not recorded by quantity.')
       return
     }
     const qty = Number(fields.quantity)
@@ -285,9 +323,23 @@ export function QuantityRecordsScreen() {
                 <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-item">
                   Item #
                 </label>
-                <Select id="de-item" value={itemId} onChange={(e) => setItemId(e.target.value)} onKeyDown={handleFormKeyDown} disabled={!formUsable}>
-                  {items.length === 0 && <option value="">No items</option>}
-                  {items.map((item) => (
+                <Select
+                  id="de-item"
+                  value={itemId}
+                  onChange={(e) => {
+                    hasPickedItem.current = true
+                    setItemId(e.target.value)
+                  }}
+                  onKeyDown={handleFormKeyDown}
+                  disabled={!formUsable}
+                >
+                  {pickableItems.length === 0 && !selectedItemOutsidePicker && <option value="">No Unit Price items</option>}
+                  {selectedItemOutsidePicker && (
+                    <option key={selectedItemOutsidePicker.id} value={selectedItemOutsidePicker.id}>
+                      {selectedItemOutsidePicker.itemNumber}
+                    </option>
+                  )}
+                  {pickableItems.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.itemNumber}
                     </option>

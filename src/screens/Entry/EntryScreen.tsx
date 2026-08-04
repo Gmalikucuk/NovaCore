@@ -6,7 +6,7 @@ import { useLiveQuery } from '../../lib/sync/useLiveQuery'
 import { db, type QueuedQuantityRecord } from '../../lib/db'
 import { enqueueQuantityRecord, importServerQuantityRecords, registerSyncListeners, syncQueuedQuantityRecords } from '../../lib/sync/quantityRecordsSync'
 import { confirmQuantityRecord, fetchDistinctLocations } from '../../lib/supabase/quantityRecords'
-import { fetchItems, type Item } from '../../lib/supabase/items'
+import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
 import { fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
@@ -102,7 +102,7 @@ export function EntryScreen() {
   // list of up to 19+, not alphabetical. Nulls (never recorded) sort last,
   // tied by item number.
   const pickableItems = useMemo(() => {
-    const unitPriced = items.filter((item) => item.itemKind === 'unit_price')
+    const unitPriced = items.filter(isUnitPriceItem)
     return [...unitPriced].sort((a, b) => {
       const aDate = progressByItemId.get(a.id)?.lastWorkDate ?? null
       const bDate = progressByItemId.get(b.id)?.lastWorkDate ?? null
@@ -130,7 +130,7 @@ export function EntryScreen() {
   // entries — startCorrection still needs to select that item, so it's
   // added back as an option rather than left pointing at a value the
   // dropdown doesn't offer.
-  const correctionItemOutsidePicker = correctingId !== null && selectedItem !== undefined && selectedItem.itemKind !== 'unit_price' ? selectedItem : null
+  const correctionItemOutsidePicker = correctingId !== null && selectedItem !== undefined && !isUnitPriceItem(selectedItem) ? selectedItem : null
 
   const supersededByConfirmed = useMemo(() => {
     const set = new Set<string>()
@@ -208,6 +208,16 @@ export function EntryScreen() {
     }
     if (!itemId) {
       setFormError('Choose an item.')
+      return
+    }
+    // Defense in depth, not redundant with the picker: pickableItems already
+    // excludes Lump Sum/Provisional Sum for a NEW entry (correctingId null),
+    // but this re-checks at the point of the actual write rather than
+    // trusting that the rendered options were never bypassed. A correction
+    // is exempted — it may legitimately target a historical record against
+    // one of these kinds (see correctionItemOutsidePicker above).
+    if (!correctingId && selectedItem !== undefined && !isUnitPriceItem(selectedItem)) {
+      setFormError('Choose a Unit Price item — Lump Sum and Provisional Sum items are not recorded by quantity.')
       return
     }
     const qty = Number(quantity)

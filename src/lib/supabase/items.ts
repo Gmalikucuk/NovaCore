@@ -20,6 +20,18 @@ export interface Item {
   itemKind: ItemKind
 }
 
+/**
+ * A quantity_records row only measures something for a unit_price Item —
+ * a Lump Sum Item is paid on percentage complete (GC 52.03(b)) and a
+ * Provisional Sum Item on value authorized in advance (GC 52.03(c)/47.01),
+ * neither of which a quantity is a reading of. Both entry screens
+ * (EntryScreen, QuantityRecordsScreen) filter their Item picker on this and
+ * re-check it at submit time, rather than trusting the picker alone.
+ */
+export function isUnitPriceItem(item: Pick<Item, 'itemKind'>): boolean {
+  return item.itemKind === 'unit_price'
+}
+
 interface RawItemRow {
   id: string
   contract_id: string
