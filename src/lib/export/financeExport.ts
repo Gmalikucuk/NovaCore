@@ -63,8 +63,20 @@ export interface FinanceExportInput {
 /** Builds the workbook without writing it anywhere — same separation as trackerExport, so it can be exercised without triggering a download. */
 export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workbook {
   const { contract, periodLabel, previousPeriodLabel, lastConfirmedAt, selectedPeriod, rows, totals, appOrigin } = input
+
+  // The sandbox row (if any) shifts everything below it down by one — the
+  // export is more dangerous than the screen here (it gets forwarded and
+  // opened out of context, with no banner present to correct the
+  // impression), so a sandbox contract's workbook is genuinely different
+  // shape, not the same layout with a flag quietly ignored.
+  const sandboxRowCount = contract.isSandbox ? 1 : 0
+  const freshnessRowNum = 2 + sandboxRowCount
+  const captionRowNum = 3 + sandboxRowCount
+  const headerRowNum = 4 + sandboxRowCount
+  const dataStartRow = headerRowNum + 1
+
   const workbook = new ExcelJS.Workbook()
-  const sheet = workbook.addWorksheet('Finance', { views: [{ state: 'frozen', xSplit: 2, ySplit: 4 }] })
+  const sheet = workbook.addWorksheet('Finance', { views: [{ state: 'frozen', xSplit: 2, ySplit: headerRowNum }] })
 
   const headers = [
     'Item #',
@@ -92,23 +104,35 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }
 
-  // Row 2 — the freshness note. Not a page-load timestamp: this is when the
-  // underlying quantity_records were actually last confirmed, the same
-  // figure the on-screen indicator shows, so a defensive question about the
-  // export gets the identical answer as the live screen.
-  sheet.mergeCells(2, 1, 2, colCount)
-  const freshnessCell = sheet.getCell(2, 1)
+  // Row 2 (sandbox contracts only) — the same wording as SandboxBanner,
+  // unmissable, real contracts get no such line. A workbook forwarded and
+  // opened out of context has no on-screen banner to correct the
+  // impression, so this can't be a subtler warning than the app's own.
+  if (contract.isSandbox) {
+    sheet.mergeCells(2, 1, 2, colCount)
+    const sandboxCell = sheet.getCell(2, 1)
+    sandboxCell.value = `This is a sandbox contract for exercising every screen state — ${contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.`
+    sandboxCell.font = { bold: true, color: { argb: 'FFB91C1C' } }
+    sandboxCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } }
+  }
+
+  // Freshness note. Not a page-load timestamp: this is when the underlying
+  // quantity_records were actually last confirmed, the same figure the
+  // on-screen indicator shows, so a defensive question about the export
+  // gets the identical answer as the live screen.
+  sheet.mergeCells(freshnessRowNum, 1, freshnessRowNum, colCount)
+  const freshnessCell = sheet.getCell(freshnessRowNum, 1)
   freshnessCell.value = lastConfirmedAt ? `Confirmed records as of ${new Date(lastConfirmedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}` : 'No confirmed records yet'
   freshnessCell.font = { italic: true }
 
-  // Row 3 — the GC 52.01/52.04 caveat, same wording as the on-screen page.
-  sheet.mergeCells(3, 1, 3, colCount)
-  const captionCell = sheet.getCell(3, 1)
+  // The GC 52.01/52.04 caveat, same wording as the on-screen page.
+  sheet.mergeCells(captionRowNum, 1, captionRowNum, colCount)
+  const captionCell = sheet.getCell(captionRowNum, 1)
   captionCell.value = 'Value of Work is recorded quantity × tendered Unit Price — the Contractor’s own measure, not a Ministry-approved progress estimate.'
   captionCell.font = { italic: true, size: 9 }
 
-  // Row 4 — column headers.
-  const headerRow = sheet.getRow(4)
+  // Column headers.
+  const headerRow = sheet.getRow(headerRowNum)
   headers.forEach((h, i) => (headerRow.getCell(i + 1).value = h))
   styleHeaderRow(headerRow)
 
@@ -117,7 +141,7 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
   for (let c = 3; c <= colCount; c++) sheet.getColumn(c).width = 16
 
   rows.forEach((r, i) => {
-    const row = sheet.getRow(i + 5)
+    const row = sheet.getRow(dataStartRow + i)
     const qtyFmt = quantityFormat(r.unit)
     let c = 1
 
@@ -171,20 +195,27 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
     approxCell.value = r.approximateQuantity
     approxCell.numFmt = qtyFmt
 
+    // Over quantity: on screen this carries the violet tone plus an icon
+    // and "N over" text, deliberately not colour alone — a bare negative
+    // number in a spreadsheet is easy to miss entirely, or to misread as a
+    // sign error rather than a real over-quantity condition. Wording is the
+    // signal that survives regardless of whether a fill renders in whatever
+    // opens this file; the fill is reinforcement, not the only carrier.
     const remainingCell = row.getCell(c++)
-    remainingCell.value = r.remaining
-    remainingCell.numFmt = qtyFmt
-    // Over quantity: violet fill, same tone as the on-screen table — colour
-    // paired with the value itself reading negative, not colour alone.
     if (r.isOverQuantity) {
-      remainingCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE9FE' } }
+      const overAmount = Math.abs(r.remaining).toLocaleString('en-CA', { maximumFractionDigits: 2 })
+      remainingCell.value = `${overAmount} over`
       remainingCell.font = { bold: true, color: { argb: 'FF5B21B6' } }
+      remainingCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDE9FE' } }
+    } else {
+      remainingCell.value = r.remaining
+      remainingCell.numFmt = qtyFmt
     }
   })
 
   // Totals row — quantity columns aren't summed (mixed units across
   // Items), same rule as the on-screen footer.
-  const totalsRowNum = rows.length + 5
+  const totalsRowNum = dataStartRow + rows.length
   const totalsRow = sheet.getRow(totalsRowNum)
   totalsRow.getCell(1).value = 'Totals'
   totalsRow.getCell(2).value = `Quantity columns aren't summed (mixed units); the $ columns are.`

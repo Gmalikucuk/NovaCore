@@ -243,11 +243,15 @@ export function OverviewScreen() {
   // each month's start), not a wall of Items — that's the detail BEHIND a
   // month, which is what opening one now leads to (FinanceMonthScreen).
   //
-  // Status is calendar-only, deliberately: "Closed" means the month has
-  // ended, "In progress" means it hasn't — nothing about Ministry
-  // submission or approval. NovaCore holds no record that anything was
-  // ever sent to or confirmed by the Ministry, and there is no field here
-  // that could honestly say otherwise.
+  // Status is calendar-only, deliberately, and the word for a past month is
+  // "Past" — not "Closed". Records are append-only: a correction confirmed
+  // today against a July record supersedes its predecessor and changes
+  // July's own figures (Hwy 97C's 05.03.03 is the live example — a
+  // confirmed correction dropped it from 3,785 t to 3,699 t). "Closed"
+  // reads as final to a finance manager; nothing here is. "Past" says only
+  // what's true — the month has ended — and "In progress" says only that
+  // the current one hasn't. Neither claims anything about Ministry
+  // submission or approval; NovaCore holds no record of either.
   const financeMonths = useMemo(() => {
     const keys = new Set(itemMonths.map((m) => m.periodMonth))
     const currentPeriod = monthKeyToPeriod(nowMonthKey)
@@ -436,7 +440,7 @@ export function OverviewScreen() {
                       <div className="flex items-center gap-3">
                         <span className="text-sm font-semibold text-nc-text">{formatMonthLabel(fm.monthKey)}</span>
                         <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${fm.isCurrent ? 'bg-nc-info-bg text-nc-info-text' : 'bg-nc-neutral-bg text-nc-neutral-text'}`}>
-                          {fm.isCurrent ? 'In progress' : 'Closed'}
+                          {fm.isCurrent ? 'In progress' : 'Past'}
                         </span>
                       </div>
                       {contract.viewRates && (
