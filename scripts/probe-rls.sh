@@ -378,6 +378,93 @@ check "quantities: insert progress_estimates rejected (no confirm_quantity)" "40
 # broken; these are the checks that would actually catch that.
 # =============================================================================
 echo
+echo "=== Pinned Items (0015) — discovering a unit_price and a non-unit_price Item ==="
+
+request GET "items?select=id,contracts!inner(is_sandbox)&contracts.is_sandbox=eq.true&item_kind=eq.unit_price&limit=1" "$QUANTITIES_TOKEN"
+UNIT_PRICE_ITEM_ID=$(json_field "$BODY_OUT" 0 id)
+
+# The sandbox project (PROBE) happens to carry only unit_price Items — every
+# lump_sum/provisional_sum Item quantities can see lives on Hwy 5 (a REAL
+# contract quantities is also seated on). That's fine here specifically: this
+# Item is used for ONE rejected insert below (expect 403), so no row is ever
+# written — unlike the quantity_records probes elsewhere in this script,
+# there is nothing here that could land fabricated data on a live contract.
+request GET "items?select=id,contract_id&item_kind=neq.unit_price&limit=1" "$QUANTITIES_TOKEN"
+NON_UNIT_ITEM_ID=$(json_field "$BODY_OUT" 0 id)
+NON_UNIT_CONTRACT_ID=$(json_field "$BODY_OUT" 0 contract_id)
+if [ -z "$UNIT_PRICE_ITEM_ID" ] || [ -z "$NON_UNIT_ITEM_ID" ]; then
+  echo "FATAL: quantities seat needs to see at least one unit_price Item on a sandbox project AND one lump_sum/provisional_sum Item somewhere — seed data missing, cannot run pin probes" >&2
+  exit 1
+fi
+echo "Using unit_price item $UNIT_PRICE_ITEM_ID (sandbox) / non-unit_price item $NON_UNIT_ITEM_ID (contract $NON_UNIT_CONTRACT_ID)"
+
+# Pinning needs no special right beyond membership — it's the seat's own
+# watch-list, not a contract-management action. quantities (enter_quantity +
+# correct_quantity only) can still pin.
+request POST "pinned_items" "$QUANTITIES_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"user_id\":\"$QUANTITIES_ID\",\"item_id\":\"$UNIT_PRICE_ITEM_ID\"}"
+QUANTITIES_PIN_ID=$(json_field "$BODY_OUT" 0 id)
+ok=0; [ "$STATUS" = "201" ] && [ -n "$QUANTITIES_PIN_ID" ] && ok=1
+check "quantities: pin a unit_price Item" "201" "$ok" "$STATUS $BODY_OUT"
+
+# Only Unit Price Items are pinnable — enforced at the policy, not just the UI.
+request POST "pinned_items" "$QUANTITIES_TOKEN" \
+  "{\"contract_id\":\"$NON_UNIT_CONTRACT_ID\",\"user_id\":\"$QUANTITIES_ID\",\"item_id\":\"$NON_UNIT_ITEM_ID\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: pin a lump_sum/provisional_sum Item rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# A seat may only ever pin FOR ITSELF.
+request POST "pinned_items" "$QUANTITIES_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"user_id\":\"$FULL_ID\",\"item_id\":\"$UNIT_PRICE_ITEM_ID\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: pin with someone else's user_id rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# readonly holds zero rights but is still a seated member — pinning is a
+# membership-level action, matching quantity_records' own positive control.
+# Idempotent re-run: delete any leftover pin from a prior run first (a
+# no-op if nothing matches — DELETE never errors on zero rows), then a
+# plain insert. Not an upsert (on_conflict=merge-duplicates): that resolves
+# through an UPDATE under the hood even on a genuine conflict, which
+# pinned_items has no grant or policy for — deliberately, since a pin only
+# ever exists or is deleted, never edited in place (see the migration).
+request DELETE "pinned_items?contract_id=eq.$PROJECT_ID&user_id=eq.$READONLY_ID&item_id=eq.$UNIT_PRICE_ITEM_ID" "$READONLY_TOKEN" "{}"
+
+request POST "pinned_items" "$READONLY_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"user_id\":\"$READONLY_ID\",\"item_id\":\"$UNIT_PRICE_ITEM_ID\"}"
+READONLY_PIN_ID=$(json_field "$BODY_OUT" 0 id)
+ok=0; [ "$STATUS" = "201" ] && [ -n "$READONLY_PIN_ID" ] && ok=1
+check "readonly: pin a unit_price Item (membership, not a right)" "201" "$ok" "$STATUS $BODY_OUT"
+
+# A seat sees only its own pins — readonly's select must not include
+# quantities' pin row, even though both are on the same contract/Item.
+request GET "pinned_items?select=id&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  contains_others=$(python3 -c "
+import json, sys
+ids = [r['id'] for r in json.loads(sys.argv[1])]
+print('1' if '$QUANTITIES_PIN_ID' in ids else '0')
+" "$BODY_OUT")
+  [ "$contains_others" = "0" ] && ok=1
+fi
+check "readonly: select does not include quantities' pin" "quantities' pin not present" "$ok" "$STATUS $BODY_OUT"
+
+# ...and cannot delete a pin it doesn't own — matches 0 rows, not an error.
+request DELETE "pinned_items?id=eq.$QUANTITIES_PIN_ID" "$READONLY_TOKEN" "{}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: delete on quantities' pin matches 0 rows" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# Owning seat can unpin its own row.
+request DELETE "pinned_items?id=eq.$QUANTITIES_PIN_ID" "$QUANTITIES_TOKEN" "{}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities: unpin own row" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# Cleanup — leaving this in place would only matter for the next run's own
+# on_conflict upsert above, but there's no reason to leave a probe-created
+# row sitting on the sandbox project once every check that needed it has run.
+request DELETE "pinned_items?id=eq.$READONLY_PIN_ID" "$READONLY_TOKEN" "{}"
+
+echo
 echo "=== Positive controls ==="
 
 request GET "v_item_progress?select=*" "$QUANTITIES_TOKEN"

@@ -5,6 +5,7 @@ import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchContractMonths, fetchItemMonths, fetchItemProgressRate, type ContractMonth, type ItemMonth, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
+import { fetchPinnedItems, pinItem, unpinItem, type PinnedItem } from '../../lib/supabase/pinnedItems'
 import {
   BEHIND_RATE_THRESHOLD_DAYS,
   buildProblemList,
@@ -14,17 +15,57 @@ import {
   monthKeyFromDate,
   monthKeyToPeriod,
   previousMonth,
-  weightedCompletion,
   type Direction,
   type MonthKey,
   type ProblemItem,
 } from '../../lib/calculations/overview'
+import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
-import { Button, Card, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, Card, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 const ATTENTION_CAP = 5
+
+/**
+ * Picking an Item to pin is one obvious action: choose from a list, click
+ * Pin. Shared between the empty state (where it doubles as the "what do I
+ * do" affordance) and the ordinary picker under an existing pinned list.
+ */
+function PinPicker({
+  items,
+  value,
+  onChange,
+  onPin,
+  pinning,
+}: {
+  items: readonly { id: string; itemNumber: string; description: string }[]
+  value: string
+  onChange: (id: string) => void
+  onPin: () => void
+  pinning: boolean
+}) {
+  return (
+    <div className="flex flex-wrap items-end justify-center gap-2">
+      <div className="w-72 text-left">
+        <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="pin-item-select">
+          Pin an Item
+        </label>
+        <Select id="pin-item-select" value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Choose an Item…</option>
+          {items.map((i) => (
+            <option key={i.id} value={i.id}>
+              {i.itemNumber} — {i.description}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <Button type="button" disabled={!value || pinning} onClick={onPin}>
+        {pinning ? 'Pinning…' : 'Pin'}
+      </Button>
+    </div>
+  )
+}
 
 function DirectionBadge({ direction, sameIsGood }: { direction: Direction; sameIsGood?: boolean }) {
   if (direction === 'flat') return <IconMinus size={14} stroke={2} className="inline text-nc-text-muted" />
@@ -84,8 +125,17 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
   const [contractMonths, setContractMonths] = useState<ContractMonth[]>([])
   const [itemMonths, setItemMonths] = useState<ItemMonth[]>([])
   const [progressRate, setProgressRate] = useState<ItemProgressRate[]>([])
+  const [pins, setPins] = useState<PinnedItem[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
+
+  // Pin picker + pin/unpin in-flight state — separate from the page's own
+  // load/error state, since a failed pin shouldn't blank the whole screen
+  // the way a failed initial fetch does.
+  const [pinSelection, setPinSelection] = useState('')
+  const [pinning, setPinning] = useState(false)
+  const [unpinningId, setUnpinningId] = useState<string | null>(null)
+  const [pinActionError, setPinActionError] = useState<string | null>(null)
 
   const nowMonthKey = useMemo(() => monthKeyFromDate(new Date()), [])
   const [selectedMonth, setSelectedMonth] = useState<MonthKey>(nowMonthKey)
@@ -114,13 +164,15 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
       contract.viewRates ? fetchContractMonths(contract.id) : Promise.resolve([]),
       fetchItemMonths(contract.id),
       fetchItemProgressRate(contract.id),
+      fetchPinnedItems(contract.id),
     ])
-      .then(([itemRows, priceRows, contractMonthRows, itemMonthRows, progressRows]) => {
+      .then(([itemRows, priceRows, contractMonthRows, itemMonthRows, progressRows, pinRows]) => {
         setItems(itemRows)
         setPrices(priceRows)
         setContractMonths(contractMonthRows)
         setItemMonths(itemMonthRows)
         setProgressRate(progressRows)
+        setPins(pinRows)
         setStatus('ready')
 
         if (!hasAutoSelectedMonth.current && itemMonthRows.length > 0) {
@@ -140,9 +192,14 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
   const progressByItem = useMemo(() => new Map(progressRate.map((p) => [p.itemId, p])), [progressRate])
   const costByItem = useMemo(() => new Map(prices.map((p) => [p.itemId, p.costPrice])), [prices])
 
-  // Band 1 — progress. weightedCompletion/itemsInProgress both read
-  // progressRate directly (v_item_progress_rate, already unit_price-only).
-  const contractComplete = useMemo(() => weightedCompletion(progressRate), [progressRate])
+  // Band 1 — progress. The "Contract complete" quantity-weighted blend that
+  // used to live here is gone (0015) — it weighted Mobilization and sign
+  // installation the same as paving, and a blended figure across every Unit
+  // Price Item measures nothing anyone acts on. Not replaced with a
+  // different weighting; replaced with letting the person pick which Items
+  // they watch (the Pinned Items band, above the tabs). itemsInProgress
+  // reads progressRate directly (v_item_progress_rate, already
+  // unit_price-only) — this one's a count, not a blend, and stays.
   const inProgress = useMemo(() => itemsInProgress(progressRate), [progressRate])
 
   // Band 2 — needs attention, worst-consequence-first (buildProblemList's
@@ -152,12 +209,15 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
   const visibleProblems = attentionExpanded ? problemList : problemList.slice(0, ATTENTION_CAP)
   const hiddenProblemCount = problemList.length - visibleProblems.length
 
-  // Band 3 — money. Deliberately keyed to the actual current calendar
-  // month (nowMonthKey), not Band 4's selectedMonth — this is "how are we
-  // doing right now," independent of whatever month is being inspected in
-  // the table below.
-  const currentContractMonth = contractMonths.find((m) => m.periodMonth === monthKeyToPeriod(nowMonthKey))
-  const previousContractMonth = contractMonths.find((m) => m.periodMonth === monthKeyToPeriod(previousMonth(nowMonthKey)))
+  const selectedPeriod = monthKeyToPeriod(selectedMonth)
+
+  // Band 3 — money. Keyed to Band 4's selectedMonth, same period the table
+  // below is showing — these used to read the actual current calendar month
+  // regardless of what was selected, which meant the "No records yet for
+  // <month>" text here could name a different month than the one the
+  // dropdown below was actually showing. Fixed so both always agree.
+  const currentContractMonth = contractMonths.find((m) => m.periodMonth === selectedPeriod)
+  const previousContractMonth = contractMonths.find((m) => m.periodMonth === monthKeyToPeriod(previousMonth(selectedMonth)))
   const valueThisMonth = currentContractMonth?.valueInPeriod ?? 0
   const valueLastMonth = previousContractMonth?.valueInPeriod ?? 0
   const marginThisMonth = currentContractMonth?.marginInPeriod ?? 0
@@ -170,7 +230,6 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
     return [...keys].sort().reverse()
   }, [itemMonths, nowMonthKey])
 
-  const selectedPeriod = monthKeyToPeriod(selectedMonth)
   const itemMonthByItem = useMemo(() => new Map(itemMonths.filter((m) => m.periodMonth === selectedPeriod).map((m) => [m.itemId, m])), [itemMonths, selectedPeriod])
 
   const monthRows = useMemo(
@@ -211,6 +270,62 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
   const unitPriceItems = useMemo(() => items.filter((i) => i.itemKind === 'unit_price'), [items])
   const hasNoRatesAtAll = contract.viewRates && unitPriceItems.length > 0 && !unitPriceItems.some((i) => priceByItem.get(i.id)?.unitPrice != null)
 
+  // Pinned Items — only Unit Price Items are pinnable (isUnitPriceItem's
+  // reasoning: neither a Lump Sum nor a Provisional Sum Item has a
+  // quantity-against-Approximate-Quantity reading), enforced again here as
+  // the picker's own filter, not just at the RLS insert policy.
+  const pinnedItemIds = useMemo(() => new Set(pins.map((p) => p.itemId)), [pins])
+  const pinnableItems = useMemo(
+    () =>
+      unitPriceItems
+        .filter((i) => !pinnedItemIds.has(i.id))
+        .slice()
+        .sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber)),
+    [unitPriceItems, pinnedItemIds],
+  )
+  const pinnedRows = useMemo(
+    () =>
+      pins
+        .map((pin) => ({ pin, progress: progressByItem.get(pin.itemId) }))
+        // A pin whose Item hasn't loaded into progressRate yet (or was
+        // removed) has nothing to render — skip it rather than showing a
+        // blank row; the FK's own cascade delete keeps this rare.
+        .filter((row): row is { pin: PinnedItem; progress: ItemProgressRate } => row.progress !== undefined)
+        .map((row) => ({
+          ...row,
+          margin: contract.viewRates ? computeMargin(row.progress.quantityToDate, costByItem.get(row.pin.itemId) ?? null, priceByItem.get(row.pin.itemId)?.unitPrice ?? null) : null,
+        })),
+    [pins, progressByItem, costByItem, priceByItem, contract.viewRates],
+  )
+
+  async function handlePin() {
+    if (!pinSelection) return
+    setPinning(true)
+    setPinActionError(null)
+    try {
+      const pin = await pinItem(contract.id, pinSelection)
+      setPins((prev) => [...prev, pin])
+      setPinSelection('')
+    } catch (err) {
+      setPinActionError(errorMessage(err))
+    } finally {
+      setPinning(false)
+    }
+  }
+
+  async function handleUnpin(pinId: string) {
+    setUnpinningId(pinId)
+    setPinActionError(null)
+    try {
+      await unpinItem(pinId)
+      setPins((prev) => prev.filter((p) => p.id !== pinId))
+    } catch (err) {
+      setPinActionError(errorMessage(err))
+    } finally {
+      setUnpinningId(null)
+    }
+  }
+
   return (
     <div>
       <PageHeader title="Overview" subtitle={contract.name} />
@@ -230,6 +345,64 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
 
       {status === 'ready' && (
         <>
+          {/* Pinned Items — above the tabs, deliberately: this is the
+              person's own chosen watch-list, not a "how far along" or "what
+              does that come to" question, so it isn't scoped to either tab.
+              Also the top-of-page mobile-visibility target (see the
+              verification note in the plan this shipped against): nothing
+              heavier belongs above it. */}
+          <section className="mb-8">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Pinned Items</h2>
+
+            {pinActionError && (
+              <NotificationBanner tone="danger" className="mb-3">
+                {pinActionError}
+              </NotificationBanner>
+            )}
+
+            {pinnedRows.length === 0 ? (
+              <EmptyState
+                title="Nothing pinned yet"
+                description={
+                  unitPriceItems.length === 0
+                    ? "This contract has no Unit Price Items — Lump Sum and Provisional Sum Items don't have a quantity-against-Approximate-Quantity reading, so there's nothing here to pin."
+                    : 'Pin the Items where the money actually is — quantity against Approximate Quantity, and margin to date if you hold view_rates. Only Unit Price Items are pinnable; everything else stays out of the way until you ask for it.'
+                }
+                action={unitPriceItems.length > 0 ? <PinPicker items={pinnableItems} value={pinSelection} onChange={setPinSelection} onPin={() => void handlePin()} pinning={pinning} /> : undefined}
+              />
+            ) : (
+              <>
+                <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
+                  {pinnedRows.map(({ pin, progress, margin: pinMargin }) => (
+                    <div key={pin.id} className="flex items-start justify-between gap-3 px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm">
+                          <span className="nc-numeric font-semibold text-nc-text">{progress.itemNumber}</span> <span className="text-nc-text-muted">{progress.description}</span>
+                        </p>
+                        <p className="nc-numeric text-sm text-nc-text">
+                          {fmtQuantity(progress.quantityToDate)} of {fmtQuantity(progress.approximateQuantity, progress.unit)} — {percent(progress.proportionComplete)}
+                        </p>
+                        {contract.viewRates && (
+                          <p className="text-sm text-nc-text-muted">
+                            Margin to date: <span className="nc-numeric">{money(pinMargin)}</span>
+                          </p>
+                        )}
+                      </div>
+                      <Button type="button" variant="ghost" disabled={unpinningId === pin.id} onClick={() => void handleUnpin(pin.id)}>
+                        {unpinningId === pin.id ? 'Unpinning…' : 'Unpin'}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                {pinnableItems.length > 0 && (
+                  <div className="mt-3">
+                    <PinPicker items={pinnableItems} value={pinSelection} onChange={setPinSelection} onPin={() => void handlePin()} pinning={pinning} />
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
           {/* The split is by question, not by role — "how far along are we"
               (Progress) versus "what does that come to" (Finance). One
               visible at a time, at every viewport size: this is real
@@ -245,15 +418,11 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
 
           {activeTab === 'progress' && (
             <>
-              {/* Band 1 — progress, the owner's question: are we on pace
-                  against the contract. Largest type on the page, top, no
-                  scrolling required, single column on a phone. */}
-              <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Card className="p-6">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Contract complete</div>
-                  <div className="nc-numeric mt-2 text-4xl font-semibold text-nc-text sm:text-5xl">{percent(contractComplete)}</div>
-                  <div className="mt-1 text-xs text-nc-text-muted">Quantity-weighted, Unit Price Items</div>
-                </Card>
+              {/* Band 1 — progress. "Contract complete" (a quantity-weighted
+                  blend across every Unit Price Item) used to live here; removed
+                  in favour of Pinned Items above, which is the same
+                  information at a level someone can actually act on. */}
+              <div className="mb-8 max-w-xs">
                 <Card className="p-6">
                   <div className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Items in progress</div>
                   <div className="nc-numeric mt-2 text-4xl font-semibold text-nc-text sm:text-5xl">
@@ -305,42 +474,43 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
                 </NotificationBanner>
               )}
 
-              {/* Band 3 — money, for the CFO. */}
+              {/* Band 3 — money, for the CFO. Keyed to selectedMonth (see
+                  above) — same period Band 4's dropdown shows, always. */}
               <section className="mb-8">
-                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money</h2>
+                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money — {formatMonthLabel(selectedMonth)}</h2>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {contract.viewRates ? (
                     currentContractMonth ? (
                       <>
                         <StatCard
-                          label="Value of Work this month"
+                          label="Value of Work"
                           value={money(valueThisMonth)}
                           sub={
                             <>
-                              <DirectionBadge direction={monthDirection(valueThisMonth, valueLastMonth)} /> {money(valueLastMonth)} last month
+                              <DirectionBadge direction={monthDirection(valueThisMonth, valueLastMonth)} /> {money(valueLastMonth)} the prior month
                             </>
                           }
                         />
                         <StatCard
-                          label="Margin this month"
+                          label="Margin"
                           value={<span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{money(marginThisMonth)}</span>}
                           sub={
                             <>
-                              <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {money(marginLastMonth)} last month
+                              <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {money(marginLastMonth)} the prior month
                             </>
                           }
                         />
                       </>
                     ) : (
                       <>
-                        <StatCard label="Value of Work this month" value="—" sub={`No records yet for ${formatMonthLabel(nowMonthKey)}`} />
-                        <StatCard label="Margin this month" value="—" sub={`No records yet for ${formatMonthLabel(nowMonthKey)}`} />
+                        <StatCard label="Value of Work" value="—" sub={`No records yet for ${formatMonthLabel(selectedMonth)}`} />
+                        <StatCard label="Margin" value="—" sub={`No records yet for ${formatMonthLabel(selectedMonth)}`} />
                       </>
                     )
                   ) : (
                     <>
-                      <StatCard label="Value of Work this month" value="—" sub="Needs view_rates" />
-                      <StatCard label="Margin this month" value="—" sub="Needs view_rates" />
+                      <StatCard label="Value of Work" value="—" sub="Needs view_rates" />
+                      <StatCard label="Margin" value="—" sub="Needs view_rates" />
                     </>
                   )}
                 </div>
