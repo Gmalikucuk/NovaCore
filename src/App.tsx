@@ -15,6 +15,7 @@ import { OverviewScreen } from './screens/Overview/OverviewScreen'
 import { FinanceMonthScreen } from './screens/Finance/FinanceMonthScreen'
 import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
 import { TrackerScreen } from './screens/Tracker/TrackerScreen'
+import { TrackerItemScreen } from './screens/Tracker/TrackerItemScreen'
 
 function App() {
   return (
@@ -112,6 +113,17 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <TrackerScreen />
+                  </ErrorBoundary>
+                }
+              />
+              {/* The "records" step of contract → Item → its records —
+                  reached only by opening an Item # on the Tracker list, same
+                  convention as /finance/:period. */}
+              <Route
+                path="/tracker/:itemId"
+                element={
+                  <ErrorBoundary>
+                    <TrackerItemScreen />
                   </ErrorBoundary>
                 }
               />
