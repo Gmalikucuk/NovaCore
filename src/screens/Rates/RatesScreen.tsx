@@ -182,16 +182,18 @@ export function RatesScreen() {
       <SandboxBanner contract={contract} />
 
       {!contract.viewRates ? (
-        <EmptyState title="Viewing rates needs the view_rates right on this contract." />
+        <EmptyState title="You don't have permission to view rates on this contract." />
       ) : (
         <>
-          {/* The one line the brief asks for, plainly: Cost here is Keywest's
-              own bid figure, not a measured fact. NovaCore has never recorded
-              what work actually cost — every "Cost"/"Margin" label on this
-              screen and its downstream surfaces is an estimate against that
-              bid, not a result. */}
+          {/* One banner, not a stack: the bid-estimate disclosure is always
+              relevant here, so the read-only state (when it applies) is a
+              second sentence in the SAME box rather than a second box —
+              the "unpriced" caveat below moves to the table's own footer,
+              next to the total it actually qualifies, rather than sitting
+              up here as a third. */}
           <NotificationBanner tone="info" className="mb-4">
             Cost and margin below are Keywest's own bid estimate, entered on this screen — actual cost isn't recorded in NovaCore yet.
+            {!canEdit && " These are read-only for you — ask a project manager to grant rate-setting permission if you need to enter figures."}
           </NotificationBanner>
 
           {status === 'loading' && (
@@ -207,18 +209,6 @@ export function RatesScreen() {
               <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
             ) : (
               <>
-                {!canEdit && (
-                  <NotificationBanner tone="info" className="mb-4">
-                    Read-only — setting rates needs set_cost and set_unit_price on this contract.
-                  </NotificationBanner>
-                )}
-                {pricedCount < unitPriceRows.length && (
-                  <NotificationBanner tone="warning" className="mb-4">
-                    {unitPriceRows.length - pricedCount} of {unitPriceRows.length} unit-price items still unpriced — the estimated contract margin total below reflects priced items only, not the
-                    whole contract.
-                  </NotificationBanner>
-                )}
-
                 <Table>
                   <THead>
                     <TR>
@@ -309,7 +299,10 @@ export function RatesScreen() {
                   <tfoot>
                     <tr>
                       <td colSpan={5} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                        Est. contract margin ({pricedCount} of {unitPriceRows.length} unit-price items priced)
+                        Est. contract margin — {pricedCount} of {unitPriceRows.length} unit-price items priced
+                        {/* The caveat that used to be its own banner at the top of the
+                            page, moved to sit next to the number it actually qualifies. */}
+                        {pricedCount < unitPriceRows.length && <span className="font-normal text-nc-text-muted"> (unpriced items excluded from the total)</span>}
                       </td>
                       <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(totalMargin)}</td>
                     </tr>

@@ -289,7 +289,7 @@ export function EntryScreen() {
       <SandboxBanner contract={contract} />
 
       {!canEnter && !canCorrect ? (
-        <EmptyState title="Field entry needs enter_quantity or correct_quantity on this contract." />
+        <EmptyState title="You don't have permission to enter or correct quantities on this contract." />
       ) : (
         <>
           {chainageEntries.length > 0 && <ChainageStrip entries={chainageEntries} />}
@@ -442,7 +442,7 @@ export function EntryScreen() {
               <Button
                 type="submit"
                 disabled={submitting || !formUsable}
-                title={!formUsable ? `Needs ${correctingId ? 'correct_quantity' : 'enter_quantity'}` : undefined}
+                title={!formUsable ? `Needs permission to ${correctingId ? 'correct' : 'enter'} quantities` : undefined}
               >
                 {submitting ? 'Saving…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add entry'}
               </Button>

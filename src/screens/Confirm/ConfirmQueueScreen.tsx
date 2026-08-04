@@ -120,7 +120,7 @@ export function ConfirmQueueScreen() {
       <div>
         <PageHeader title="Confirm" subtitle={contract.name} />
         <SandboxBanner contract={contract} variant="working" />
-        <EmptyState title="Confirming quantity records needs confirm_quantity on this contract." />
+        <EmptyState title="You don't have permission to confirm quantity records on this contract." />
       </div>
     )
   }

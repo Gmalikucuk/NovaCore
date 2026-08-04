@@ -302,7 +302,7 @@ export function QuantityRecordsScreen() {
       <SandboxBanner contract={contract} variant="working" />
 
       {!canEnter && !canCorrect ? (
-        <EmptyState title="Desk entry needs enter_quantity or correct_quantity on this contract." />
+        <EmptyState title="You don't have permission to enter or correct quantities on this contract." />
       ) : (
         <>
           {correctingId && (
@@ -425,7 +425,7 @@ export function QuantityRecordsScreen() {
                 </label>
                 <Input id="de-note" value={fields.note} onChange={(e) => setFields({ ...fields, note: e.target.value })} onKeyDown={handleFormKeyDown} disabled={!formUsable} />
               </div>
-              <Button type="submit" disabled={submitting || !formUsable} title={!formUsable ? `Needs ${correctingId ? 'correct_quantity' : 'enter_quantity'}` : undefined}>
+              <Button type="submit" disabled={submitting || !formUsable} title={!formUsable ? `Needs permission to ${correctingId ? 'correct' : 'enter'} quantities` : undefined}>
                 {submitting ? 'Adding…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add — Enter'}
               </Button>
             </div>
@@ -487,13 +487,13 @@ export function QuantityRecordsScreen() {
                                 type="button"
                                 variant="secondary"
                                 disabled={confirmingId === r.id || !contract.confirmQuantity}
-                                title={!contract.confirmQuantity ? 'Needs confirm_quantity' : undefined}
+                                title={!contract.confirmQuantity ? 'Needs permission to confirm quantity records' : undefined}
                                 onClick={() => void handleConfirm(r.id)}
                               >
                                 {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
                               </Button>
                             )}
-                            <Button type="button" variant="secondary" disabled={!canCorrect} title={!canCorrect ? 'Needs correct_quantity' : undefined} onClick={() => startCorrection(r)}>
+                            <Button type="button" variant="secondary" disabled={!canCorrect} title={!canCorrect ? 'Needs permission to correct quantity records' : undefined} onClick={() => startCorrection(r)}>
                               Correct
                             </Button>
                           </div>

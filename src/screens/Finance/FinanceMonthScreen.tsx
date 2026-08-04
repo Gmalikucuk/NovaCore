@@ -266,8 +266,8 @@ export function FinanceMonthScreen() {
                 )
               ) : (
                 <>
-                  <StatCard label="Value of Work" value="—" sub="Needs view_rates" />
-                  <StatCard label="Est. margin" value="—" sub="Needs view_rates" />
+                  <StatCard label="Value of Work" value="—" sub="Needs rate-viewing permission" />
+                  <StatCard label="Est. margin" value="—" sub="Needs rate-viewing permission" />
                 </>
               )}
             </div>

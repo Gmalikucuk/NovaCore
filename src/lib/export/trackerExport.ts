@@ -284,11 +284,18 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
       remainingCell.value = remaining ?? '—'
       if (remaining !== null) remainingCell.numFmt = qtyFmt
 
+      // Provisional Sum never has a proportion (paid on value authorized,
+      // not a rate). Lump Sum's percent_complete has no write path
+      // anywhere in the app yet, so a null proportionComplete here means
+      // "never entered," not "confirmed at zero" — coalescing it to 0
+      // would render a permanent, false 0% for every Lump Sum Item that
+      // simply hasn't been estimated yet. Both read "—", same as
+      // Provisional Sum already does, until either kind has a real figure.
       const percentCell = row.getCell(c++)
-      if (isProvisionalSum) {
+      if (isProvisionalSum || itemProgress?.proportionComplete == null) {
         percentCell.value = '—'
       } else {
-        percentCell.value = itemProgress?.proportionComplete ?? 0
+        percentCell.value = itemProgress.proportionComplete
         percentCell.numFmt = PERCENT_FORMAT
       }
 
@@ -437,11 +444,13 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
     const remainingCell = row.getCell(c++)
     remainingCell.value = remaining ?? '—'
     if (remaining !== null) remainingCell.numFmt = qtyFmt
+    // Same absent-vs-zero rule as the Tracker sheet above: a Lump Sum Item
+    // with no percent_complete ever entered reads "—", not a false 0%.
     const percentCell = row.getCell(c++)
-    if (item.itemKind === 'provisional_sum') {
+    if (item.itemKind === 'provisional_sum' || itemProgress?.proportionComplete == null) {
       percentCell.value = '—'
     } else {
-      percentCell.value = itemProgress?.proportionComplete ?? 0
+      percentCell.value = itemProgress.proportionComplete
       percentCell.numFmt = PERCENT_FORMAT
     }
     if (contract.viewRates) {

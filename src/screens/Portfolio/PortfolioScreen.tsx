@@ -5,15 +5,13 @@ import type { CurrentContractState } from '../../lib/useCurrentContract'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { fetchItemPrices } from '../../lib/supabase/prices'
-import { weightedCompletion } from '../../lib/calculations/overview'
 import { margin, sumOrNull } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
-import { money, percent } from '../../lib/format'
+import { money } from '../../lib/format'
 import { Button, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 interface ContractSummary {
   contract: MyContract
-  percentComplete: number | null
   valueToDate: number | null
   marginToDate: number | null
 }
@@ -34,7 +32,6 @@ interface ContractSummary {
 async function loadContractSummary(contract: MyContract): Promise<ContractSummary> {
   const [progressRate, prices] = await Promise.all([fetchItemProgressRate(contract.id), contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([])])
   const priceByItem = new Map(prices.map((p) => [p.itemId, p]))
-  const percentComplete = weightedCompletion(progressRate)
   const valueToDate = sumOrNull(
     progressRate.map((r) => {
       const price = priceByItem.get(r.itemId)
@@ -42,7 +39,7 @@ async function loadContractSummary(contract: MyContract): Promise<ContractSummar
     }),
   )
   const marginToDate = sumOrNull(progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null)))
-  return { contract, percentComplete, valueToDate, marginToDate }
+  return { contract, valueToDate, marginToDate }
 }
 
 /**
@@ -118,7 +115,6 @@ export function PortfolioScreen() {
               <THead>
                 <TR>
                   <TH>Contract</TH>
-                  <TH align="right">Complete</TH>
                   <TH align="right">Value to date</TH>
                   <TH align="right">Est. margin to date</TH>
                   <TH />
@@ -133,9 +129,6 @@ export function PortfolioScreen() {
                         {/* Row-level tag, not a banner — see loadContractSummary's own comment. */}
                         {s.contract.isSandbox && <span className="shrink-0 rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
                       </div>
-                    </TD>
-                    <TD align="right" className="nc-numeric">
-                      {percent(s.percentComplete)}
                     </TD>
                     <TD align="right" className="nc-numeric">
                       {money(s.valueToDate)}

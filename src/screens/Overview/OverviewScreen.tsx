@@ -325,7 +325,7 @@ export function OverviewScreen() {
                     description={
                       unitPriceItems.length === 0
                         ? "This contract has no Unit Price Items — Lump Sum and Provisional Sum Items don't have a quantity-against-Approximate-Quantity reading, so there's nothing here to pin."
-                        : 'Pin the Items where the money actually is — quantity against Approximate Quantity, and margin to date if you hold view_rates. Only Unit Price Items are pinnable; everything else stays out of the way until you ask for it.'
+                        : 'Pin the Items where the money actually is — quantity against Approximate Quantity, and margin to date if you have rate-viewing permission on this contract. Only Unit Price Items are pinnable; everything else stays out of the way until you ask for it.'
                     }
                     action={
                       unitPriceItems.length > 0 ? <PinPicker items={pinnableItems} value={pinSelection} onChange={setPinSelection} onPin={() => void handlePin()} pinning={pinning} /> : undefined

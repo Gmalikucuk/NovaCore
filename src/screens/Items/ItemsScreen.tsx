@@ -142,7 +142,7 @@ export function ItemsScreen() {
       <SandboxBanner contract={contract} />
 
       {!canWrite ? (
-        <EmptyState title="Setting up items needs the create_items right on this contract." />
+        <EmptyState title="You don't have permission to add or edit Items on this contract." />
       ) : (
         <>
           {/* A distinct card, not a Table — a form styled like the data

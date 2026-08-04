@@ -187,6 +187,19 @@ begin
   -- half could carry its own Job is a real, deliberate change for whoever
   -- owns Schedule 7 data entry, not something to do silently in a seed
   -- script.
+  --
+  -- RE-CHECKED against the Special Provisions, which list 18 Item-Job
+  -- designations (17 distinct Items — 03.01.02 alone carries two, Job B
+  -- and Job C). The first pass here hand-typed the item_number list below
+  -- and silently dropped two real matches: 04.06.04 "Supply and Install
+  -- New CMB H + E Job A" and 04.06.08 "Supply and Stockpile New CTB-2H Job
+  -- A" — both say "Job A" as plainly as every other line in this list, just
+  -- missed transcribing the first time. Re-verified exhaustively this time
+  -- via `description ilike '%job%'` against the live table rather than
+  -- eyeballing the source list again — 17 Items match, exactly the
+  -- Special Provisions' count once 03.01.02's double designation is
+  -- accounted for. No Item is assigned a Job whose description doesn't
+  -- state one.
   -- ---------------------------------------------------------------------------
   update public.items i
   set job_id = j.id
@@ -196,7 +209,8 @@ begin
     and (
       (j.name = 'Job A' and i.item_number in (
         '03.01.01', '04.03', '04.04.03', '04.04.04', '04.04.05', '04.05.01',
-        '04.05.02', '04.05.03', '04.05.06', '05.03.02', '05.03.03'))
+        '04.05.02', '04.05.03', '04.05.06', '04.06.04', '04.06.08',
+        '05.03.02', '05.03.03'))
       or (j.name = 'Job B' and i.item_number in ('04.04.02', '05.03.04'))
       or (j.name = 'Job C' and i.item_number in ('05.03.05'))
     );
@@ -218,7 +232,7 @@ end $$;
 --   where c.contract_no = '26607-0000' order by name;          -- expect A, B, C
 --
 --   select count(*) from items i join contracts c on c.id = i.contract_id
---   where c.contract_no = '26607-0000' and job_id is not null; -- expect 14
+--   where c.contract_no = '26607-0000' and job_id is not null; -- expect 16
 --
 --   select item_kind, count(*) from items i
 --   join contracts c on c.id = i.contract_id

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ItemProgressRate } from '../supabase/monthlyPeriods'
-import { buildProblemList, classifyProblem, formatMonthLabel, itemsInProgress, monthDirection, monthKeyFromDate, monthKeyToPeriod, previousMonth, weightedCompletion } from './overview'
+import { buildProblemList, classifyProblem, formatMonthLabel, itemsInProgress, monthDirection, monthKeyFromDate, monthKeyToPeriod, previousMonth } from './overview'
 
 function row(overrides: Partial<ItemProgressRate>): ItemProgressRate {
   return {
@@ -45,29 +45,6 @@ describe('month arithmetic', () => {
 
   it('formats a human label', () => {
     expect(formatMonthLabel({ year: 2026, month: 8 })).toBe('August 2026')
-  })
-})
-
-describe('weightedCompletion', () => {
-  it('weights by quantity, not a count or average of per-item percentages', () => {
-    // Item A: 100/10,000 (1%). Item B: 900/1,000 (90%). A simple average of
-    // percentages would read ~45.5%; weighted by quantity it's ~9.1%
-    // (1,000 of 11,000) — the number that actually reflects the contract.
-    const result = weightedCompletion([
-      { approximateQuantity: 10000, quantityToDate: 100 },
-      { approximateQuantity: 1000, quantityToDate: 900 },
-    ])
-    expect(result).toBeCloseTo(1000 / 11000, 5)
-  })
-
-  it('is null when there is no approximate quantity to weight against', () => {
-    expect(weightedCompletion([])).toBeNull()
-    expect(weightedCompletion([{ approximateQuantity: 0, quantityToDate: 0 }])).toBeNull()
-  })
-
-  it('lets an over-quantity item pull the aggregate, uncapped', () => {
-    const result = weightedCompletion([{ approximateQuantity: 100, quantityToDate: 150 }])
-    expect(result).toBeCloseTo(1.5, 5)
   })
 })
 

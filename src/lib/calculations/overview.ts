@@ -30,22 +30,7 @@ export function formatMonthLabel(k: MonthKey): string {
   return new Date(k.year, k.month - 1, 1).toLocaleDateString('en-CA', { month: 'long', year: 'numeric' })
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Contract complete — quantity-weighted, not a count or an average of
-// per-item percentages. An item that's 100 t into a 10,000 t item and one
-// that's 100% done on a 10 t item are not equally "complete" for the
-// contract as a whole; weighting by quantity is what makes the aggregate
-// mean what it says.
-// ─────────────────────────────────────────────────────────────────────────
-
-export function weightedCompletion(rows: readonly { approximateQuantity: number; quantityToDate: number }[]): number | null {
-  const totalApprox = rows.reduce((sum, r) => sum + r.approximateQuantity, 0)
-  if (totalApprox <= 0) return null
-  const totalToDate = rows.reduce((sum, r) => sum + r.quantityToDate, 0)
-  return totalToDate / totalApprox
-}
-
-/** Started but not yet finished — Band 1's other headline figure, alongside weightedCompletion. Same rows (progressRate, already unit_price-only). */
+/** Started but not yet finished — Band 1's other headline figure. Same rows (progressRate, already unit_price-only). */
 export function itemsInProgress(rows: readonly { quantityToDate: number; approximateQuantity: number }[]): { started: number; total: number } {
   const started = rows.filter((r) => r.quantityToDate > 0 && r.quantityToDate < r.approximateQuantity).length
   return { started, total: rows.length }
