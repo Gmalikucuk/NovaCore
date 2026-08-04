@@ -19,7 +19,7 @@ import {
   type MonthKey,
   type ProblemItem,
 } from '../../lib/calculations/overview'
-import { margin as computeMargin } from '../../lib/calculations/margin'
+import { margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
 import { Button, Card, NotificationBanner, PageHeader, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
@@ -196,9 +196,9 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
 
   const monthTotals = useMemo(
     () => ({
-      value: monthRows.reduce((s, r) => s + (r.valueInPeriod ?? 0), 0),
-      cost: monthRows.reduce((s, r) => s + (r.costInPeriod ?? 0), 0),
-      margin: monthRows.reduce((s, r) => s + (r.marginInPeriod ?? 0), 0),
+      value: sumOrNull(monthRows.map((r) => r.valueInPeriod)),
+      cost: sumOrNull(monthRows.map((r) => r.costInPeriod)),
+      margin: sumOrNull(monthRows.map((r) => r.marginInPeriod)),
     }),
     [monthRows],
   )
@@ -477,7 +477,7 @@ export function OverviewScreen({ contract: contractProp }: { contract?: MyContra
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.value)}</td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.cost)}</td>
                     <td
-                      className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                      className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin !== null && monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
                     >
                       {money(monthTotals.margin)}
                     </td>

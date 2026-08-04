@@ -4,7 +4,7 @@ import { IconArrowDown, IconArrowUp, IconArrowsSort, IconCurrencyDollar } from '
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
-import { margin } from '../../lib/calculations/margin'
+import { margin, sumOrNull } from '../../lib/calculations/margin'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, quantity as fmtQuantity } from '../../lib/format'
@@ -121,7 +121,7 @@ export function RatesScreen() {
 
   const unitPriceRows = useMemo(() => rows.filter((r) => r.unitPriced), [rows])
   const pricedCount = unitPriceRows.filter((r) => r.priced).length
-  const totalMargin = rows.reduce((sum, r) => sum + (r.contractMargin ?? 0), 0)
+  const totalMargin = sumOrNull(rows.map((r) => r.contractMargin))
 
   function updateDraft(id: string, field: 'cost' | 'unitPrice', value: string) {
     setDrafts((prev) => {
@@ -178,6 +178,12 @@ export function RatesScreen() {
   return (
     <div>
       <PageHeader title="Rates" subtitle={subtitle} />
+
+      {contract.isSandbox && (
+        <NotificationBanner tone="danger" className="mb-4 font-medium">
+          This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
+        </NotificationBanner>
+      )}
 
       {!contract.viewRates ? (
         <EmptyState title="Viewing rates needs the view_rates right on this contract." />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { margin, marginPercent } from './margin'
+import { margin, marginPercent, sumOrNull } from './margin'
 
 describe('margin', () => {
   it('computes quantity * (sell - cost)', () => {
@@ -48,5 +48,27 @@ describe('marginPercent', () => {
     const m = margin(quantity, cost, sell)!
     const revenue = quantity * sell
     expect(marginPercent(quantity, cost, sell)).toBeCloseTo(m / revenue, 10)
+  })
+})
+
+describe('sumOrNull', () => {
+  it('is null when every value is null — nothing priced yet, not a zero total', () => {
+    expect(sumOrNull([null, null, null])).toBeNull()
+  })
+
+  it('is null for an empty list', () => {
+    expect(sumOrNull([])).toBeNull()
+  })
+
+  it('sums only the known values, ignoring nulls — a partially priced contract still totals', () => {
+    expect(sumOrNull([100, null, 50, null])).toBe(150)
+  })
+
+  it('sums all values when none are null', () => {
+    expect(sumOrNull([10, 20, 30])).toBe(60)
+  })
+
+  it('is a real 0 when the priced rows actually net to zero, not absent', () => {
+    expect(sumOrNull([50, -50])).toBe(0)
   })
 })
