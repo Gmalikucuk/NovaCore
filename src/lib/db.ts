@@ -34,6 +34,8 @@ export interface QueuedQuantityRecord {
   syncedAt: string | null
   stationFrom: number | null
   stationTo: number | null
+  /** Bumped server-side on every real draft edit (0022). Read back before confirming — confirm_quantity_record() requires this to match the row's CURRENT version, atomically, or it refuses rather than silently confirming an edit nobody saw. */
+  version: number
   /** Local-only: true until this row has been successfully pushed to (or confirmed already present on) the server. */
   pending: boolean
   lastError: string | null

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { IconAlertTriangle, IconCircleCheck, IconFlag } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
-import { fetchContractQuantityRecords, fetchPendingQuantityRecords, confirmQuantityRecord, type PendingQuantityRecord } from '../../lib/supabase/quantityRecords'
+import { fetchContractQuantityRecords, fetchPendingQuantityRecords, confirmQuantityRecord, StaleQuantityRecordError, type PendingQuantityRecord } from '../../lib/supabase/quantityRecords'
 import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { isOutlier, prospectiveOverage } from '../../lib/calculations/confirmations'
 import { errorMessage } from '../../lib/errorMessage'
@@ -91,26 +91,65 @@ export function ConfirmQueueScreen() {
       }))
   }, [pending])
 
-  async function handleConfirm(id: string) {
-    setConfirmingId(id)
+  async function handleConfirm(record: PendingQuantityRecord) {
+    setConfirmingId(record.id)
+    setLoadError(null)
     try {
-      await confirmQuantityRecord(id)
-      reload()
+      await confirmQuantityRecord(record.id, record.version)
     } catch (err) {
-      setLoadError(errorMessage(err))
+      // A stale confirm means someone else's edit is sitting on the server
+      // this screen hasn't shown yet — reload() below pulls it in either
+      // way, so what she sees next IS the version that needs reviewing, not
+      // the one that was silently rejected.
+      setLoadError(
+        err instanceof StaleQuantityRecordError
+          ? `${record.itemNumber}: this entry changed since the queue loaded — showing the latest version now. Review it before confirming again.`
+          : errorMessage(err),
+      )
     } finally {
+      reload()
       setConfirmingId(null)
     }
   }
 
+  /**
+   * Confirms every record in the group independently — one row's staleness
+   * must not block the rest, and must not be swept through silently either.
+   * Each attempt is caught on its own; a stale row is EXCLUDED from what
+   * gets confirmed and named in the summary, never retried automatically —
+   * "must be re-read before it can be confirmed" means a person looks at
+   * the fresh figure next, not that this loop looks at it for her.
+   */
   async function handleConfirmAll(group: DateGroup) {
     setConfirmingDate(group.workDate)
+    setLoadError(null)
+    const stale: string[] = []
+    const otherFailures: string[] = []
+    let confirmed = 0
     try {
-      await Promise.all(group.records.map((r) => confirmQuantityRecord(r.id)))
-      reload()
-    } catch (err) {
-      setLoadError(errorMessage(err))
+      await Promise.all(
+        group.records.map(async (r) => {
+          try {
+            await confirmQuantityRecord(r.id, r.version)
+            confirmed++
+          } catch (err) {
+            if (err instanceof StaleQuantityRecordError) {
+              stale.push(r.itemNumber)
+            } else {
+              otherFailures.push(r.itemNumber)
+            }
+          }
+        }),
+      )
+      if (stale.length > 0 || otherFailures.length > 0) {
+        const parts: string[] = []
+        if (confirmed > 0) parts.push(`Confirmed ${confirmed} of ${group.records.length}.`)
+        if (stale.length > 0) parts.push(`Skipped ${stale.length} that changed since this list loaded (${stale.join(', ')}) — review the latest version before confirming ${stale.length === 1 ? 'it' : 'them'}.`)
+        if (otherFailures.length > 0) parts.push(`${otherFailures.length} failed (${otherFailures.join(', ')}).`)
+        setLoadError(parts.join(' '))
+      }
     } finally {
+      reload()
       setConfirmingDate(null)
     }
   }
@@ -230,7 +269,7 @@ export function ConfirmQueueScreen() {
                         )}
 
                         <div className="mt-1 flex gap-2">
-                          <Button type="button" variant="secondary" disabled={confirmingId === r.id} onClick={() => void handleConfirm(r.id)}>
+                          <Button type="button" variant="secondary" disabled={confirmingId === r.id} onClick={() => void handleConfirm(r)}>
                             {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
                           </Button>
                         </div>

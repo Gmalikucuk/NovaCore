@@ -6,7 +6,7 @@ import { useSession } from '../../lib/useSession'
 import { useLiveQuery } from '../../lib/sync/useLiveQuery'
 import { db, type QueuedQuantityRecord } from '../../lib/db'
 import { enqueueQuantityRecord, importServerQuantityRecords, registerSyncListeners, syncQueuedQuantityRecords } from '../../lib/sync/quantityRecordsSync'
-import { confirmQuantityRecord, fetchDistinctLocations, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
+import { confirmQuantityRecord, fetchDistinctLocations, StaleQuantityRecordError, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
 import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
 import { fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import { getDeviceId } from '../../lib/deviceId'
@@ -242,13 +242,26 @@ export function EntryScreen() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  async function handleConfirm(id: string) {
-    setConfirmingId(id)
+  async function handleConfirm(record: QueuedQuantityRecord) {
+    setConfirmingId(record.id)
+    setLoadError(null)
     try {
-      await confirmQuantityRecord(id)
+      await confirmQuantityRecord(record.id, record.version)
       await importServerQuantityRecords(contract.id)
     } catch (err) {
-      setFormError(errorMessage(err))
+      // Re-pull regardless of which error this was: a stale confirm means
+      // someone else's edit is sitting on the server that this device
+      // hasn't seen yet, and the record must show the version that was
+      // actually rejected before it can be confirmed again — not the one
+      // still on screen.
+      await importServerQuantityRecords(contract.id).catch(() => {
+        /* best-effort refresh — the error below still reaches the user either way */
+      })
+      if (err instanceof StaleQuantityRecordError) {
+        setLoadError('This entry changed since the list loaded — showing the latest version now. Check it before confirming again.')
+      } else {
+        setLoadError(errorMessage(err))
+      }
     } finally {
       setConfirmingId(null)
     }
@@ -400,7 +413,7 @@ export function EntryScreen() {
           </div>
           {!isToday && (
             <div className="flex items-center justify-between gap-2 px-4 pb-2.5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-nc-warning-text">Not today — entries below are dated here</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-nc-warning-text">Not today — you're entering work for {formatDayLabel(workDate)}</p>
               <Button type="button" variant="ghost" className="shrink-0 px-2 py-1 text-xs text-nc-warning-text" onClick={() => setWorkDate(todayLocalDateString())}>
                 Back to today
               </Button>
@@ -467,7 +480,7 @@ export function EntryScreen() {
                             {r.status === 'draft' ? (
                               <>
                                 {r.pending === false && (
-                                  <Button type="button" variant="secondary" disabled={confirmingId === r.id || !contract.confirmQuantity} onClick={() => void handleConfirm(r.id)}>
+                                  <Button type="button" variant="secondary" disabled={confirmingId === r.id || !contract.confirmQuantity} onClick={() => void handleConfirm(r)}>
                                     {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
                                   </Button>
                                 )}

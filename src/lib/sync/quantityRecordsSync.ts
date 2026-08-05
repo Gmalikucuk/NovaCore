@@ -61,6 +61,9 @@ export async function enqueueQuantityRecord(entry: {
     syncedAt: null,
     stationFrom: entry.stationFrom,
     stationTo: entry.stationTo,
+    // Matches the server column's own default (0022) — a brand-new row has
+    // never been edited yet.
+    version: 1,
     pending: true,
     lastError: null,
   })

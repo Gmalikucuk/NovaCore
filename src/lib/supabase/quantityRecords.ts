@@ -19,10 +19,11 @@ interface RawQuantityRecordRow {
   synced_at: string
   station_from: string | null
   station_to: string | null
+  version: number
 }
 
 const QUANTITY_RECORD_SELECT =
-  'id, contract_id, item_id, work_date, location, quantity, note, status, supersedes, confirmed_by, confirmed_at, created_by, device_id, created_at, synced_at, station_from, station_to'
+  'id, contract_id, item_id, work_date, location, quantity, note, status, supersedes, confirmed_by, confirmed_at, created_by, device_id, created_at, synced_at, station_from, station_to, version'
 
 function mapQuantityRecordRow(row: RawQuantityRecordRow): Omit<QueuedQuantityRecord, 'pending' | 'lastError'> {
   return {
@@ -43,6 +44,7 @@ function mapQuantityRecordRow(row: RawQuantityRecordRow): Omit<QueuedQuantityRec
     syncedAt: row.synced_at,
     stationFrom: row.station_from === null ? null : Number(row.station_from),
     stationTo: row.station_to === null ? null : Number(row.station_to),
+    version: row.version,
   }
 }
 
@@ -143,10 +145,33 @@ export async function pushQuantityRecord(
   return data ? mapQuantityRecordRow(data as unknown as RawQuantityRecordRow) : null
 }
 
-/** Confirms a draft record — project_manager only, per RLS (quantity_records_confirm_right). confirmed_by/confirmed_at are server-assigned regardless of what's sent (see guard_entry_transitions). */
-export async function confirmQuantityRecord(id: string): Promise<void> {
-  const { error } = await supabase.from('quantity_records').update({ status: 'confirmed' }).eq('id', id)
-  if (error) throw error
+/**
+ * Thrown by confirmQuantityRecord when the record has changed since
+ * expectedVersion was read — distinct from every other failure (not found,
+ * no permission, already confirmed) so a caller can show "this changed,
+ * go look again" instead of a generic error. Caught by message prefix,
+ * matching this repo's own convention elsewhere (e.g. the "append-only"
+ * checks in probe-rls.sh) rather than a custom Postgres error code.
+ */
+export class StaleQuantityRecordError extends Error {}
+
+/**
+ * Confirms a draft record — requires the version last read by the caller to
+ * still match, in the SAME atomic statement as the write (0022). There is no
+ * way to confirm without supplying a version: confirm_quantity_record() is
+ * the only function permitted to set status = confirmed at all (the plain
+ * UPDATE grant for status/confirmed_by/confirmed_at was revoked), so a
+ * confirmation can never land on an edit nobody actually saw — enforced in
+ * Postgres, not by this function remembering to pass the right thing.
+ */
+export async function confirmQuantityRecord(id: string, expectedVersion: number): Promise<void> {
+  const { error } = await supabase.rpc('confirm_quantity_record', { p_id: id, p_expected_version: expectedVersion })
+  if (error) {
+    if (error.message.startsWith('stale-version:')) {
+      throw new StaleQuantityRecordError(error.message.replace(/^stale-version:\s*/, ''))
+    }
+    throw error
+  }
 }
 
 export interface QuantityRecordDraftEdit {
@@ -210,6 +235,8 @@ export interface PendingQuantityRecord {
   originalQuantity: number | null
   createdBy: string
   createdByName: string | null
+  /** Read at fetch time — confirmQuantityRecord requires this to still match at the moment of confirming (0022), or it refuses rather than confirming an edit the caller never saw. */
+  version: number
 }
 
 interface RawPendingRow {
@@ -223,6 +250,7 @@ interface RawPendingRow {
   station_to: string | null
   supersedes: string | null
   created_by: string
+  version: number
   items: { item_number: string; description: string; unit: string; approximate_quantity: string } | null
   creator: { full_name: string | null } | null
 }
@@ -239,7 +267,7 @@ export async function fetchPendingQuantityRecords(contractId: string): Promise<P
   const { data, error } = await supabase
     .from('quantity_records')
     .select(
-      'id, item_id, work_date, location, quantity, note, station_from, station_to, supersedes, created_by, ' +
+      'id, item_id, work_date, location, quantity, note, station_from, station_to, supersedes, created_by, version, ' +
         'items!inner ( item_number, description, unit, approximate_quantity ), ' +
         'creator:profiles!created_by ( full_name )',
     )
@@ -286,6 +314,7 @@ export async function fetchPendingQuantityRecords(contractId: string): Promise<P
       originalQuantity: original && original.status === 'confirmed' ? original.quantity : null,
       createdBy: r.created_by,
       createdByName: r.creator?.full_name ?? null,
+      version: r.version,
     }
   })
 }

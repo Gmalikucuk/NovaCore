@@ -4,7 +4,7 @@ import { IconCalendarPlus } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
 import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
-import { confirmQuantityRecord, fetchContractQuantityRecords, fetchDistinctLocations, pushQuantityRecord, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
+import { confirmQuantityRecord, fetchContractQuantityRecords, fetchDistinctLocations, pushQuantityRecord, StaleQuantityRecordError, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
 import { fetchItemMonths, fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
@@ -263,13 +263,22 @@ export function QuantityRecordsScreen() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  async function handleConfirm(id: string) {
-    setConfirmingId(id)
+  async function handleConfirm(record: DayRecord) {
+    setConfirmingId(record.id)
+    setLoadError(null)
     try {
-      await confirmQuantityRecord(id)
+      await confirmQuantityRecord(record.id, record.version)
       refreshSilently()
     } catch (err) {
-      setFormError(errorMessage(err))
+      // Refresh regardless of which error this was — a stale confirm means
+      // this list is showing a version someone else has already changed,
+      // and that has to be visible before it can be confirmed again.
+      refreshSilently()
+      if (err instanceof StaleQuantityRecordError) {
+        setLoadError('This entry changed since the list loaded — showing the latest version now. Check it before confirming again.')
+      } else {
+        setLoadError(errorMessage(err))
+      }
     } finally {
       setConfirmingId(null)
     }
@@ -358,6 +367,10 @@ export function QuantityRecordsScreen() {
           syncedAt: new Date().toISOString(),
           stationFrom: from,
           stationTo: to,
+          // Matches the server column's own default (0022) — pushQuantityRecord
+          // doesn't send this to the server; the row's real version is read
+          // back from the server response instead.
+          version: 1,
         })
         // Fields reset, correction mode cleared, but the panel and Item stay
         // open — a day's work is often several stations against the SAME
@@ -439,6 +452,11 @@ export function QuantityRecordsScreen() {
             </div>
           )}
           {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
+          {status === 'ready' && loadError && (
+            <NotificationBanner tone="danger" className="mb-4">
+              {loadError}
+            </NotificationBanner>
+          )}
 
           {status === 'ready' && (
             <>
@@ -672,7 +690,7 @@ export function QuantityRecordsScreen() {
                               variant="secondary"
                               disabled={confirmingId === r.id || !contract.confirmQuantity}
                               title={!contract.confirmQuantity ? 'Needs permission to confirm quantity records' : undefined}
-                              onClick={() => void handleConfirm(r.id)}
+                              onClick={() => void handleConfirm(r)}
                             >
                               {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
                             </Button>

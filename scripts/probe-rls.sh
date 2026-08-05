@@ -34,12 +34,21 @@
 #   - per-project rights don't imply company-wide ones (full has every
 #     per-project right and still can't create a project)
 #   - the confirmation-guard checks from 0003 (confirmed_by/confirmed_at
-#     spoof + backdate, attribution pinned on re-touch, un-confirm rejected)
+#     spoof + backdate, attribution pinned on re-touch, un-confirm rejected —
+#     since 0022 these are only reachable via direct SQL, see the
+#     privileged-path section; PostgREST has no route to them at all anymore)
 #   - the station append-only check from 0004
 #   - the draft-edit / confirm-wall split from 0021 (enter_quantity edits a
 #     draft it didn't author; correct_quantity alone cannot; nobody, by any
 #     path, edits a confirmed record — not even the confirm action itself,
 #     in the same statement it confirms)
+#   - confirmation requires a witnessed version (0022): confirming is only
+#     possible through confirm_quantity_record(id, expected_version) — the
+#     plain PATCH-to-confirmed path is gone outright, for every seat, right
+#     or no right. A stale (pre-edit) version is rejected as stale, a
+#     correct version from a seat lacking confirm_quantity is still
+#     rejected, and re-confirming an already-confirmed row is rejected too —
+#     three distinct, greppable failure messages, not one flat denial
 #   - positive controls throughout — a suite that only ever asserts "empty"
 #     or "rejected" passes just as well when authentication is silently
 #     broken, which is the failure mode most likely to fool a human skimming
@@ -166,6 +175,23 @@ try:
 except Exception:
     print('')
 " "$1" "$2" "$3"
+}
+
+# obj_field '<json>' <key>  -> value at d[key], or empty string. For RPC
+# responses: confirm_quantity_record returns a single row (`returns
+# public.quantity_records`, not SETOF), so PostgREST serialises it as one
+# JSON OBJECT, not an array — json_field's d[int(index)] indexing doesn't
+# apply here at all (indexing a dict by 0 just raises and silently returns
+# '', which reads as "field missing" rather than "wrong helper used").
+obj_field() {
+  python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    print(d.get(sys.argv[2], '') or '')
+except Exception:
+    print('')
+" "$1" "$2"
 }
 
 # request METHOD PATH TOKEN [BODY]
@@ -798,18 +824,33 @@ if [ "$STATUS" = "200" ]; then
 fi
 check "quantities: edit own draft quantity in place (enter_quantity, 0021)" "200, quantity=999" "$ok" "$STATUS $BODY_OUT"
 
-# Since 0021, this row is ALSO a candidate under quantity_records_edit_draft_
-# right (still draft, quantities holds enter_quantity) — so USING no longer
-# excludes it outright the way it did pre-0021 (when confirm_right was the
-# only UPDATE policy in play). It now fails at WITH CHECK instead: neither
-# policy's check clause is satisfiable for this request (draft-edit's check
-# needs new.status='draft', which a confirm isn't; confirm_right's check
-# needs confirm_quantity, which quantities lacks) — so Postgres raises an
-# explicit "violates row-level security policy" 403, not a silent 0-row
-# match. Same rejection, different — and more explicit — shape than before.
+# 0022: there is no longer a plain PATCH path to confirmed at all — the
+# grant for status/confirmed_by/confirmed_at was revoked outright, so this
+# now fails at the GRANT level regardless of rights, before RLS is even
+# reached. Confirming only ever happens through confirm_quantity_record().
 request PATCH "quantity_records?id=eq.$ENTRY_ID" "$QUANTITIES_TOKEN" '{"status": "confirmed"}'
 ok=0; [ "$STATUS" = "403" ] && ok=1
-check "quantities: status update rejected (no confirm_quantity, 0021 WITH CHECK)" "403" "$ok" "$STATUS $BODY_OUT"
+check "quantities: plain PATCH to confirmed rejected outright (0022 grant revoked)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# Not just for a seat lacking the right — even FULL, who DOES hold
+# confirm_quantity, cannot use the old plain-PATCH path anymore. This is the
+# actual proof that the guarantee moved to Postgres: it isn't gated by rights
+# at this layer at all, the path itself no longer exists for anyone.
+request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" '{"status": "confirmed"}'
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "full: plain PATCH to confirmed rejected too (0022 — no rights-based path left)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# And via the RPC: quantities still can't confirm, right or version aside —
+# has_right(confirm_quantity) is checked explicitly inside the function
+# (SECURITY DEFINER bypasses RLS, so this check is NOT optional there).
+request GET "quantity_records?select=version&id=eq.$ENTRY_ID" "$QUANTITIES_TOKEN"
+ENTRY_VERSION=$(json_field "$BODY_OUT" 0 version)
+request POST "rpc/confirm_quantity_record" "$QUANTITIES_TOKEN" \
+  "{\"p_id\":\"$ENTRY_ID\",\"p_expected_version\":$ENTRY_VERSION}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "not-permitted" || ok=0; }
+check "quantities: confirm via RPC rejected (no confirm_quantity)" ">=400, not-permitted" "$ok" "$STATUS $BODY_OUT"
 
 OTHER_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 request POST "quantity_records" "$QUANTITIES_TOKEN" \
@@ -856,14 +897,55 @@ request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$READONLY_TOKEN" '{"qua
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "readonly: edit a draft rejected (no enter_quantity)" "200, []" "$ok" "$STATUS $BODY_OUT"
 
-# Confirm it (full holds confirm_quantity) — the edit window closes here.
-request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$FULL_TOKEN" '{"status": "confirmed"}'
+# =============================================================================
+# Confirmation requires a witnessed version (0022). SHARED_DRAFT_ID has been
+# edited once already (quantity -> 51 above), so its version has moved past
+# 1 — confirming with the version from BEFORE that edit must be rejected as
+# stale, not silently confirm whatever is current. Read the current version
+# fresh rather than assume the exact bump arithmetic.
+# =============================================================================
+request GET "quantity_records?select=version&id=eq.$SHARED_DRAFT_ID" "$FULL_TOKEN"
+SHARED_DRAFT_VERSION=$(json_field "$BODY_OUT" 0 version)
+
+# Confirming with version 1 (the value read before the edit above) must fail
+# — this is the exact scenario the brief describes: an edit landed between
+# a read and a confirm attempt.
+request POST "rpc/confirm_quantity_record" "$FULL_TOKEN" \
+  "{\"p_id\":\"$SHARED_DRAFT_ID\",\"p_expected_version\":1}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "stale-version" || ok=0; }
+check "full: confirm with a stale (pre-edit) version rejected" ">=400, stale-version" "$ok" "$STATUS $BODY_OUT"
+
+# Confirming with the CURRENT version, but by a seat lacking confirm_quantity,
+# is still rejected — a correct version does not substitute for the right.
+request POST "rpc/confirm_quantity_record" "$QUANTITIES_TOKEN" \
+  "{\"p_id\":\"$SHARED_DRAFT_ID\",\"p_expected_version\":$SHARED_DRAFT_VERSION}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "not-permitted" || ok=0; }
+check "quantities: confirm with the correct version still rejected (no confirm_quantity)" ">=400, not-permitted" "$ok" "$STATUS $BODY_OUT"
+
+# The current version, by a seat that DOES hold confirm_quantity, succeeds —
+# this IS the version that was actually last read, so it's a witnessed
+# confirmation, not a blind one.
+request POST "rpc/confirm_quantity_record" "$FULL_TOKEN" \
+  "{\"p_id\":\"$SHARED_DRAFT_ID\",\"p_expected_version\":$SHARED_DRAFT_VERSION}"
 ok=0
 if [ "$STATUS" = "200" ]; then
-  st=$(json_field "$BODY_OUT" 0 status)
+  st=$(obj_field "$BODY_OUT" status)
   [ "$st" = "confirmed" ] && ok=1
 fi
-check "full: confirm the shared draft" "200, status=confirmed" "$ok" "$STATUS $BODY_OUT"
+check "full: confirm the shared draft with the current version (0022)" "200, status=confirmed" "$ok" "$STATUS $BODY_OUT"
+
+# Confirming AGAIN — same version, now stale in a different way: the row
+# isn't a draft anymore at all. Distinct diagnosis from "stale-version".
+request POST "rpc/confirm_quantity_record" "$FULL_TOKEN" \
+  "{\"p_id\":\"$SHARED_DRAFT_ID\",\"p_expected_version\":$SHARED_DRAFT_VERSION}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "already-confirmed" || ok=0; }
+check "full: re-confirming an already-confirmed record rejected" ">=400, already-confirmed" "$ok" "$STATUS $BODY_OUT"
 
 # Same seat, same right, same row — now rejected purely because status
 # changed underneath it. Proves the edit policy is status-gated, not a
@@ -905,41 +987,62 @@ check "correct_only: insert CORRECTION entry succeeds (correct_quantity, superse
 echo
 echo "=== Confirmation guards (full seat) ==="
 
-request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" \
-  "{\"status\":\"confirmed\",\"confirmed_by\":\"$READONLY_ID\",\"confirmed_at\":\"2020-01-01T00:00:00Z\"}"
+# 0022: confirming goes through the RPC now, with the version last read.
+# ENTRY_ID hasn't been touched since it was edited to quantity 999 above —
+# read its current version fresh rather than assume the exact number.
+request GET "quantity_records?select=version&id=eq.$ENTRY_ID" "$FULL_TOKEN"
+ENTRY_VERSION=$(json_field "$BODY_OUT" 0 version)
+
+request POST "rpc/confirm_quantity_record" "$FULL_TOKEN" \
+  "{\"p_id\":\"$ENTRY_ID\",\"p_expected_version\":$ENTRY_VERSION}"
 ok=0
 if [ "$STATUS" = "200" ]; then
-  cb=$(json_field "$BODY_OUT" 0 confirmed_by)
-  ca=$(json_field "$BODY_OUT" 0 confirmed_at)
-  case "$ca" in 2020*) ca_spoofed=1 ;; *) ca_spoofed=0 ;; esac
-  [ "$cb" = "$FULL_ID" ] && [ "$ca_spoofed" = "0" ] && ok=1
+  cb=$(obj_field "$BODY_OUT" confirmed_by)
+  ca=$(obj_field "$BODY_OUT" confirmed_at)
+  st=$(obj_field "$BODY_OUT" status)
+  [ "$st" = "confirmed" ] && [ "$cb" = "$FULL_ID" ] && [ -n "$ca" ] && ok=1
 fi
-check "full: confirmed_by/confirmed_at spoof+backdate overridden" "confirmed_by=$FULL_ID, confirmed_at=now" "$ok" "$STATUS $BODY_OUT"
+check "full: confirm via RPC stamps confirmed_by/confirmed_at" "status=confirmed, confirmed_by=$FULL_ID" "$ok" "$STATUS $BODY_OUT"
 
-request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" "{\"status\":\"confirmed\",\"confirmed_by\":\"$READONLY_ID\"}"
-ok=0
-if [ "$STATUS" = "200" ]; then
-  cb=$(json_field "$BODY_OUT" 0 confirmed_by)
-  [ "$cb" = "$FULL_ID" ] && ok=1
-fi
-check "full: attribution pinned on re-touch" "confirmed_by stays $FULL_ID" "$ok" "$STATUS $BODY_OUT"
+# 0022: there's no remaining path to spoof confirmed_by/confirmed_at at
+# all — the RPC's own signature is (id, expected_version), nothing else, and
+# the plain PATCH path that the old spoof/backdate test exercised is gone
+# (grant revoked). Confirming this now means checking the surface doesn't
+# exist, not that it's overridden when reached.
+request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" "{\"confirmed_by\":\"$READONLY_ID\",\"confirmed_at\":\"2020-01-01T00:00:00Z\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "full: plain PATCH to confirmed_by/confirmed_at rejected outright (0022, no such path)" "403" "$ok" "$STATUS $BODY_OUT"
 
+# Same for un-confirming — the grant covers status too, so this fails before
+# reaching guard_entry_transitions' own un-confirm guard at all now (that
+# guard still exists and is exercised directly via SQL below, since this is
+# no longer the layer that reaches it).
 request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" '{"status": "draft"}'
-ok=0
-case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
-check "full: un-confirm rejected" ">=400" "$ok" "$STATUS $BODY_OUT"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "full: un-confirm rejected outright (0022 grant, not the trigger)" "403" "$ok" "$STATUS $BODY_OUT"
 
-# Since 0021, station_from IS grantable to authenticated (the draft-edit
-# grant) — full also holds enter_quantity, so this is no longer a GRANT-level
-# 403. It reaches the trigger via quantity_records_confirm_right (full holds
-# confirm_quantity, whose policy doesn't itself look at status), and
-# guard_entry_transitions' append-only branch is what actually rejects it —
-# same trigger-exception shape as "un-confirm rejected" above, hence >=400
-# rather than a specific code.
-request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" '{"station_from": 3000}'
+# Re-confirming rejected — same shape proven on SHARED_DRAFT_ID above,
+# repeated here since ENTRY_ID took a different path to get confirmed
+# (single-shot RPC vs. the version-mismatch sequence above).
+request POST "rpc/confirm_quantity_record" "$FULL_TOKEN" \
+  "{\"p_id\":\"$ENTRY_ID\",\"p_expected_version\":$ENTRY_VERSION}"
 ok=0
 case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
-check "full: station_from edit on confirmed entry rejected (0021 append-only branch)" ">=400" "$ok" "$STATUS $BODY_OUT"
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "already-confirmed" || ok=0; }
+check "full: re-confirming ENTRY_ID rejected" ">=400, already-confirmed" "$ok" "$STATUS $BODY_OUT"
+
+# 0022 removed quantity_records_confirm_right entirely — a confirmed row now
+# has NO applicable permissive UPDATE policy at all (quantity_records_edit_
+# draft_right requires status = 'draft'), so an attempt to touch ANY column
+# on it, by ANY seat, is excluded at USING and matches 0 rows — the same
+# "200, []" shape this suite already uses for every other no-matching-right
+# case, not a trigger-raised exception anymore. The trigger's append-only
+# branch still exists and still holds — proven directly via SQL below,
+# since ordinary PostgREST can no longer reach a confirmed row for UPDATE
+# at all, right or no right.
+request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" '{"station_from": 3000}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "full: station_from edit on confirmed entry matches 0 rows (0022 — no policy admits it)" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
 # Company-wide rights don't leak from per-project ones. full has every
@@ -960,19 +1063,17 @@ check "full: insert project rejected (no create_projects)" "403" "$ok" "$STATUS 
 # Unaffected by the rights rewrite: these exercise guard_entry_transitions()
 # directly at the postgres role, below PostgREST's grant system entirely.
 #
-# Before 0021, every seat-level edit check above returned 403 at the GRANT
-# level (quantity and station_from/station_to were never granted UPDATE to
-# `authenticated` at all), so guard_entry_transitions()'s append-only branch
-# never actually executed in this suite via PostgREST — the grant stopped
-# the request before the trigger was reached, every time. 0021 widens that
-# grant (belt) so a draft CAN be edited, which means the trigger (braces) is
-# now the thing actually doing the confirmed-row enforcement seen above (the
-# "full: station_from edit on confirmed entry rejected" check) — this
-# section proves the same trigger also holds from below PostgREST's grant
-# system entirely: service_role scripts, RPCs, security-definer functions,
-# anyone in psql. Optional: needs SUPABASE_DB_PASSWORD and a `supabase` CLI
-# already linked to this repo (`supabase link --project-ref ...`); skipped,
-# not failed, without it.
+# Since 0022, a confirmed row has NO applicable UPDATE policy left via
+# PostgREST at all (quantity_records_confirm_right is gone, and edit_draft_
+# right requires status = 'draft'), and the plain status/confirmed_by/
+# confirmed_at grant is revoked outright — so guard_entry_transitions()'s
+# append-only, un-confirm, and attribution-pinning branches are no longer
+# reachable from an ordinary seat by ANY route, right or no right. This
+# section is now the ONLY place left that actually exercises those specific
+# branches: service_role scripts, RPCs, security-definer functions, anyone
+# in psql. Optional: needs SUPABASE_DB_PASSWORD and a `supabase` CLI already
+# linked to this repo (`supabase link --project-ref ...`); skipped, not
+# failed, without it.
 # =============================================================================
 echo
 echo "=== Privileged-path checks (postgres role, not a seat — different layer) ==="
@@ -1019,6 +1120,27 @@ except Exception:
   sv=$(json_field "$verify_rows" 0 station_from)
   ok=0; [ "$qv" = "1234.5" ] && [ "$sv" = "500" ] && ok=1
   check "postgres: row genuinely unchanged after both rejections" "quantity=1234.5, station_from=500" "$ok" "$verify_out"
+
+  # Un-confirm — 0022 makes this unreachable from PostgREST at all (grant
+  # revoked before RLS is even reached), so this is now the only place left
+  # that actually exercises guard_entry_transitions()'s own un-confirm guard.
+  unconfirm_out=$(db_query "update quantity_records set status = 'draft' where id = '$PRIV_ID';")
+  ok=0; printf '%s' "$unconfirm_out" | grep -q "cannot be un-confirmed" && ok=1
+  check "postgres: un-confirm on confirmed row rejected" "P0001 cannot be un-confirmed" "$ok" "$unconfirm_out"
+
+  # Attribution pinning on re-touch — same reasoning: 0022 removed the only
+  # PostgREST-reachable path to this branch (the plain PATCH confirm/re-touch
+  # path), so this is the one place left proving a spoofed confirmed_by/
+  # confirmed_at on an already-confirmed row is still silently overridden by
+  # the trigger, not merely inaccessible.
+  spoof_out=$(db_query "update quantity_records set status = 'confirmed', confirmed_by = '$READONLY_ID', confirmed_at = '2020-01-01T00:00:00Z' where id = '$PRIV_ID' returning confirmed_by, confirmed_at;")
+  spoof_rows=$(db_rows "$spoof_out")
+  cb=$(json_field "$spoof_rows" 0 confirmed_by)
+  ca=$(json_field "$spoof_rows" 0 confirmed_at)
+  ok=0
+  case "$ca" in 2020*) ca_spoofed=1 ;; *) ca_spoofed=0 ;; esac
+  [ "$cb" = "$FULL_ID" ] && [ "$ca_spoofed" = "0" ] && ok=1
+  check "postgres: confirmed_by/confirmed_at spoof on re-touch still pinned" "confirmed_by=$FULL_ID, confirmed_at=now" "$ok" "$spoof_out"
 fi
 
 # TODO: nothing here tests daily_entries_effective live against the database
