@@ -7,7 +7,7 @@ import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchContractMonths, fetchItemMonths, fetchItemProgressRate, type ContractMonth, type ItemMonth, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { fetchLastConfirmedAt } from '../../lib/supabase/quantityRecords'
 import { formatMonthLabel, monthDirection, monthKeyFromDate, monthKeyToPeriod, previousMonth, type Direction, type MonthKey } from '../../lib/calculations/overview'
-import { margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
+import { estimatedCost, margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
 import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportFinanceWorkbook, type FinanceExportRow } from '../../lib/export/financeExport'
@@ -115,20 +115,33 @@ export function FinanceMonthScreen() {
         const quantityInPeriod = unitPriced ? (inPeriod?.quantityInPeriod ?? 0) : null
         const quantityInPreviousPeriod = unitPriced ? (inPreviousPeriod?.quantityInPeriod ?? 0) : null
         const cost = unitPriced ? (price?.costPrice ?? null) : null
+        const costBasis = unitPriced ? (price?.costBasis ?? null) : null
         const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
         const quantityToDate = unitPriced ? (progress?.quantityToDate ?? 0) : null
+        // A total is a flat figure about the whole Item's life, not this
+        // month's share of it — there's no honest way to allocate a lump
+        // subcontract quote into a calendar month without prorating against
+        // the Approximate Quantity, which is exactly the derivation this
+        // shape exists to stop treating as a fact (0023). Period cost/margin
+        // are therefore only ever computed for a per_unit basis; a total
+        // basis reads as absent here, same as v_contract_month's own
+        // narrowing — present but incomplete for that Item's period rows,
+        // never a prorated guess. costToDate/marginToDate face no such
+        // problem: a total doesn't scale with quantity, so it's usable
+        // as-is regardless of how much time has passed.
+        const periodCost = costBasis === 'per_unit' ? cost : null
         return {
           item,
           quantityInPeriod,
           valueInPeriod: unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null,
-          costInPeriod: cost !== null && quantityInPeriod !== null ? quantityInPeriod * cost : null,
-          marginInPeriod: unitPriced ? computeMargin(quantityInPeriod ?? 0, cost, unitPrice) : null,
+          costInPeriod: periodCost !== null && quantityInPeriod !== null ? quantityInPeriod * periodCost : null,
+          marginInPeriod: unitPriced && costBasis === 'per_unit' ? computeMargin(quantityInPeriod ?? 0, cost, unitPrice, costBasis) : null,
           previousValueInPeriod: unitPrice !== null && quantityInPreviousPeriod !== null ? quantityInPreviousPeriod * unitPrice : null,
-          previousMarginInPeriod: unitPriced ? computeMargin(quantityInPreviousPeriod ?? 0, cost, unitPrice) : null,
+          previousMarginInPeriod: unitPriced && costBasis === 'per_unit' ? computeMargin(quantityInPreviousPeriod ?? 0, cost, unitPrice, costBasis) : null,
           quantityToDate,
           valueToDate: unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null,
-          costToDate: cost !== null && quantityToDate !== null ? quantityToDate * cost : null,
-          marginToDate: unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice) : null,
+          costToDate: unitPriced ? estimatedCost(quantityToDate ?? 0, cost, costBasis) : null,
+          marginToDate: unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice, costBasis) : null,
           approximateQuantity: unitPriced ? item.approximateQuantity : null,
           remaining: unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null,
           isOverQuantity: unitPriced ? (progress?.isOverQuantity ?? false) : false,

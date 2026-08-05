@@ -38,7 +38,9 @@ async function loadContractSummary(contract: MyContract): Promise<ContractSummar
       return price?.unitPrice != null ? r.quantityToDate * price.unitPrice : null
     }),
   )
-  const marginToDate = sumOrNull(progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null)))
+  const marginToDate = sumOrNull(
+    progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
+  )
   return { contract, valueToDate, marginToDate }
 }
 

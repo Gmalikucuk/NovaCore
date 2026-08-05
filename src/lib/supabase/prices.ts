@@ -1,8 +1,10 @@
 import { supabase } from './client'
+import type { CostBasis } from '../calculations/margin'
 
 export interface ItemPrice {
   itemId: string
   costPrice: number | null
+  costBasis: CostBasis | null
   unitPrice: number | null
   updatedBy: string | null
   updatedAt: string
@@ -11,17 +13,19 @@ export interface ItemPrice {
 interface RawPriceRow {
   item_id: string
   cost_price: string | null
+  cost_basis: CostBasis | null
   unit_price: string | null
   updated_by: string | null
   updated_at: string
 }
 
-const PRICE_SELECT = 'item_id, cost_price, unit_price, updated_by, updated_at'
+const PRICE_SELECT = 'item_id, cost_price, cost_basis, unit_price, updated_by, updated_at'
 
 function mapPriceRow(row: RawPriceRow): ItemPrice {
   return {
     itemId: row.item_id,
     costPrice: row.cost_price === null ? null : Number(row.cost_price),
+    costBasis: row.cost_basis,
     unitPrice: row.unit_price === null ? null : Number(row.unit_price),
     updatedBy: row.updated_by,
     updatedAt: row.updated_at,
@@ -47,13 +51,19 @@ export async function fetchItemPrices(contractId: string): Promise<ItemPrice[]> 
  * rate entry inserts the row, editing it later updates the same one.
  * costPrice/unitPrice stay null if left blank rather than defaulting to 0:
  * a missing rate is not a zero rate, and margin.ts's null-propagation
- * depends on that distinction reaching it intact. project_manager only, per
- * RLS (item_prices_insert_right / item_prices_update_right).
+ * depends on that distinction reaching it intact. costBasis travels with
+ * costPrice always — item_prices_cost_basis_matches_value (0023) rejects
+ * one being set without the other, so a blank cost clears both together.
+ * project_manager only, per RLS (item_prices_insert_right /
+ * item_prices_update_right) — set_unit_price is required only when the
+ * target Item is actually unit_price (0023), so a Lump Sum/Provisional Sum
+ * Item's cost-only write needs set_cost alone.
  */
 export async function upsertItemPrice(input: {
   itemId: string
   contractId: string
   costPrice: number | null
+  costBasis: CostBasis | null
   unitPrice: number | null
 }): Promise<ItemPrice> {
   const { data, error } = await supabase
@@ -63,6 +73,7 @@ export async function upsertItemPrice(input: {
         item_id: input.itemId,
         contract_id: input.contractId,
         cost_price: input.costPrice,
+        cost_basis: input.costPrice === null ? null : input.costBasis,
         unit_price: input.unitPrice,
       },
       { onConflict: 'item_id' },

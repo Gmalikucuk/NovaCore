@@ -705,6 +705,100 @@ request PATCH "actual_cost_entries?contract_id=eq.$PROJECT_ID&limit=1" "$FULL_TO
 ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
 check "full: update actual_cost_entries rejected (no grant, append-only)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
+# =============================================================================
+# Cost as a total or per unit (0023/0024) — the new reachable surface. A
+# Lump Sum Item has no non-sandbox equivalent quantities can see (every
+# lump_sum/provisional_sum Item lives on Hwy 5, off-limits for verification
+# writes per README.md's standing rule) — 0025 seeds PROBE-LS-001 on the
+# sandbox contract specifically so this has somewhere to write.
+#
+# viewer holds set_cost on the SANDBOX CONTRACT ONLY (0026) — nowhere else —
+# specifically so it can isolate "set_cost alone suffices for a non-
+# unit_price Item" from "full has every right anyway": no existing fixture
+# held set_cost without set_unit_price, and this is the one thing 0023
+# actually changed (a Unit Price Item's cost still needs both — viewer's
+# pre-existing "update item_prices rejected" check against a unit_price
+# Item is unaffected by this grant, still rejected, since set_unit_price is
+# still required for that item_kind).
+# =============================================================================
+echo
+echo "=== Cost as a total or per unit (0023/0024) ==="
+
+LUMP_SUM_ITEM_ID="c0ffee00-c0de-0000-0000-000000000004"
+
+# Insert-time guard: per_unit is not offered to, and not writable for, a
+# Lump Sum Item — full holds every per-project right and still can't.
+request POST "item_prices" "$FULL_TOKEN" \
+  "{\"item_id\":\"$LUMP_SUM_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"cost_price\":50000,\"cost_basis\":\"per_unit\"}"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: per_unit cost_basis on a Lump Sum Item rejected (0024)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# quantities holds no set_cost at all — the wall holds for the new surface
+# exactly as it always has for the old one.
+request POST "item_prices" "$QUANTITIES_TOKEN" \
+  "{\"item_id\":\"$LUMP_SUM_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"cost_price\":50000,\"cost_basis\":\"total\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: insert Lump Sum Item cost rejected (no set_cost)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# viewer holds set_cost on the sandbox contract ONLY, and NOT set_unit_price
+# anywhere — this succeeding is the actual proof that set_unit_price is not
+# required for a non-unit_price Item, isolated from full's blanket rights.
+# Upsert (on_conflict=item_id, resolution=merge-duplicates), not a plain
+# POST: item_id is item_prices' own primary key, so a second run of this
+# suite would otherwise hit a 409 on the still-existing row from the first
+# — same idempotent-rerun shape this file already uses for progress_estimates
+# and jobs, via the shared request() helper's own raw-curl escape hatch.
+upsert_resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/item_prices?on_conflict=item_id" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $VIEWER_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"item_id\":\"$LUMP_SUM_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"cost_price\":50000,\"cost_basis\":\"total\"}")
+STATUS=$(printf '%s' "$upsert_resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$upsert_resp" | sed '$d')
+ok=0
+if [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; then
+  cb=$(json_field "$BODY_OUT" 0 cost_basis)
+  cp=$(json_field "$BODY_OUT" 0 cost_price)
+  [ "$cb" = "total" ] && [ "$cp" = "50000" ] && ok=1
+fi
+check "viewer: insert/upsert Lump Sum Item cost as a total (set_cost alone, no set_unit_price)" "200/201, cost_basis=total" "$ok" "$STATUS $BODY_OUT"
+
+# Same seat, update path — a fresh total, proving the UPDATE policy carries
+# the same set_unit_price-only-if-unit_price exception as INSERT, not just
+# the one this suite happened to check first.
+request PATCH "item_prices?item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN" '{"cost_price": 62000}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  cp=$(json_field "$BODY_OUT" 0 cost_price)
+  [ "$cp" = "62000" ] && ok=1
+fi
+check "viewer: update Lump Sum Item cost (set_cost alone, no set_unit_price)" "200, cost_price=62000" "$ok" "$STATUS $BODY_OUT"
+
+# viewer still can't move it to per_unit on update either. USING still
+# admits the row (viewer holds set_cost, item isn't unit_price), so this
+# fails at WITH CHECK on the resulting new row instead of being excluded
+# up front — an explicit "violates row-level security policy" 403, not a
+# silent 0-row match, same shape already established for an analogous
+# USING-passes-but-WITH-CHECK-fails case in the draft-edit section above.
+request PATCH "item_prices?item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN" '{"cost_basis": "per_unit"}'
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer: update Lump Sum Item to per_unit rejected (0024)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# item_prices_cost_basis_matches_value (0023) — a cost with no basis is
+# rejected regardless of who's asking. PATCH against PROBE-002 (already
+# priced, per the sandbox seed) rather than POST: an insert here would hit
+# the primary key conflict first and never reach the CHECK constraint at
+# all, which would pass this probe for the wrong reason.
+request PATCH "item_prices?item_id=eq.c0ffee00-c0de-0000-0000-000000000002" "$FULL_TOKEN" '{"cost_basis": null}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: cost_price without a matching cost_basis rejected (0023 constraint)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# quantities lacks view_rates entirely — the read wall is unchanged for the
+# new surface: a Lump Sum Item's cost is exactly as invisible to it as a
+# Unit Price Item's always has been.
+request GET "item_prices?select=cost_price,cost_basis&item_id=eq.$LUMP_SUM_ITEM_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: Lump Sum Item cost invisible (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
 echo
 echo "=== Preservation, not just denial (rights regression on Hwy 97C) ==="
 # Every probe above proves the wall holds (a right-less seat is denied) or

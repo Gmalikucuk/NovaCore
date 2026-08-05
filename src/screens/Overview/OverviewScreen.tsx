@@ -57,15 +57,19 @@ function PinPicker({
   )
 }
 
-function problemSentence(p: ProblemItem, costByItem: Map<string, number | null>): string {
+function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>): string {
   const { kind, row } = p
   if (kind === 'stalled') {
     return row.lastWorkDate ? `No activity since ${row.lastWorkDate} — not finished.` : 'No confirmed activity yet — not finished.'
   }
   if (kind === 'over_quantity') {
     const overage = row.quantityToDate - row.approximateQuantity
-    const cost = costByItem.get(row.itemId) ?? null
-    const atCost = cost !== null ? ` — ${money(overage * cost)} at cost` : ''
+    const price = priceByItem.get(row.itemId)
+    // A per-unit rate turns the overage into a dollar figure directly. A
+    // total cost has no such reading — "overage x total" isn't a real
+    // number, it's just wrong, so this stays silent rather than showing
+    // one (0023).
+    const atCost = price?.costPrice !== null && price?.costPrice !== undefined && price.costBasis === 'per_unit' ? ` — ${money(overage * price.costPrice)} at cost` : ''
     return `${fmtQuantity(overage)} ${row.unit} over the Approximate Quantity${atCost}.`
   }
   // behind_rate — flagged past BEHIND_RATE_THRESHOLD_DAYS; named here so
@@ -159,7 +163,6 @@ export function OverviewScreen() {
 
   const priceByItem = useMemo(() => new Map(prices.map((p) => [p.itemId, p])), [prices])
   const progressByItem = useMemo(() => new Map(progressRate.map((p) => [p.itemId, p])), [progressRate])
-  const costByItem = useMemo(() => new Map(prices.map((p) => [p.itemId, p.costPrice])), [prices])
 
   // Band 1 — progress. The "Contract complete" quantity-weighted blend that
   // used to live here is gone (0015) — it weighted Mobilization and sign
@@ -204,9 +207,16 @@ export function OverviewScreen() {
         .filter((row): row is { pin: PinnedItem; progress: ItemProgressRate } => row.progress !== undefined)
         .map((row) => ({
           ...row,
-          margin: contract.viewRates ? computeMargin(row.progress.quantityToDate, costByItem.get(row.pin.itemId) ?? null, priceByItem.get(row.pin.itemId)?.unitPrice ?? null) : null,
+          margin: contract.viewRates
+            ? computeMargin(
+                row.progress.quantityToDate,
+                priceByItem.get(row.pin.itemId)?.costPrice ?? null,
+                priceByItem.get(row.pin.itemId)?.unitPrice ?? null,
+                priceByItem.get(row.pin.itemId)?.costBasis ?? null,
+              )
+            : null,
         })),
-    [pins, progressByItem, costByItem, priceByItem, contract.viewRates],
+    [pins, progressByItem, priceByItem, contract.viewRates],
   )
 
   async function handlePin() {
@@ -395,7 +405,7 @@ export function OverviewScreen() {
                               <span className="nc-numeric font-semibold text-nc-text">{p.row.itemNumber}</span>{' '}
                               <span className="text-nc-text-muted">{p.row.description}</span>
                             </p>
-                            <p className="text-sm text-nc-text-muted">{problemSentence(p, costByItem)}</p>
+                            <p className="text-sm text-nc-text-muted">{problemSentence(p, priceByItem)}</p>
                           </div>
                           <span className="shrink-0 rounded-full bg-nc-secondary px-2 py-0.5 text-xs font-medium text-nc-text-muted">{PROBLEM_KIND_LABEL[p.kind]}</span>
                         </div>

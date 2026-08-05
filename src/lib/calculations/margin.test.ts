@@ -1,53 +1,97 @@
 import { describe, expect, it } from 'vitest'
-import { margin, marginPercent, sumOrNull } from './margin'
+import { estimatedCost, margin, marginPercent, sumOrNull } from './margin'
 
-describe('margin', () => {
-  it('computes quantity * (sell - cost)', () => {
-    expect(margin(100, 88.5, 112)).toBeCloseTo(2350, 5)
+describe('estimatedCost', () => {
+  it('scales with quantity when per_unit', () => {
+    expect(estimatedCost(100, 88.5, 'per_unit')).toBeCloseTo(8850, 5)
+  })
+
+  it('ignores quantity entirely when total — a flat figure, not a rate', () => {
+    expect(estimatedCost(100, 80000, 'total')).toBe(80000)
+    expect(estimatedCost(0, 80000, 'total')).toBe(80000)
   })
 
   it('is null when cost is missing', () => {
-    expect(margin(100, null, 112)).toBeNull()
+    expect(estimatedCost(100, null, 'per_unit')).toBeNull()
+  })
+
+  it('is null when basis is missing, even with a cost present', () => {
+    expect(estimatedCost(100, 88.5, null)).toBeNull()
+  })
+})
+
+describe('margin', () => {
+  it('computes quantity * sell - estimatedCost() for a per_unit rate', () => {
+    expect(margin(100, 88.5, 112, 'per_unit')).toBeCloseTo(2350, 5)
+  })
+
+  it('uses the flat total directly for a total basis, not scaled by quantity', () => {
+    // 20,000 t approximate quantity, 16,000 t actually placed, $80,000
+    // quoted for the whole scope: cost must stay $80,000 regardless of
+    // how much of the approximation was placed — the exact case this
+    // shape exists to get right (0023).
+    expect(margin(16000, 80000, 5, 'total')).toBeCloseTo(16000 * 5 - 80000, 5)
+  })
+
+  it('is null when cost is missing', () => {
+    expect(margin(100, null, 112, 'per_unit')).toBeNull()
+  })
+
+  it('is null when basis is missing', () => {
+    expect(margin(100, 88.5, 112, null)).toBeNull()
   })
 
   it('is null when sell is missing', () => {
-    expect(margin(100, 88.5, null)).toBeNull()
+    expect(margin(100, 88.5, null, 'per_unit')).toBeNull()
   })
 
   it('can be negative — a rate entered backwards should show as a loss, not be hidden', () => {
-    expect(margin(100, 112, 88.5)).toBeCloseTo(-2350, 5)
+    expect(margin(100, 112, 88.5, 'per_unit')).toBeCloseTo(-2350, 5)
   })
 
-  it('is 0 at zero quantity even when priced', () => {
-    expect(margin(0, 88.5, 112)).toBe(0)
+  it('is 0 at zero quantity even when priced, per_unit', () => {
+    expect(margin(0, 88.5, 112, 'per_unit')).toBe(0)
+  })
+
+  it('is negative at zero quantity for a total basis — the cost was still incurred', () => {
+    expect(margin(0, 80000, 5, 'total')).toBe(-80000)
   })
 })
 
 describe('marginPercent', () => {
-  it('computes (sell - cost) / sell', () => {
-    expect(marginPercent(100, 88.5, 112)).toBeCloseTo(0.2098, 3)
+  it('computes margin / revenue for a per_unit rate', () => {
+    expect(marginPercent(100, 88.5, 112, 'per_unit')).toBeCloseTo(0.2098, 3)
   })
 
-  it('is null when either rate is missing', () => {
-    expect(marginPercent(100, null, 112)).toBeNull()
-    expect(marginPercent(100, 88.5, null)).toBeNull()
+  it('computes margin / revenue for a total basis too', () => {
+    const quantity = 16000
+    const sell = 5
+    const totalCost = 80000
+    const revenue = quantity * sell
+    expect(marginPercent(quantity, totalCost, sell, 'total')).toBeCloseTo((revenue - totalCost) / revenue, 10)
+  })
+
+  it('is null when cost, basis, or sell is missing', () => {
+    expect(marginPercent(100, null, 112, 'per_unit')).toBeNull()
+    expect(marginPercent(100, 88.5, 112, null)).toBeNull()
+    expect(marginPercent(100, 88.5, null, 'per_unit')).toBeNull()
   })
 
   it('is null at zero quantity, not a misleadingly-computable percentage', () => {
-    expect(marginPercent(0, 88.5, 112)).toBeNull()
+    expect(marginPercent(0, 88.5, 112, 'per_unit')).toBeNull()
   })
 
   it('is null when sell price is zero (avoids a divide-by-zero)', () => {
-    expect(marginPercent(100, 5, 0)).toBeNull()
+    expect(marginPercent(100, 5, 0, 'per_unit')).toBeNull()
   })
 
   it('matches margin / revenue algebraically', () => {
     const quantity = 250
     const cost = 4.2
     const sell = 6.75
-    const m = margin(quantity, cost, sell)!
+    const m = margin(quantity, cost, sell, 'per_unit')!
     const revenue = quantity * sell
-    expect(marginPercent(quantity, cost, sell)).toBeCloseTo(m / revenue, 10)
+    expect(marginPercent(quantity, cost, sell, 'per_unit')).toBeCloseTo(m / revenue, 10)
   })
 })
 

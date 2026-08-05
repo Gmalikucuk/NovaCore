@@ -94,7 +94,14 @@ export function OwnerScreen({ contract }: { contract: MyContract }) {
           ...row,
           // Absent, not zero, when there's no price — and omitted from the
           // block entirely (not blanked) for a seat without view_rates.
-          margin: contract.viewRates ? computeMargin(row.progress.quantityToDate, priceByItem.get(row.pin.itemId)?.costPrice ?? null, priceByItem.get(row.pin.itemId)?.unitPrice ?? null) : null,
+          margin: contract.viewRates
+            ? computeMargin(
+                row.progress.quantityToDate,
+                priceByItem.get(row.pin.itemId)?.costPrice ?? null,
+                priceByItem.get(row.pin.itemId)?.unitPrice ?? null,
+                priceByItem.get(row.pin.itemId)?.costBasis ?? null,
+              )
+            : null,
         }))
         .sort((a, b) => compareItemCodes(a.progress.itemNumber, b.progress.itemNumber)),
     [pins, progressByItem, priceByItem, contract.viewRates],

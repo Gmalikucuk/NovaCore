@@ -8,7 +8,7 @@ import { fetchContractQuantityRecords } from '../supabase/quantityRecords'
 import { fetchProgressEstimateReconciliation, type ProgressEstimateReconciliation } from '../supabase/progressEstimates'
 import { isEffective } from '../calculations/effectiveEntries'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../calculations/naturalSort'
-import { margin as computeMargin } from '../calculations/margin'
+import { estimatedCost, margin as computeMargin } from '../calculations/margin'
 import { station } from '../format'
 import { MONEY_FORMAT, PERCENT_FORMAT, pureDate, quantityFormat, roundMoney, styleHeaderCell, styleHeaderRow, triggerDownload } from './exportHelpers'
 
@@ -252,10 +252,11 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
       const price = priceByItem.get(item.id)
       const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
       const cost = unitPriced ? (price?.costPrice ?? null) : null
+      const costBasis = unitPriced ? (price?.costBasis ?? null) : null
       const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
       const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
-      const costToDate = unitPriced && cost !== null && quantityToDate !== null ? quantityToDate * cost : null
-      const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice) : null
+      const costToDate = unitPriced ? estimatedCost(quantityToDate ?? 0, cost, costBasis) : null
+      const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice, costBasis) : null
       const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
       const recon = reconciliation.get(item.itemNumber)
       const qtyFmt = quantityFormat(item.unit)
@@ -424,10 +425,11 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
     const price = priceByItem.get(item.id)
     const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
     const cost = unitPriced ? (price?.costPrice ?? null) : null
+    const costBasis = unitPriced ? (price?.costBasis ?? null) : null
     const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
     const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
-    const costToDate = unitPriced && cost !== null && quantityToDate !== null ? quantityToDate * cost : null
-    const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice) : null
+    const costToDate = unitPriced ? estimatedCost(quantityToDate ?? 0, cost, costBasis) : null
+    const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice, costBasis) : null
     const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
     const qtyFmt = quantityFormat(item.unit)
 
