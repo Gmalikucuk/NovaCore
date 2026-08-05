@@ -36,6 +36,10 @@
 #   - the confirmation-guard checks from 0003 (confirmed_by/confirmed_at
 #     spoof + backdate, attribution pinned on re-touch, un-confirm rejected)
 #   - the station append-only check from 0004
+#   - the draft-edit / confirm-wall split from 0021 (enter_quantity edits a
+#     draft it didn't author; correct_quantity alone cannot; nobody, by any
+#     path, edits a confirmed record — not even the confirm action itself,
+#     in the same statement it confirms)
 #   - positive controls throughout — a suite that only ever asserts "empty"
 #     or "rejected" passes just as well when authentication is silently
 #     broken, which is the failure mode most likely to fool a human skimming
@@ -783,19 +787,96 @@ request POST "quantity_records" "$QUANTITIES_TOKEN" \
 ok=0; [ "$STATUS" = "201" ] && ok=1
 check "quantities: insert original entry (supersedes null)" "201" "$ok" "$STATUS $BODY_OUT"
 
+# 0021: a still-draft record is editable in place by its own author, same as
+# any other enter_quantity seat — see the dedicated draft-edit section below
+# for the "not just the author" and "not once confirmed" proofs.
 request PATCH "quantity_records?id=eq.$ENTRY_ID" "$QUANTITIES_TOKEN" '{"quantity": 999}'
-ok=0; [ "$STATUS" = "403" ] && ok=1
-check "quantities: quantity update rejected (append-only grant)" "403" "$ok" "$STATUS $BODY_OUT"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  q=$(json_field "$BODY_OUT" 0 quantity)
+  [ "$q" = "999" ] && ok=1
+fi
+check "quantities: edit own draft quantity in place (enter_quantity, 0021)" "200, quantity=999" "$ok" "$STATUS $BODY_OUT"
 
+# Since 0021, this row is ALSO a candidate under quantity_records_edit_draft_
+# right (still draft, quantities holds enter_quantity) — so USING no longer
+# excludes it outright the way it did pre-0021 (when confirm_right was the
+# only UPDATE policy in play). It now fails at WITH CHECK instead: neither
+# policy's check clause is satisfiable for this request (draft-edit's check
+# needs new.status='draft', which a confirm isn't; confirm_right's check
+# needs confirm_quantity, which quantities lacks) — so Postgres raises an
+# explicit "violates row-level security policy" 403, not a silent 0-row
+# match. Same rejection, different — and more explicit — shape than before.
 request PATCH "quantity_records?id=eq.$ENTRY_ID" "$QUANTITIES_TOKEN" '{"status": "confirmed"}'
-ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: status update rejected (no confirm_quantity, 0 rows)" "200, []" "$ok" "$STATUS $BODY_OUT"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: status update rejected (no confirm_quantity, 0021 WITH CHECK)" "403" "$ok" "$STATUS $BODY_OUT"
 
 OTHER_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 request POST "quantity_records" "$QUANTITIES_TOKEN" \
   "{\"id\":\"$OTHER_ID\",\"contract_id\":\"$PROJECT_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"work_date\":\"2026-08-02\",\"quantity\":5,\"created_by\":\"$FULL_ID\",\"device_id\":\"probe-rls\"}"
 ok=0; [ "$STATUS" = "403" ] && ok=1
 check "quantities: insert with wrong created_by rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
+# Draft editing (0021) — editable in place while unconfirmed, gated on
+# enter_quantity (not correct_quantity), and NOT scoped to the row's own
+# author: "any seat holding enter_quantity on that contract may edit any
+# draft on it — not only its author." full creates the draft here so the
+# edit below is genuinely done by someone other than its creator.
+# =============================================================================
+echo
+echo "=== Draft editing (0021) — enter_quantity, any author, blocked the instant it's confirmed ==="
+
+SHARED_DRAFT_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+request POST "quantity_records" "$FULL_TOKEN" \
+  "{\"id\":\"$SHARED_DRAFT_ID\",\"contract_id\":\"$PROJECT_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"work_date\":\"2026-08-02\",\"quantity\":50,\"created_by\":\"$FULL_ID\",\"device_id\":\"probe-rls\"}"
+ok=0; [ "$STATUS" = "201" ] && ok=1
+check "full: insert a shared draft (created_by = full)" "201" "$ok" "$STATUS $BODY_OUT"
+
+# quantities is NOT this row's author, and holds enter_quantity — the edit
+# must still succeed, proving the right is what's checked, not authorship.
+request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$QUANTITIES_TOKEN" '{"quantity": 51}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  q=$(json_field "$BODY_OUT" 0 quantity)
+  [ "$q" = "51" ] && ok=1
+fi
+check "quantities: edit ANOTHER seat's draft (enter_quantity, not the author)" "200, quantity=51" "$ok" "$STATUS $BODY_OUT"
+
+# correct_only holds correct_quantity but not enter_quantity — editing a
+# draft is explicitly an enter_quantity action per the brief, so this must
+# be excluded by RLS (0 rows visible), not merely denied for some other
+# reason.
+request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$CORRECT_ONLY_TOKEN" '{"quantity": 999}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "correct_only: edit a draft rejected (correct_quantity is not enter_quantity)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# readonly holds neither right at all.
+request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$READONLY_TOKEN" '{"quantity": 999}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: edit a draft rejected (no enter_quantity)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# Confirm it (full holds confirm_quantity) — the edit window closes here.
+request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$FULL_TOKEN" '{"status": "confirmed"}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  st=$(json_field "$BODY_OUT" 0 status)
+  [ "$st" = "confirmed" ] && ok=1
+fi
+check "full: confirm the shared draft" "200, status=confirmed" "$ok" "$STATUS $BODY_OUT"
+
+# Same seat, same right, same row — now rejected purely because status
+# changed underneath it. Proves the edit policy is status-gated, not a
+# standing grant that enter_quantity alone would otherwise satisfy forever.
+request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$QUANTITIES_TOKEN" '{"quantity": 52}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: edit rejected once confirmed (enter_quantity is no longer enough)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# Explicit brief requirement: correct_quantity does not open this door either,
+# confirmed or not.
+request PATCH "quantity_records?id=eq.$SHARED_DRAFT_ID" "$CORRECT_ONLY_TOKEN" '{"quantity": 999}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "correct_only: edit rejected once confirmed (correct_quantity never opens this path)" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
 # THE PAIR: enter_quantity vs correct_quantity, separately gated. This is
@@ -848,9 +929,17 @@ ok=0
 case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
 check "full: un-confirm rejected" ">=400" "$ok" "$STATUS $BODY_OUT"
 
+# Since 0021, station_from IS grantable to authenticated (the draft-edit
+# grant) — full also holds enter_quantity, so this is no longer a GRANT-level
+# 403. It reaches the trigger via quantity_records_confirm_right (full holds
+# confirm_quantity, whose policy doesn't itself look at status), and
+# guard_entry_transitions' append-only branch is what actually rejects it —
+# same trigger-exception shape as "un-confirm rejected" above, hence >=400
+# rather than a specific code.
 request PATCH "quantity_records?id=eq.$ENTRY_ID" "$FULL_TOKEN" '{"station_from": 3000}'
-ok=0; [ "$STATUS" = "403" ] && ok=1
-check "full: station_from edit on confirmed entry rejected" "403" "$ok" "$STATUS $BODY_OUT"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+check "full: station_from edit on confirmed entry rejected (0021 append-only branch)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
 # Company-wide rights don't leak from per-project ones. full has every
@@ -871,17 +960,19 @@ check "full: insert project rejected (no create_projects)" "403" "$ok" "$STATUS 
 # Unaffected by the rights rewrite: these exercise guard_entry_transitions()
 # directly at the postgres role, below PostgREST's grant system entirely.
 #
-# Every seat-level edit check above returns 403 at the GRANT level (quantity
-# and station_from/station_to were never granted UPDATE to `authenticated` at
-# all) — which means guard_entry_transitions()'s append-only branch, the
-# `row(...) is distinct from row(...)` comparison enumerating every immutable
-# column, has never actually executed in this suite. The grant stops the
-# request before the trigger is reached, every time. That branch is the
-# backstop for paths that don't go through PostgREST's grant system at all:
-# service_role scripts, RPCs, security-definer functions, anyone in psql —
-# exactly the paths this app grows into next. Optional: needs
-# SUPABASE_DB_PASSWORD and a `supabase` CLI already linked to this repo
-# (`supabase link --project-ref ...`); skipped, not failed, without it.
+# Before 0021, every seat-level edit check above returned 403 at the GRANT
+# level (quantity and station_from/station_to were never granted UPDATE to
+# `authenticated` at all), so guard_entry_transitions()'s append-only branch
+# never actually executed in this suite via PostgREST — the grant stopped
+# the request before the trigger was reached, every time. 0021 widens that
+# grant (belt) so a draft CAN be edited, which means the trigger (braces) is
+# now the thing actually doing the confirmed-row enforcement seen above (the
+# "full: station_from edit on confirmed entry rejected" check) — this
+# section proves the same trigger also holds from below PostgREST's grant
+# system entirely: service_role scripts, RPCs, security-definer functions,
+# anyone in psql. Optional: needs SUPABASE_DB_PASSWORD and a `supabase` CLI
+# already linked to this repo (`supabase link --project-ref ...`); skipped,
+# not failed, without it.
 # =============================================================================
 echo
 echo "=== Privileged-path checks (postgres role, not a seat — different layer) ==="

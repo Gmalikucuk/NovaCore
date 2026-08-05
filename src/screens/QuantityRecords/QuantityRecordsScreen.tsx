@@ -4,7 +4,7 @@ import { IconCalendarPlus } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
 import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
-import { confirmQuantityRecord, fetchContractQuantityRecords, fetchDistinctLocations, pushQuantityRecord } from '../../lib/supabase/quantityRecords'
+import { confirmQuantityRecord, fetchContractQuantityRecords, fetchDistinctLocations, pushQuantityRecord, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
 import { fetchItemMonths, fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
@@ -53,6 +53,7 @@ export function QuantityRecordsScreen() {
   const [formItem, setFormItem] = useState<Item | null>(null)
   const [pickerSearch, setPickerSearch] = useState('')
   const [correctingId, setCorrectingId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [fields, setFields] = useState(BLANK)
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -194,6 +195,7 @@ export function QuantityRecordsScreen() {
     setPanelOpen(true)
     setFormItem(null)
     setCorrectingId(null)
+    setEditingId(null)
     setFields(BLANK)
     setFormError(null)
     setPickerSearch('')
@@ -204,6 +206,7 @@ export function QuantityRecordsScreen() {
     setFormItem(item)
     setFields(BLANK)
     setCorrectingId(null)
+    setEditingId(null)
     setFormError(null)
     requestAnimationFrame(() => stationFromRef.current?.focus())
   }
@@ -212,16 +215,42 @@ export function QuantityRecordsScreen() {
     setPanelOpen(false)
     setFormItem(null)
     setCorrectingId(null)
+    setEditingId(null)
     setFields(BLANK)
     setFormError(null)
   }
 
+  // A confirmed record can only be superseded — unchanged. Correcting always
+  // creates a new row (supersedes = record.id).
   function startCorrection(record: DayRecord) {
     const item = itemById.get(record.itemId)
     if (!item) return
     setPanelOpen(true)
     setFormItem(item)
     setCorrectingId(record.id)
+    setEditingId(null)
+    setFields({
+      location: record.location ?? '',
+      stationFrom: record.stationFrom !== null ? String(record.stationFrom) : '',
+      stationTo: record.stationTo !== null ? String(record.stationTo) : '',
+      quantity: String(record.quantity),
+      note: record.note ?? '',
+    })
+    setFormError(null)
+    requestAnimationFrame(() => stationFromRef.current?.focus())
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // 0021: a still-draft record is edited in place instead — nothing is
+  // superseded, the row itself changes. Same prefill as a correction, but
+  // submit updates the existing row rather than inserting a new one.
+  function startEdit(record: DayRecord) {
+    const item = itemById.get(record.itemId)
+    if (!item) return
+    setPanelOpen(true)
+    setFormItem(item)
+    setCorrectingId(null)
+    setEditingId(record.id)
     setFields({
       location: record.location ?? '',
       stationFrom: record.stationFrom !== null ? String(record.stationFrom) : '',
@@ -257,12 +286,12 @@ export function QuantityRecordsScreen() {
       return
     }
     // Defense in depth, not redundant with the picker: the picker already
-    // excludes Lump Sum/Provisional Sum for a NEW entry (correctingId
-    // null), but this re-checks at the point of the actual write. A
-    // correction is exempted — startCorrection always resolves formItem
-    // from the record being corrected, which may legitimately be one of
-    // these kinds from before this screen existed.
-    if (!correctingId && !isUnitPriceItem(formItem)) {
+    // excludes Lump Sum/Provisional Sum for a NEW entry (correctingId/
+    // editingId null), but this re-checks at the point of the actual write.
+    // A correction or an edit is exempted — startCorrection/startEdit always
+    // resolve formItem from the record itself, which may legitimately be one
+    // of these kinds from before this screen existed.
+    if (!correctingId && !editingId && !isUnitPriceItem(formItem)) {
       setFormError('Choose a Unit Price item — Lump Sum and Provisional Sum items are not recorded by quantity.')
       return
     }
@@ -295,33 +324,50 @@ export function QuantityRecordsScreen() {
 
     setSubmitting(true)
     try {
-      await pushQuantityRecord({
-        id: crypto.randomUUID(),
-        contractId: contract.id,
-        itemId: formItem.id,
-        workDate,
-        location: fields.location.trim() || null,
-        quantity: qty,
-        note: fields.note.trim() || null,
-        status: 'draft',
-        supersedes: correctingId,
-        confirmedBy: null,
-        confirmedAt: null,
-        createdBy: userId,
-        deviceId: getDeviceId(),
-        createdAt: new Date().toISOString(),
-        syncedAt: new Date().toISOString(),
-        stationFrom: from,
-        stationTo: to,
-      })
-      // Fields reset, correction mode cleared, but the panel and Item stay
-      // open — a day's work is often several stations against the SAME
-      // Item in a row, and reopening the picker each time would undo the
-      // whole point of inverting this screen.
-      setFields(BLANK)
-      setCorrectingId(null)
-      stationFromRef.current?.focus()
-      refreshSilently()
+      if (editingId) {
+        // 0021: editing a draft in place — enter_quantity, not
+        // correct_quantity, and no supersedes row is written. Closes the
+        // panel rather than staying open: unlike Add, there's no "next
+        // station" to keep entering against this one existing row.
+        await updateQuantityRecordDraft(editingId, {
+          workDate,
+          location: fields.location.trim() || null,
+          quantity: qty,
+          note: fields.note.trim() || null,
+          stationFrom: from,
+          stationTo: to,
+        })
+        closePanel()
+        refreshSilently()
+      } else {
+        await pushQuantityRecord({
+          id: crypto.randomUUID(),
+          contractId: contract.id,
+          itemId: formItem.id,
+          workDate,
+          location: fields.location.trim() || null,
+          quantity: qty,
+          note: fields.note.trim() || null,
+          status: 'draft',
+          supersedes: correctingId,
+          confirmedBy: null,
+          confirmedAt: null,
+          createdBy: userId,
+          deviceId: getDeviceId(),
+          createdAt: new Date().toISOString(),
+          syncedAt: new Date().toISOString(),
+          stationFrom: from,
+          stationTo: to,
+        })
+        // Fields reset, correction mode cleared, but the panel and Item stay
+        // open — a day's work is often several stations against the SAME
+        // Item in a row, and reopening the picker each time would undo the
+        // whole point of inverting this screen.
+        setFields(BLANK)
+        setCorrectingId(null)
+        stationFromRef.current?.focus()
+        refreshSilently()
+      }
     } catch (err) {
       setFormError(errorMessage(err))
     } finally {
@@ -340,7 +386,9 @@ export function QuantityRecordsScreen() {
     void doSubmit()
   }
 
-  const formUsable = correctingId ? canCorrect : canEnter
+  // Editing a draft needs enter_quantity (0021); correcting a confirmed
+  // record needs correct_quantity, unchanged.
+  const formUsable = editingId ? canEnter : correctingId ? canCorrect : canEnter
   const subtitle = `Daily entry · ${contract.name}`
 
   return (
@@ -443,7 +491,7 @@ export function QuantityRecordsScreen() {
                           <span className="nc-numeric font-semibold text-nc-text">{formItem.itemNumber}</span> <span className="text-nc-text-muted">{formItem.description}</span>
                         </p>
                         <div className="flex items-center gap-2">
-                          {!correctingId && (
+                          {!correctingId && !editingId && (
                             <Button
                               type="button"
                               variant="ghost"
@@ -474,6 +522,15 @@ export function QuantityRecordsScreen() {
                             }}
                           >
                             Cancel correction
+                          </Button>
+                        </NotificationBanner>
+                      )}
+
+                      {editingId && (
+                        <NotificationBanner tone="info" className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                          <span>Editing this entry directly — nothing is added, and it isn't recorded as a correction.</span>
+                          <Button type="button" variant="ghost" onClick={closePanel}>
+                            Cancel
                           </Button>
                         </NotificationBanner>
                       )}
@@ -550,8 +607,12 @@ export function QuantityRecordsScreen() {
                           </label>
                           <Input id="de-note" value={fields.note} onChange={(e) => setFields({ ...fields, note: e.target.value })} onKeyDown={handleFormKeyDown} disabled={!formUsable} />
                         </div>
-                        <Button type="submit" disabled={submitting || !formUsable} title={!formUsable ? `Needs permission to ${correctingId ? 'correct' : 'enter'} quantities` : undefined}>
-                          {submitting ? 'Adding…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add — Enter'}
+                        <Button
+                          type="submit"
+                          disabled={submitting || !formUsable}
+                          title={!formUsable ? `Needs permission to ${editingId ? 'enter' : correctingId ? 'correct' : 'enter'} quantities` : undefined}
+                        >
+                          {submitting ? 'Saving…' : !formUsable ? 'Not permitted' : editingId ? 'Save changes' : correctingId ? 'Save correction' : 'Add — Enter'}
                         </Button>
                       </form>
                       {formError && (
@@ -616,9 +677,16 @@ export function QuantityRecordsScreen() {
                               {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
                             </Button>
                           )}
-                          <Button type="button" variant="secondary" disabled={!canCorrect} title={!canCorrect ? 'Needs permission to correct quantity records' : undefined} onClick={() => startCorrection(r)}>
-                            Correct
-                          </Button>
+                          {r.status === 'draft' ? (
+                            // 0021: a draft is edited in place, not corrected.
+                            <Button type="button" variant="secondary" disabled={!canEnter} title={!canEnter ? 'Needs permission to enter quantities' : undefined} onClick={() => startEdit(r)}>
+                              Edit
+                            </Button>
+                          ) : (
+                            <Button type="button" variant="secondary" disabled={!canCorrect} title={!canCorrect ? 'Needs permission to correct quantity records' : undefined} onClick={() => startCorrection(r)}>
+                              Correct
+                            </Button>
+                          )}
                           {/* History lives at Tracker -> Item detail — every
                               record against this Item, newest first, with
                               this period/previous/to date/remaining. Link

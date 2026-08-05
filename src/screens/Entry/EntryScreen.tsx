@@ -6,7 +6,7 @@ import { useSession } from '../../lib/useSession'
 import { useLiveQuery } from '../../lib/sync/useLiveQuery'
 import { db, type QueuedQuantityRecord } from '../../lib/db'
 import { enqueueQuantityRecord, importServerQuantityRecords, registerSyncListeners, syncQueuedQuantityRecords } from '../../lib/sync/quantityRecordsSync'
-import { confirmQuantityRecord, fetchDistinctLocations } from '../../lib/supabase/quantityRecords'
+import { confirmQuantityRecord, fetchDistinctLocations, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
 import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
 import { fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import { getDeviceId } from '../../lib/deviceId'
@@ -67,6 +67,7 @@ export function EntryScreen() {
   const [note, setNote] = useState('')
   const [location, setLocation] = useState('')
   const [correctingId, setCorrectingId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
@@ -181,6 +182,7 @@ export function EntryScreen() {
     setPickerSearch('')
     setItemId('')
     setCorrectingId(null)
+    setEditingId(null)
     resetFields()
     requestAnimationFrame(() => pickerSearchRef.current?.focus())
   }
@@ -188,6 +190,7 @@ export function EntryScreen() {
   function pickItemForAdd(item: Item) {
     setItemId(item.id)
     setCorrectingId(null)
+    setEditingId(null)
     setStationMode('range')
     resetFields()
     setScreenMode('form')
@@ -198,11 +201,34 @@ export function EntryScreen() {
     setScreenMode('list')
     setItemId('')
     setCorrectingId(null)
+    setEditingId(null)
     resetFields()
   }
 
+  // A confirmed record can only be superseded — unchanged. Correcting always
+  // creates a new row (supersedes = record.id).
   function startCorrection(record: QueuedQuantityRecord) {
     setCorrectingId(record.id)
+    setEditingId(null)
+    setWorkDate(record.workDate)
+    setItemId(record.itemId)
+    setStationMode(record.stationTo !== null ? 'range' : 'single')
+    setStationFrom(record.stationFrom !== null ? String(record.stationFrom) : '')
+    setStationTo(record.stationTo !== null ? String(record.stationTo) : '')
+    setQuantity(String(record.quantity))
+    setNote(record.note ?? '')
+    setLocation(record.location ?? '')
+    setFormError(null)
+    setScreenMode('form')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // 0021: a still-draft record is edited in place instead — nothing is
+  // superseded, the row itself changes. Same prefill as a correction, but
+  // submit updates the existing row rather than inserting a new one.
+  function startEdit(record: QueuedQuantityRecord) {
+    setEditingId(record.id)
+    setCorrectingId(null)
     setWorkDate(record.workDate)
     setItemId(record.itemId)
     setStationMode(record.stationTo !== null ? 'range' : 'single')
@@ -241,11 +267,12 @@ export function EntryScreen() {
       return
     }
     // Defense in depth, not redundant with the picker: the picker already
-    // excludes Lump Sum/Provisional Sum for a NEW entry (correctingId
-    // null), but this re-checks at the point of the actual write. A
-    // correction is exempted — it may legitimately target a historical
-    // record against one of these kinds from before this screen existed.
-    if (!correctingId && selectedItem !== undefined && !isUnitPriceItem(selectedItem)) {
+    // excludes Lump Sum/Provisional Sum for a NEW entry (correctingId/
+    // editingId null), but this re-checks at the point of the actual write.
+    // A correction or an edit is exempted — both may legitimately target a
+    // historical record against one of these kinds from before this screen
+    // existed.
+    if (!correctingId && !editingId && selectedItem !== undefined && !isUnitPriceItem(selectedItem)) {
       setFormError('Choose a Unit Price item — Lump Sum and Provisional Sum items are not recorded by quantity.')
       return
     }
@@ -282,26 +309,43 @@ export function EntryScreen() {
 
     setSubmitting(true)
     try {
-      await enqueueQuantityRecord({
-        id: crypto.randomUUID(),
-        contractId: contract.id,
-        itemId,
-        workDate,
-        location: location.trim() || null,
-        quantity: qty,
-        note: note.trim() || null,
-        supersedes: correctingId,
-        createdBy: userId,
-        deviceId: getDeviceId(),
-        stationFrom: from,
-        stationTo: to,
-      })
-      // Fields reset, correction cleared, but the form stays open on the
-      // same Item — a day's work is often several stations against the
-      // same Item in a row.
-      resetFields()
-      setCorrectingId(null)
-      stationFromRef.current?.focus()
+      if (editingId) {
+        // 0021: editing a draft in place — enter_quantity, not
+        // correct_quantity, and no supersedes row is written. Returns to
+        // the list rather than staying open: unlike Add, there's no "next
+        // station" to keep entering against this one existing row.
+        await updateQuantityRecordDraft(editingId, {
+          workDate,
+          location: location.trim() || null,
+          quantity: qty,
+          note: note.trim() || null,
+          stationFrom: from,
+          stationTo: to,
+        })
+        await importServerQuantityRecords(contract.id)
+        closeToList()
+      } else {
+        await enqueueQuantityRecord({
+          id: crypto.randomUUID(),
+          contractId: contract.id,
+          itemId,
+          workDate,
+          location: location.trim() || null,
+          quantity: qty,
+          note: note.trim() || null,
+          supersedes: correctingId,
+          createdBy: userId,
+          deviceId: getDeviceId(),
+          stationFrom: from,
+          stationTo: to,
+        })
+        // Fields reset, correction cleared, but the form stays open on the
+        // same Item — a day's work is often several stations against the
+        // same Item in a row.
+        resetFields()
+        setCorrectingId(null)
+        stationFromRef.current?.focus()
+      }
     } catch (err) {
       setFormError(errorMessage(err))
     } finally {
@@ -309,10 +353,10 @@ export function EntryScreen() {
     }
   }
 
-  // Same either/or as desktop: entering a new original needs enter_quantity,
-  // saving a correction needs correct_quantity. A seat with only one of the
+  // Editing a draft needs enter_quantity (0021); correcting a confirmed
+  // record needs correct_quantity, unchanged. A seat with only one of the
   // two still reaches the form; only the submit action is blocked.
-  const formUsable = correctingId ? canCorrect : canEnter
+  const formUsable = editingId ? canEnter : correctingId ? canCorrect : canEnter
 
   return (
     <div className="pb-24">
@@ -420,14 +464,31 @@ export function EntryScreen() {
                             </p>
                           )}
                           <div className="mt-2 flex gap-2">
-                            {r.status === 'draft' && r.pending === false && (
-                              <Button type="button" variant="secondary" disabled={confirmingId === r.id || !contract.confirmQuantity} onClick={() => void handleConfirm(r.id)}>
-                                {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
+                            {r.status === 'draft' ? (
+                              <>
+                                {r.pending === false && (
+                                  <Button type="button" variant="secondary" disabled={confirmingId === r.id || !contract.confirmQuantity} onClick={() => void handleConfirm(r.id)}>
+                                    {confirmingId === r.id ? 'Confirming…' : 'Confirm'}
+                                  </Button>
+                                )}
+                                {/* 0021: a draft is edited in place, not corrected —
+                                    only reachable once synced (edits go straight to
+                                    the server, same precondition Confirm already has). */}
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  disabled={!canEnter || r.pending}
+                                  title={r.pending ? 'Still syncing — try again once this entry has synced' : !canEnter ? 'Needs permission to enter quantities' : undefined}
+                                  onClick={() => startEdit(r)}
+                                >
+                                  Edit
+                                </Button>
+                              </>
+                            ) : (
+                              <Button type="button" variant="secondary" disabled={!canCorrect} onClick={() => startCorrection(r)}>
+                                Correct
                               </Button>
                             )}
-                            <Button type="button" variant="secondary" disabled={!canCorrect} onClick={() => startCorrection(r)}>
-                              Correct
-                            </Button>
                           </div>
                         </div>
                       )
@@ -488,6 +549,15 @@ export function EntryScreen() {
                   <NotificationBanner tone="info" className="flex items-center justify-between gap-3">
                     <span>Correcting a prior entry — the original stays in the total until this correction is confirmed.</span>
                     <Button type="button" variant="ghost" onClick={() => setCorrectingId(null)}>
+                      Cancel
+                    </Button>
+                  </NotificationBanner>
+                )}
+
+                {editingId && (
+                  <NotificationBanner tone="info" className="flex items-center justify-between gap-3">
+                    <span>Editing this entry directly — nothing is added, and it isn't recorded as a correction.</span>
+                    <Button type="button" variant="ghost" onClick={closeToList}>
                       Cancel
                     </Button>
                   </NotificationBanner>
@@ -585,8 +655,12 @@ export function EntryScreen() {
 
                 {formError && <NotificationBanner tone="danger">{formError}</NotificationBanner>}
 
-                <Button type="submit" disabled={submitting || !formUsable} title={!formUsable ? `Needs permission to ${correctingId ? 'correct' : 'enter'} quantities` : undefined}>
-                  {submitting ? 'Saving…' : !formUsable ? 'Not permitted' : correctingId ? 'Save correction' : 'Add entry'}
+                <Button
+                  type="submit"
+                  disabled={submitting || !formUsable}
+                  title={!formUsable ? `Needs permission to ${editingId ? 'enter' : correctingId ? 'correct' : 'enter'} quantities` : undefined}
+                >
+                  {submitting ? 'Saving…' : !formUsable ? 'Not permitted' : editingId ? 'Save changes' : correctingId ? 'Save correction' : 'Add entry'}
                 </Button>
               </form>
             )}

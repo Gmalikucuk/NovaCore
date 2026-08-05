@@ -149,6 +149,42 @@ export async function confirmQuantityRecord(id: string): Promise<void> {
   if (error) throw error
 }
 
+export interface QuantityRecordDraftEdit {
+  workDate: string
+  location: string | null
+  quantity: number
+  note: string | null
+  stationFrom: number | null
+  stationTo: number | null
+}
+
+/**
+ * Edits a still-draft record in place — enter_quantity, not correct_quantity,
+ * per RLS (quantity_records_edit_draft_right, 0021). Deliberately NOT scoped
+ * to the caller's own rows: any seat holding enter_quantity on the contract
+ * may edit any draft on it, matching the migration exactly (field staff
+ * share tablets; the person giving the feedback is often not the person who
+ * typed it). A confirmed record rejects this regardless of what's sent —
+ * enforced at the database (RLS's status = 'draft' gate plus
+ * guard_entry_transitions' append-only trigger), not by this function, so a
+ * caller has no way to bypass it by calling this instead of
+ * confirmQuantityRecord.
+ */
+export async function updateQuantityRecordDraft(id: string, fields: QuantityRecordDraftEdit): Promise<void> {
+  const { error } = await supabase
+    .from('quantity_records')
+    .update({
+      work_date: fields.workDate,
+      location: fields.location,
+      quantity: fields.quantity,
+      note: fields.note,
+      station_from: fields.stationFrom,
+      station_to: fields.stationTo,
+    })
+    .eq('id', id)
+  if (error) throw error
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // PM confirmation queue — every draft record across the whole contract
 // (not scoped to one work_date, unlike fetchQuantityRecordsForDate above),
