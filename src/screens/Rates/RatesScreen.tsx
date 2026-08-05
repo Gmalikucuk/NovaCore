@@ -67,7 +67,31 @@ export function RatesScreen() {
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map())
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null)
+
+  // Every cell whose last write attempt failed, keyed `${itemId}:${field}` —
+  // not just the most recent one. Enter never waits for a commit to resolve
+  // before moving on (a 48-row pass has to stay fast), which means a failure
+  // can land several rows behind wherever the person's focus already is by
+  // the time it's known. This has to survive past that moment, not just
+  // flash where the failure happened — cleared only when a later write for
+  // that exact cell succeeds, never on a timer, never by scrolling past it.
+  const [failedCells, setFailedCells] = useState<Map<string, string>>(new Map())
+
+  function markFailed(itemId: string, field: 'cost' | 'unitPrice', message: string) {
+    setFailedCells((prev) => new Map(prev).set(`${itemId}:${field}`, message))
+  }
+  function clearFailed(itemId: string, field: 'cost' | 'unitPrice') {
+    setFailedCells((prev) => {
+      const key = `${itemId}:${field}`
+      if (!prev.has(key)) return prev
+      const next = new Map(prev)
+      next.delete(key)
+      return next
+    })
+  }
+  // Rows, not cells — two failed fields on the same Item is one row to go
+  // fix, not two.
+  const failedItemIds = useMemo(() => new Set([...failedCells.keys()].map((k) => k.split(':')[0])), [failedCells])
 
   // The cost-basis picker is per_unit on almost every Unit Price Item —
   // showing it stacked under Est. cost on all 48 rows for a choice that's
@@ -192,9 +216,9 @@ export function RatesScreen() {
       })
       setPrices((prev) => new Map(prev).set(item.id, saved))
       setDrafts((prev) => new Map(prev).set(item.id, toDraft(item, saved)))
-      if (rowError?.id === item.id) setRowError(null)
+      clearFailed(item.id, field)
     } catch (err) {
-      setRowError({ id: item.id, message: errorMessage(err) })
+      markFailed(item.id, field, errorMessage(err))
     }
   }
 
@@ -216,9 +240,9 @@ export function RatesScreen() {
         unitPrice: existing.unitPrice,
       })
       setPrices((prev) => new Map(prev).set(item.id, saved))
-      if (rowError?.id === item.id) setRowError(null)
+      clearFailed(item.id, 'cost')
     } catch (err) {
-      setRowError({ id: item.id, message: errorMessage(err) })
+      markFailed(item.id, 'cost', errorMessage(err))
     }
   }
 
@@ -228,6 +252,17 @@ export function RatesScreen() {
     void commitRate(item, field).then(() => {
       if (rowIndex + 1 < rows.length) focusCell(rowIndex + 1, field)
     })
+  }
+
+  // First failed cell in the CURRENT visible order, not failure order — the
+  // person reading "3 rows didn't save" is about to work top-down through
+  // whatever's on screen right now, same as any other pass over this table.
+  function focusFirstFailedRow() {
+    for (let i = 0; i < rows.length; i++) {
+      const id = rows[i].item.id
+      if (failedCells.has(`${id}:cost`)) return focusCell(i, 'cost')
+      if (failedCells.has(`${id}:unitPrice`)) return focusCell(i, 'unitPrice')
+    }
   }
 
   const subtitle = `${contract.name}${status === 'ready' ? ` · ${costedCount} of ${rows.length} have an Est. cost` : ''}`
@@ -311,6 +346,24 @@ export function RatesScreen() {
                     header + banner + padding above the table. */}
                 <Table fullWidth={false} maxHeight="calc(100vh - 280px)" className="mx-auto w-fit">
                   <THead className="sticky top-0 z-10">
+                    {/* Part of the sticky header, not a page-level banner —
+                        it has to survive the exact same scrolling that
+                        buries the row it's about, and it has no dismiss
+                        control at all: it goes away when the count reaches
+                        zero, on its own, never before. */}
+                    {failedItemIds.size > 0 && (
+                      <tr>
+                        <th colSpan={6} className="bg-nc-danger-bg p-0 text-left">
+                          <button
+                            type="button"
+                            onClick={focusFirstFailedRow}
+                            className="w-full px-4 py-2 text-left text-sm font-semibold text-nc-danger-text hover:bg-nc-danger-bg/70"
+                          >
+                            {failedItemIds.size} row{failedItemIds.size === 1 ? '' : 's'} didn't save — click to go to the first one
+                          </button>
+                        </th>
+                      </tr>
+                    )}
                     <TR>
                       {sortableHeader('itemNumber', 'Item #')}
                       <TH>Description</TH>
@@ -333,6 +386,10 @@ export function RatesScreen() {
                       // per_unit default sitting untouched.
                       const showBasisControl = row.unitPriced && (focusedCostId === row.item.id || draft.costBasis === 'total')
 
+                      const costFailed = failedCells.get(`${row.item.id}:cost`)
+                      const unitPriceFailed = failedCells.get(`${row.item.id}:unitPrice`)
+                      const rowHasFailure = costFailed !== undefined || unitPriceFailed !== undefined
+
                       return (
                         <Fragment key={row.item.id}>
                           {showSectionHeader && (
@@ -342,7 +399,15 @@ export function RatesScreen() {
                               </TD>
                             </TR>
                           )}
-                          <TR className={!row.priced ? 'bg-nc-secondary/60' : undefined}>
+                          {/* A failed write outranks the plain "not priced
+                              yet" tint — same neutral fact either way
+                              underneath, but one of them is a problem to go
+                              fix and the other one just hasn't happened
+                              yet. This has to stay after focus leaves the
+                              row, not just flash at the moment of failure —
+                              it's the only thing left proving the row is
+                              still wrong once the pass has moved on. */}
+                          <TR className={rowHasFailure ? 'bg-nc-danger-bg/40' : !row.priced ? 'bg-nc-secondary/60' : undefined}>
                             <TD className="nc-numeric align-middle">{row.item.itemNumber}</TD>
                             <TD prose className="align-middle">
                               <div className="max-w-[300px] truncate" title={row.item.description}>
@@ -361,7 +426,7 @@ export function RatesScreen() {
                             <TD align="right" dense className="align-middle">
                               <div className="flex items-center justify-end gap-1.5">
                                 <Input
-                                  className="nc-numeric text-right"
+                                  className={`nc-numeric text-right ${costFailed !== undefined ? 'border-nc-danger-text' : ''}`}
                                   style={{ width: 110 }}
                                   data-cell={`${i}-cost`}
                                   tabIndex={i + 1}
@@ -404,7 +469,7 @@ export function RatesScreen() {
                             <TD align="right" dense={row.unitPriced} className="align-middle">
                               {row.unitPriced ? (
                                 <Input
-                                  className="nc-numeric text-right"
+                                  className={`nc-numeric text-right ${unitPriceFailed !== undefined ? 'border-nc-danger-text' : ''}`}
                                   style={{ width: 130 }}
                                   data-cell={`${i}-unitPrice`}
                                   tabIndex={rows.length + i + 1}
@@ -423,13 +488,20 @@ export function RatesScreen() {
                               {row.contractMargin === null ? '—' : money(row.contractMargin)}
                             </TD>
                           </TR>
-                          {rowError?.id === row.item.id && (
-                            <TR>
+                          {/* Additive to the header banner and the row's
+                              own tint, not a replacement — this is the
+                              detail (what actually went wrong), the other
+                              two are the "something's wrong, here's how
+                              many and where" signal for someone who's
+                              already scrolled past it. Cost and Unit Price
+                              can each be mid-failure independently. */}
+                          {[costFailed, unitPriceFailed].filter((msg): msg is string => msg !== undefined).map((msg, msgIndex) => (
+                            <TR key={msgIndex}>
                               <TD colSpan={6} className="text-nc-danger-text">
-                                {rowError.message}
+                                {msg}
                               </TD>
                             </TR>
-                          )}
+                          ))}
                         </Fragment>
                       )
                     })}
