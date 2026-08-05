@@ -1,5 +1,21 @@
 import { useEffect, useState } from 'react'
-import { IconCalculator, IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconFilePlus, IconHome, IconListDetails, IconLogout, IconTable, IconUsersGroup } from '@tabler/icons-react'
+import {
+  IconActivity,
+  IconCalculator,
+  IconCalendarPlus,
+  IconCalendarStats,
+  IconClipboardCheck,
+  IconCurrencyDollar,
+  IconDeviceMobile,
+  IconFilePlus,
+  IconGavel,
+  IconHome,
+  IconLayoutDashboard,
+  IconListDetails,
+  IconLogout,
+  IconTable,
+  IconUsersGroup,
+} from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
@@ -17,45 +33,38 @@ function NavGroupHeading({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The CONTRACT level's shell — one contract at a time, the PM's view (see
- * CompanyShell for the portfolio/company level this sits below). One fixed
- * 220px navy sidebar, no top bar anywhere, replacing the old AppShell
- * (header only) + DesktopShell (nav row beneath it) pair. The field-capture
- * route (EntryScreen) does not use this: a 220px fixed sidebar would eat
- * more than half of a real phone's width, so it keeps its own minimal
- * FieldHeader instead — see App.tsx for how the two are switched between.
+ * One persistent sidebar for the whole office experience — company-level
+ * (Portfolio, Overview, Tenders) and contract-level (Production, Finance)
+ * nav together, at all times, rather than the two-shell split this replaces
+ * (CompanyShell for company routes, this component for contract routes).
+ * That split read as two different apps when Overview/Tenders vanished
+ * entirely the moment you opened a contract, and put Rates/Cost build in a
+ * "Projects" group that had no other connection to money at all — neither
+ * survives here.
  *
- * No contract switcher here anymore — now that a company level exists,
- * switching contracts means going back to the Portfolio (the Home link
- * below) and entering a different one, not picking from a dropdown while
- * still inside a contract. The name shown here is always plain text, not a
- * control, regardless of how many contracts the seat holds.
+ * COMPANY is always visible, ungated — it's not about this contract.
+ * PRODUCTION holds every surface that works without a Unit Price (Progress,
+ * Tracker, Items, Daily Entry, Confirm) — Progress and Tracker have no
+ * rights gate of their own, same as before. FINANCE is the two priced
+ * surfaces plus the money-over-time list: Rates, Cost build, Months. The
+ * section itself is gated on view_rates — the whole point is that a seat
+ * without rate access sees no FINANCE header and no path to Rates/Cost
+ * build/Months at all, not a section that's there but empty. Cost build
+ * additionally needs set_cost (a write right) on top of that read gate.
+ * ADMIN stays its own section — company-wide rights, not contract ones, so
+ * it doesn't belong nested inside the contract-scope panel below any more
+ * than COMPANY does.
  *
- * "Projects" is this group's nav label, not a schema term — 0009 removed
- * "project" from the schema vocabulary in favour of Contract, and that
- * stands everywhere the data itself is named (Items, Approximate Quantity,
- * everything a Ministry Representative reads). The workspace section label
- * is allowed to differ from that; nothing below renames the contract itself.
+ * The contract-scope panel (name + number, then PRODUCTION and FINANCE) is
+ * its own visually distinct block — a left accent border and a filled
+ * background — precisely so it reads as "everything in here is about THIS
+ * contract," bracketed by COMPANY above and ADMIN below at the sidebar's
+ * normal, unscoped indent. Reported as a judgment call, not a spec'd pixel
+ * value — this is the treatment chosen for 220px.
  *
- * Each link is gated on the specific right that screen needs, per 0008 —
- * no bundled role check standing in for all three. Items needs
- * create_items (nothing useful there without it — the screen would be a
- * bare read-only catalog). Rates and Cost build need view_rates alone (Cost
- * build is a placeholder today, but its whole subject — a cost buildup — is
- * finance information behind the same wall as Rates and item_prices'
- * cost_price everywhere else in this app, so it inherits that gate rather
- * than reserving a right that doesn't exist yet). Daily Entry needs
- * enter_quantity OR correct_quantity — either one reaches it, with the
- * unavailable half of the form disabled inside. Overview moved to the
- * company level (CompanyShell) — see that file's own nav instead; it is no
- * longer reachable from here.
- *
- * The ADMIN group renders nothing — no heading, no content — while both
- * company-wide rights (profiles.create_projects/manage_members, not
- * contract_members) are false, rather than showing a heading with
- * permanently nothing under it. The screens those rights would unlock
- * (contract creation, member management) aren't built — a separate task;
- * this only reserves the slot and fetches the rights to gate it on.
+ * No contract switcher here — Portfolio and Overview are both where
+ * switching contracts happens now (click a row), same established
+ * convention as before this restructure.
  */
 export function Sidebar() {
   const contractState = useOutletContext<CurrentContractState>()
@@ -92,26 +101,15 @@ export function Sidebar() {
     navigate('/')
   }
 
+  const canUseFinance = contract.viewRates
+  const canReachProduction = contract.enterQuantity || contract.correctQuantity || contract.confirmQuantity
+
   return (
     <div className="flex h-screen bg-nc-page">
       <aside className="flex w-[220px] shrink-0 flex-col bg-nc-navy text-white">
         <div className="px-5 pb-5 pt-6">
           <p className="text-2xl font-bold leading-none">NovaCore</p>
           <p className="mt-1 text-xs text-white/60">Contract Operations</p>
-        </div>
-
-        <div className="px-5 pb-4">
-          <NavLink
-            to="/portfolio"
-            className="mb-3 flex items-center gap-1.5 text-xs font-medium text-white/60 hover:text-white"
-          >
-            <IconHome size={14} stroke={1.75} />
-            Portfolio
-          </NavLink>
-          <div title={contract.name}>
-            <p className="truncate text-sm font-medium text-white">{contract.name}</p>
-            {contract.contractNo && <p className="text-xs text-white/50">{contract.contractNo}</p>}
-          </div>
         </div>
 
         {/* min-h-0 is load-bearing: a flex child's default min-height is
@@ -121,60 +119,102 @@ export function Sidebar() {
             footer (identity/view-toggle/sign-out/version) off the bottom
             as nav groups accumulate. min-h-0 is what actually lets this
             element stop at its flex-basis and scroll its overflow. */}
-        <nav className="min-h-0 flex-1 space-y-6 overflow-y-auto px-3" aria-label="Office">
+        <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3" aria-label="Office">
           <div>
-            <NavGroupHeading>Projects</NavGroupHeading>
+            <NavGroupHeading>Company</NavGroupHeading>
             <div className="space-y-0.5">
-              <NavLink to="/tracker" className={navLinkClass}>
-                <IconTable size={18} stroke={1.75} />
-                Tracker
+              <NavLink to="/portfolio" className={navLinkClass}>
+                <IconHome size={18} stroke={1.75} />
+                Portfolio
               </NavLink>
-              {contract.createItems && (
-                <NavLink to="/line-items" className={navLinkClass}>
-                  <IconListDetails size={18} stroke={1.75} />
-                  Items
-                </NavLink>
-              )}
-              {contract.viewRates && (
-                <NavLink to="/rates" className={navLinkClass}>
-                  <IconCurrencyDollar size={18} stroke={1.75} />
-                  Rates
-                </NavLink>
-              )}
-              {contract.viewRates && (
-                <NavLink to="/cost-build" className={navLinkClass}>
-                  <IconCalculator size={18} stroke={1.75} />
-                  Cost build
-                </NavLink>
+              <NavLink to="/overview" className={navLinkClass}>
+                <IconLayoutDashboard size={18} stroke={1.75} />
+                Overview
+              </NavLink>
+              <NavLink to="/tenders" className={navLinkClass}>
+                <IconGavel size={18} stroke={1.75} />
+                Tenders
+              </NavLink>
+            </div>
+          </div>
+
+          {/* The contract-scope panel — everything in this bordered block
+              is about the one contract named at its top, not the company as
+              a whole. */}
+          <div className="rounded-lg border-l-2 border-nc-accent bg-white/5 p-3">
+            <div className="mb-3" title={contract.name}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-white/40">This contract</p>
+              <p className="truncate text-sm font-medium text-white">{contract.name}</p>
+              {contract.contractNo && <p className="text-xs text-white/50">{contract.contractNo}</p>}
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <NavGroupHeading>Production</NavGroupHeading>
+                <div className="space-y-0.5">
+                  <NavLink to="/progress" className={navLinkClass}>
+                    <IconActivity size={18} stroke={1.75} />
+                    Progress
+                  </NavLink>
+                  <NavLink to="/tracker" className={navLinkClass}>
+                    <IconTable size={18} stroke={1.75} />
+                    Tracker
+                  </NavLink>
+                  {contract.createItems && (
+                    <NavLink to="/line-items" className={navLinkClass}>
+                      <IconListDetails size={18} stroke={1.75} />
+                      Items
+                    </NavLink>
+                  )}
+                  {canReachProduction && (
+                    <NavLink to="/daily-entry" className={navLinkClass}>
+                      <IconCalendarPlus size={18} stroke={1.75} />
+                      Daily Entry
+                    </NavLink>
+                  )}
+                  {contract.confirmQuantity && (
+                    <NavLink to="/confirm" className={navLinkClass}>
+                      <IconClipboardCheck size={18} stroke={1.75} />
+                      Confirm
+                      {pendingCount > 0 && <span className="ml-auto rounded-full bg-nc-accent px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">{pendingCount}</span>}
+                    </NavLink>
+                  )}
+                </div>
+              </div>
+
+              {/* The whole section disappears for a seat without
+                  view_rates — not just the money inside Rates/Months, the
+                  entire path to any of the three links. Cost build needs
+                  set_cost on top, since it's the one write surface here. */}
+              {canUseFinance && (
+                <div>
+                  <NavGroupHeading>Finance</NavGroupHeading>
+                  <div className="space-y-0.5">
+                    <NavLink to="/rates" className={navLinkClass}>
+                      <IconCurrencyDollar size={18} stroke={1.75} />
+                      Rates
+                    </NavLink>
+                    {contract.setCost && (
+                      <NavLink to="/cost-build" className={navLinkClass}>
+                        <IconCalculator size={18} stroke={1.75} />
+                        Cost build
+                      </NavLink>
+                    )}
+                    <NavLink to="/finance" className={navLinkClass}>
+                      <IconCalendarStats size={18} stroke={1.75} />
+                      Months
+                    </NavLink>
+                  </div>
+                </div>
               )}
             </div>
           </div>
 
-          {(contract.enterQuantity || contract.correctQuantity || contract.confirmQuantity) && (
-            <div>
-              <NavGroupHeading>Production</NavGroupHeading>
-              <div className="space-y-0.5">
-                <NavLink to="/daily-entry" className={navLinkClass}>
-                  <IconCalendarPlus size={18} stroke={1.75} />
-                  Daily Entry
-                </NavLink>
-                {contract.confirmQuantity && (
-                  <NavLink to="/confirm" className={navLinkClass}>
-                    <IconClipboardCheck size={18} stroke={1.75} />
-                    Confirm
-                    {pendingCount > 0 && <span className="ml-auto rounded-full bg-nc-accent px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">{pendingCount}</span>}
-                  </NavLink>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Company-wide rights (profiles), not per-contract — reachable
-              from inside a single contract's own nav too, since an admin
-              deep in one contract's screens shouldn't have to leave to
-              company level just to seat someone elsewhere. Each link
-              gated on its own specific right, same as CompanyShell's copy
-              of this group. */}
+          {/* Company-wide rights (profiles), not per-contract — same as
+              the panel above being scoped to one contract, this one is
+              scoped to nothing but the seat's own admin standing, so it
+              sits outside that bordered block at the sidebar's normal
+              indent, same as Company above. */}
           {(companyRights.createProjects || companyRights.manageMembers) && (
             <div>
               <NavGroupHeading>Admin</NavGroupHeading>
@@ -228,7 +268,7 @@ export function Sidebar() {
             (px-8) and a wide cap; screens with genuine prose or a form
             (not a data table) apply their own narrower max-w- locally. */}
         <div className="max-w-[1800px] px-8 py-8">
-          <Outlet context={contract} />
+          <Outlet context={contractState} />
         </div>
       </main>
     </div>

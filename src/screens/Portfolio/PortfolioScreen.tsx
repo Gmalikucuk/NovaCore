@@ -2,47 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { IconBuildingSkyscraper } from '@tabler/icons-react'
 import type { CurrentContractState } from '../../lib/useCurrentContract'
-import type { MyContract } from '../../lib/supabase/contracts'
-import { fetchItemProgressRate } from '../../lib/supabase/monthlyPeriods'
-import { fetchItemPrices } from '../../lib/supabase/prices'
-import { margin, sumOrNull } from '../../lib/calculations/margin'
+import { loadContractSummary, type ContractSummary } from '../../lib/supabase/contractSummary'
+import { sumOrNull } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money } from '../../lib/format'
 import { Button, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
-
-interface ContractSummary {
-  contract: MyContract
-  valueToDate: number | null
-  marginToDate: number | null
-}
-
-/**
- * Quantity/rate data is per-contract, so this is one round trip per
- * contract, not one big query — same shape as every screen already fetching
- * per-contract progress. fetchItemPrices is skipped (not just filtered)
- * when the seat lacks view_rates on THIS contract, mirroring the existing
- * courtesy pattern (RLS is the real wall either way) — that leaves
- * priceByItem empty, which is what makes valueToDate/marginToDate come out
- * null (absent), not zero, for a contract the seat can't price. The exact
- * same code path also covers Hwy 5's real case: view_rates granted, but no
- * item_prices rows exist yet because nothing's been entered. Absent reads
- * identically either way, which is correct — the portfolio can't and
- * shouldn't distinguish "you can't see it" from "it isn't there yet."
- */
-async function loadContractSummary(contract: MyContract): Promise<ContractSummary> {
-  const [progressRate, prices] = await Promise.all([fetchItemProgressRate(contract.id), contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([])])
-  const priceByItem = new Map(prices.map((p) => [p.itemId, p]))
-  const valueToDate = sumOrNull(
-    progressRate.map((r) => {
-      const price = priceByItem.get(r.itemId)
-      return price?.unitPrice != null ? r.quantityToDate * price.unitPrice : null
-    }),
-  )
-  const marginToDate = sumOrNull(
-    progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
-  )
-  return { contract, valueToDate, marginToDate }
-}
 
 /**
  * Company level — the portfolio across every contract the signed-in user

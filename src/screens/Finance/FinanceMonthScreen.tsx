@@ -215,9 +215,9 @@ export function FinanceMonthScreen() {
         title="Finance"
         subtitle={`${contract.name} · ${formatMonthLabel(selectedMonth)}`}
         actions={
-          <Button type="button" variant="ghost" onClick={() => navigate('/overview?tab=finance')}>
+          <Button type="button" variant="ghost" onClick={() => navigate('/finance')}>
             <IconArrowLeft size={16} stroke={2} className="mr-1 inline" />
-            Back to Finance
+            Back to Months
           </Button>
         }
       />

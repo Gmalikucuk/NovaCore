@@ -1,22 +1,22 @@
-import { useState } from 'react'
-import { Outlet, BrowserRouter, Navigate, Route, Routes, useOutletContext } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useOutletContext } from 'react-router-dom'
+import { Outlet } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { AuthGate } from './shell/AuthGate'
-import { CompanyShell } from './shell/CompanyShell'
 import { Sidebar } from './shell/Sidebar'
 import { FieldHeader } from './shell/FieldHeader'
 import type { CurrentContractState } from './lib/useCurrentContract'
-import { Button } from './components/ui'
 import { SignInScreen } from './screens/SignIn/SignInScreen'
 import { EntryScreen } from './screens/Entry/EntryScreen'
 import { PortfolioScreen } from './screens/Portfolio/PortfolioScreen'
 import { TendersScreen } from './screens/Tenders/TendersScreen'
+import { OverviewScreen } from './screens/Overview/OverviewScreen'
 import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
 import { CostBuildScreen } from './screens/CostBuild/CostBuildScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
-import { OverviewScreen } from './screens/Overview/OverviewScreen'
+import { ProgressScreen } from './screens/Progress/ProgressScreen'
+import { MonthsScreen } from './screens/Finance/MonthsScreen'
 import { FinanceMonthScreen } from './screens/Finance/FinanceMonthScreen'
 import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
 import { TrackerScreen } from './screens/Tracker/TrackerScreen'
@@ -25,67 +25,18 @@ import { CreateContractScreen } from './screens/Admin/CreateContractScreen'
 import { SeatMembersScreen } from './screens/Admin/SeatMembersScreen'
 
 /**
- * Overview now lives at the company level (CompanyShell), but its own
- * internals are unchanged and still expect a single resolved MyContract
- * via outlet context — the same shape Sidebar always handed it. CompanyShell's
- * Outlet carries the full CurrentContractState (Portfolio and Tenders both
- * need the contracts list), so this bridge sits between CompanyShell and
- * OverviewScreen and resolves it down to `current`, exactly what Sidebar
- * used to hand it directly.
- *
- * It's also the ONLY place left that can change which contract that is,
- * now that opening a contract from Portfolio lands on Tracker (project
- * level) instead — without this, `current` would only ever change as a
- * side effect of a Portfolio row click made for an unrelated reason, with
- * no way to switch contracts from Overview itself. The picker is a row
- * list (Portfolio's own shape: name/number + sandbox tag), not the old
- * sidebar `<select>` — deliberately, per the report this replaces. Hidden
- * entirely with one contract: nothing to switch to.
- *
- * Still single-select — this is the fix for "no path exists," not the
- * separate, larger multi-project Overview piece already reported on.
+ * Narrows the full CurrentContractState (Sidebar's own outlet context, since
+ * Portfolio/Overview/Tenders/Admin need the whole contracts list) down to
+ * the single resolved `current` contract that every contract-scoped screen
+ * (Tracker, Rates, Progress, ...) has always expected. The same narrowing
+ * CompanyOverviewBridge used to do for Overview alone, now applied to every
+ * route that's actually about one contract rather than the company as a
+ * whole.
  */
-function CompanyOverviewBridge() {
-  const contractState = useOutletContext<CurrentContractState>()
-  const { contracts, current, setCurrentId } = contractState
-  const [pickerOpen, setPickerOpen] = useState(false)
+function ContractScopeBridge() {
+  const { current } = useOutletContext<CurrentContractState>()
   if (!current) return null
-
-  return (
-    <div>
-      {contracts.length > 1 && (
-        <div className="mb-4">
-          <div className="flex justify-end">
-            <Button type="button" variant="secondary" onClick={() => setPickerOpen((v) => !v)}>
-              {pickerOpen ? 'Cancel' : 'Switch contract'}
-            </Button>
-          </div>
-          {pickerOpen && (
-            <div className="mt-2 divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
-              {contracts.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => {
-                    setCurrentId(c.id)
-                    setPickerOpen(false)
-                  }}
-                  className={`flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm hover:bg-nc-secondary ${c.id === current.id ? 'bg-nc-secondary' : ''}`}
-                >
-                  <span className="truncate font-medium text-nc-text">{c.contractNo ? `${c.contractNo} — ${c.name}` : c.name}</span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    {c.isSandbox && <span className="rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
-                    {c.id === current.id && <span className="text-xs text-nc-text-muted">Current</span>}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      <Outlet context={current} />
-    </div>
-  )
+  return <Outlet context={current} />
 }
 
 function App() {
@@ -115,14 +66,27 @@ function App() {
                 }
               />
             </Route>
-            {/* Company level — spans every contract: the portfolio, the
-                top-management Overview, and pre-award (Tenders). */}
-            <Route element={<CompanyShell />}>
+            {/* One persistent sidebar for the whole office experience — see
+                Sidebar.tsx's own comment for why the old CompanyShell/
+                Sidebar split is gone. Its own Outlet carries the FULL
+                CurrentContractState (Portfolio/Overview/Tenders/Admin all
+                need the contracts list, not one resolved contract);
+                ContractScopeBridge narrows that down for the routes below
+                that are actually scoped to a single contract. */}
+            <Route element={<Sidebar />}>
               <Route
                 path="/portfolio"
                 element={
                   <ErrorBoundary>
                     <PortfolioScreen />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/overview"
+                element={
+                  <ErrorBoundary>
+                    <OverviewScreen />
                   </ErrorBoundary>
                 }
               />
@@ -154,96 +118,97 @@ function App() {
                   </ErrorBoundary>
                 }
               />
-              {/* See CompanyOverviewBridge's own comment. */}
-              <Route element={<CompanyOverviewBridge />}>
+              {/* Production + Finance — one contract at a time, reached by
+                  opening a contract from Portfolio or Overview. */}
+              <Route element={<ContractScopeBridge />}>
                 <Route
-                  path="/overview"
+                  path="/progress"
                   element={
                     <ErrorBoundary>
-                      <OverviewScreen />
+                      <ProgressScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/line-items"
+                  element={
+                    <ErrorBoundary>
+                      <ItemsScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/rates"
+                  element={
+                    <ErrorBoundary>
+                      <RatesScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/cost-build"
+                  element={
+                    <ErrorBoundary>
+                      <CostBuildScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/daily-entry"
+                  element={
+                    <ErrorBoundary>
+                      <QuantityRecordsScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/confirm"
+                  element={
+                    <ErrorBoundary>
+                      <ConfirmQueueScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                {/* Months — the list. Reached from the Finance nav link. */}
+                <Route
+                  path="/finance"
+                  element={
+                    <ErrorBoundary>
+                      <MonthsScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                {/* One month's detail — reached only by opening a row on
+                    Months, no nav link of its own, same convention as
+                    Tracker's own deep link into /daily-entry. */}
+                <Route
+                  path="/finance/:period"
+                  element={
+                    <ErrorBoundary>
+                      <FinanceMonthScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/tracker"
+                  element={
+                    <ErrorBoundary>
+                      <TrackerScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                {/* The "records" step of contract → Item → its records —
+                    reached only by opening an Item # on the Tracker list,
+                    same convention as /finance/:period. */}
+                <Route
+                  path="/tracker/:itemId"
+                  element={
+                    <ErrorBoundary>
+                      <TrackerItemScreen />
                     </ErrorBoundary>
                   }
                 />
               </Route>
-            </Route>
-            {/* Project level — one contract at a time, reached by opening a
-                project from Portfolio. "Projects" is this workspace's nav
-                label (see Sidebar's own comment); the data underneath is
-                still a Contract, unrenamed. */}
-            <Route element={<Sidebar />}>
-              <Route
-                path="/line-items"
-                element={
-                  <ErrorBoundary>
-                    <ItemsScreen />
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/rates"
-                element={
-                  <ErrorBoundary>
-                    <RatesScreen />
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/cost-build"
-                element={
-                  <ErrorBoundary>
-                    <CostBuildScreen />
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/daily-entry"
-                element={
-                  <ErrorBoundary>
-                    <QuantityRecordsScreen />
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/confirm"
-                element={
-                  <ErrorBoundary>
-                    <ConfirmQueueScreen />
-                  </ErrorBoundary>
-                }
-              />
-              {/* Reached only by opening a month row on Overview's Finance
-                  tab — no nav link of its own, same convention as the
-                  Tracker's own ?itemId=&period= deep link into
-                  /daily-entry. Stays at project level even though Overview
-                  (its only entry point) moved up a level — see the
-                  nav-restructure report for why. */}
-              <Route
-                path="/finance/:period"
-                element={
-                  <ErrorBoundary>
-                    <FinanceMonthScreen />
-                  </ErrorBoundary>
-                }
-              />
-              <Route
-                path="/tracker"
-                element={
-                  <ErrorBoundary>
-                    <TrackerScreen />
-                  </ErrorBoundary>
-                }
-              />
-              {/* The "records" step of contract → Item → its records —
-                  reached only by opening an Item # on the Tracker list, same
-                  convention as /finance/:period. */}
-              <Route
-                path="/tracker/:itemId"
-                element={
-                  <ErrorBoundary>
-                    <TrackerItemScreen />
-                  </ErrorBoundary>
-                }
-              />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
