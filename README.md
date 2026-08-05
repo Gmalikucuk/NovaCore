@@ -33,6 +33,8 @@ The reason is structural, not a matter of care. `quantity_records` is append-onl
 
 Where a check genuinely can't be done on the sandbox — a rights regression tied to one specific real seat, for instance — say so *before* running it, not after.
 
+**If a verification write ever does land on a real contract, `created_by` resolving to a `@novacore.test` address is the durable marker for finding it again** — not the note text, and not `device_id`. A note only tells you something if whoever wrote it thought to say so in words a later reader would recognize as fabricated (found the hard way on Hwy 5: a confirmed record read "Corrected by superintendent — simulating race," which is only obvious in hindsight). `device_id` is a single value persisted per browser (`src/lib/deviceId.ts`), so it repeats across whichever seat is signed in on that browser at the time — it can make two different people's rows look like the same device, but its mere presence proves nothing about whether a row is real. `created_by` is the one field a test row can't fake without an actual `@keywestasphalt.com` (or other real) account behind it.
+
 ## Stack
 
 - `vite-plugin-pwa` — installable, offline-capable (service worker + manifest)

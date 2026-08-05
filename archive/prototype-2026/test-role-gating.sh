@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 #
+# ARCHIVED — moved out of scripts/ on 2026-08-05. Targets crew_members,
+# reconstruction_runs, road_segments, companies, and projects: tables from
+# the pre-rebuild prototype, none of which exist in the current v1 schema
+# (contracts/contract_members/items/item_prices/quantity_records). Every
+# query in this file would fail immediately if run. Kept here for reference
+# only — a copy that looked live in scripts/ was a trap for whoever read the
+# repo next.
+#
 # End-to-end regression test for the magic-link auth + role-gating scheme
 # introduced in migrations 20260705090000-20260705090400.
 #
