@@ -130,10 +130,39 @@ export function StatusBadge({ status, children, className = '' }: StatusBadgePro
 // descriptions/notes, which read better with proportional figures.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function Table({ className = '', children, ...props }: React.TableHTMLAttributes<HTMLTableElement>) {
+interface TableProps extends React.TableHTMLAttributes<HTMLTableElement> {
+  /**
+   * false lets the table size to its own content instead of stretching to
+   * fill its wrapper — for a table whose columns are mostly narrow and none
+   * of which naturally wants the rest (RatesScreen: forcing w-full there
+   * left ~600px of dead gutter, the slack landing wherever auto-layout
+   * happened to put it). Defaults to true, the original behavior, for
+   * every other Table call site.
+   */
+  fullWidth?: boolean
+  /**
+   * Caps the wrapper's own height and makes IT the vertical scroll
+   * container (overflow-y-auto instead of the default hidden), so a
+   * `sticky` <thead> inside actually has something to stick against.
+   * position: sticky resolves against the NEAREST ancestor with a
+   * scrolling box, found by walking up the tree — the wrapper below
+   * qualifies the moment it has any non-visible overflow-y at all, whether
+   * or not it currently needs to scroll, which silently intercepts
+   * stickiness meant to resolve against the page instead. Undefined (the
+   * default) leaves every other Table call site exactly as before: no
+   * height cap, no internal scrollbar, the page scrolls long tables as it
+   * always has.
+   */
+  maxHeight?: string
+}
+
+export function Table({ className = '', children, fullWidth = true, maxHeight, style, ...props }: TableProps) {
   return (
-    <div className={`overflow-x-auto overflow-y-hidden rounded-lg border border-nc-border bg-white shadow-sm ${className}`}>
-      <table className="w-full min-w-max border-collapse" {...props}>
+    <div
+      className={`overflow-x-auto ${maxHeight ? 'overflow-y-auto' : 'overflow-y-hidden'} rounded-lg border border-nc-border bg-white shadow-sm ${className}`}
+      style={maxHeight ? { maxHeight } : undefined}
+    >
+      <table className={`${fullWidth ? 'w-full' : ''} min-w-max border-collapse`} style={style} {...props}>
         {children}
       </table>
     </div>

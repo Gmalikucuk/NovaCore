@@ -5,7 +5,7 @@ import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
 import { margin, sumOrNull, type CostBasis } from '../../lib/calculations/margin'
-import { compareItemCodes } from '../../lib/calculations/naturalSort'
+import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, quantity as fmtQuantity } from '../../lib/format'
 import { EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
@@ -69,12 +69,24 @@ export function RatesScreen() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [rowError, setRowError] = useState<{ id: string; message: string } | null>(null)
 
-  // Contract quantity descending by default — the largest few items carry
-  // most of a paving contract's value, so a PM entering rates hits them
-  // first and can stop there if she wants. Sortable so the item-number
-  // order (scrambled by the default) is reachable too.
-  const [sortKey, setSortKey] = useState<SortKey>('quantity')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  // The cost-basis picker is per_unit on almost every Unit Price Item —
+  // showing it stacked under Est. cost on all 48 rows for a choice that's
+  // rarely touched is what pushed every row past single-line height. It's
+  // shown only when there's a reason to look at it: the Item is already
+  // priced as a total (so its basis differs from the silent per_unit
+  // default and needs to stay visible), or the cost cell is focused right
+  // now (so it's reachable the moment someone actually wants to change it).
+  const [focusedCostId, setFocusedCostId] = useState<string | null>(null)
+
+  // Item # ascending — Schedule 7 order, the order of the tender document
+  // being transcribed from. Sorting by Approximate Quantity mixes units of
+  // measure (354,250 Square Metre above 45,900 Tonne conveys nothing) and
+  // buried the contract's largest-value Item in fourth position; kept as an
+  // available sort (meaningful within one UOM) but no longer the default.
+  // Once Unit Prices exist, sorting by Extended Amount would be the
+  // meaningful importance ranking — not built now.
+  const [sortKey, setSortKey] = useState<SortKey>('itemNumber')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
   useEffect(() => {
     setStatus('loading')
@@ -218,7 +230,7 @@ export function RatesScreen() {
     })
   }
 
-  const subtitle = `${contract.name}${status === 'ready' ? ` · ${costedCount} of ${rows.length} costed` : ''}`
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${costedCount} of ${rows.length} have an Est. cost` : ''}`
 
   function sortableHeader(key: SortKey, label: string, align: 'left' | 'right' = 'left'): ReactNode {
     return (
@@ -230,6 +242,18 @@ export function RatesScreen() {
       </TH>
     )
   }
+
+  // Section headers (Schedule 7's own "SECTION N – NAME" breaks) only mean
+  // anything when the visible order actually groups by section — true
+  // under the Item # sort (a section's items share its leading prefix, so
+  // they're already contiguous), not under the Quantity sort, where the
+  // same header would have to reappear every time the interleaving crossed
+  // back into a section already shown once. `i` here is the row's index
+  // into the single flat `rows` array regardless of a header being
+  // rendered above it — tab order and Enter's "next row" both key off this
+  // same index, so inserting a header never shifts it.
+  let lastSectionPrefix = ''
+  const groupBySection = sortKey === 'itemNumber'
 
   return (
     <div>
@@ -265,36 +289,67 @@ export function RatesScreen() {
               <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
             ) : (
               <>
-                <Table>
-                  <THead>
+                {/* fullWidth=false + w-fit mx-auto: this table's columns are
+                    mostly narrow and none of them wants the leftover width,
+                    so letting it stretch to the page's full 1800px cap put
+                    ~600px of dead gutter between Description and
+                    Approximate Quantity. Sized to its own content and
+                    centered instead — see the Table component's own
+                    comment for why fullWidth needed a prop rather than an
+                    override at this call site (the shared FIELD_BASE/table
+                    classes are in the same stylesheet layer as anything
+                    passed via className, so which one wins is a stylesheet-
+                    order question, not a JSX-order one).
+
+                    maxHeight makes this table's own wrapper the scrolling
+                    region (see Table's comment for why that's load-bearing
+                    for the sticky header below, not cosmetic) — a 44-48px
+                    row height times up to 48 rows means the column
+                    headings would otherwise scroll out of view almost
+                    immediately, in the middle of a single transcription
+                    pass. The subtracted allowance is this page's own
+                    header + banner + padding above the table. */}
+                <Table fullWidth={false} maxHeight="calc(100vh - 280px)" className="mx-auto w-fit">
+                  <THead className="sticky top-0 z-10">
                     <TR>
                       {sortableHeader('itemNumber', 'Item #')}
                       <TH>Description</TH>
                       {sortableHeader('quantity', 'Approximate Quantity', 'right')}
-                      {/* Explicit width on the header cell, not the input below — a table's
-                          auto-layout algorithm fixes a column's width from ANY cell in it that
-                          states one, and a plain CSS length here is unambiguous regardless of
-                          the data type scale's font size (unlike the HTML `size` attribute this
-                          replaced, which is measured in characters against the rendered font —
-                          coupling the fix to a token this same pass already changed once). */}
-                      <TH align="right" style={{ width: 150 }}>
-                        Est. cost
-                      </TH>
-                      <TH align="right" style={{ width: 130 }}>
-                        Unit Price
-                      </TH>
+                      <TH align="right">Est. cost</TH>
+                      <TH align="right">Unit Price</TH>
                       <TH align="right">Est. contract margin</TH>
                     </TR>
                   </THead>
                   <TBody>
                     {rows.map((row, i) => {
                       const draft = drafts.get(row.item.id) ?? toDraft(row.item, undefined)
+                      const prefix = groupBySection ? sectionPrefix(row.item.itemNumber) : null
+                      const showSectionHeader = prefix !== null && prefix !== lastSectionPrefix
+                      if (showSectionHeader) lastSectionPrefix = prefix
+
+                      // Shown when there's a reason to look at it: focused
+                      // right now, or already committed as a total (see the
+                      // state comment above) — never for the silent
+                      // per_unit default sitting untouched.
+                      const showBasisControl = row.unitPriced && (focusedCostId === row.item.id || draft.costBasis === 'total')
+
                       return (
                         <Fragment key={row.item.id}>
+                          {showSectionHeader && (
+                            <TR>
+                              <TD colSpan={6} className={`text-xs font-semibold uppercase tracking-wide text-nc-text-muted ${i === 0 ? '' : 'border-t border-nc-border'}`}>
+                                {sectionLabel(prefix)}
+                              </TD>
+                            </TR>
+                          )}
                           <TR className={!row.priced ? 'bg-nc-secondary/60' : undefined}>
-                            <TD className="nc-numeric">{row.item.itemNumber}</TD>
-                            <TD prose>{row.item.description}</TD>
-                            <TD align="right" className="nc-numeric">
+                            <TD className="nc-numeric align-middle">{row.item.itemNumber}</TD>
+                            <TD prose className="align-middle">
+                              <div className="max-w-[300px] truncate" title={row.item.description}>
+                                {row.item.description}
+                              </div>
+                            </TD>
+                            <TD align="right" className="nc-numeric align-middle">
                               {row.unitPriced ? (
                                 <>
                                   {fmtQuantity(row.item.approximateQuantity)} <span className="text-nc-text-muted">{row.item.unit}</span>
@@ -303,45 +358,57 @@ export function RatesScreen() {
                                 '—'
                               )}
                             </TD>
-                            <TD align="right" dense>
-                              <div className="flex flex-col items-end gap-1">
+                            <TD align="right" dense className="align-middle">
+                              <div className="flex items-center justify-end gap-1.5">
                                 <Input
                                   className="nc-numeric text-right"
+                                  style={{ width: 110 }}
                                   data-cell={`${i}-cost`}
+                                  tabIndex={i + 1}
                                   inputMode="decimal"
-                                  placeholder="—"
                                   value={draft.cost}
                                   readOnly={!canEdit}
                                   onChange={(e) => updateDraft(row.item.id, 'cost', e.target.value)}
-                                  onBlur={() => void commitRate(row.item, 'cost')}
+                                  onFocus={() => setFocusedCostId(row.item.id)}
+                                  onBlur={() => {
+                                    setFocusedCostId(null)
+                                    void commitRate(row.item, 'cost')
+                                  }}
                                   onKeyDown={(e) => handleKeyDown(e, row.item, 'cost', i)}
                                 />
                                 {row.unitPriced ? (
-                                  <Select
-                                    aria-label={`${row.item.itemNumber} cost basis`}
-                                    className="w-auto py-1 text-xs"
-                                    value={draft.costBasis}
-                                    disabled={!canEdit}
-                                    onChange={(e) => void changeBasis(row.item, e.target.value as CostBasis)}
-                                  >
-                                    <option value="per_unit">per unit</option>
-                                    <option value="total">total</option>
-                                  </Select>
+                                  showBasisControl && (
+                                    <Select
+                                      aria-label={`${row.item.itemNumber} cost basis`}
+                                      style={{ width: 80 }}
+                                      className="py-1 text-xs"
+                                      tabIndex={-1}
+                                      value={draft.costBasis}
+                                      disabled={!canEdit}
+                                      onFocus={() => setFocusedCostId(row.item.id)}
+                                      onBlur={() => setFocusedCostId(null)}
+                                      onChange={(e) => void changeBasis(row.item, e.target.value as CostBasis)}
+                                    >
+                                      <option value="per_unit">/unit</option>
+                                      <option value="total">total</option>
+                                    </Select>
+                                  )
                                 ) : (
                                   <span className="text-xs text-nc-text-muted">total</span>
                                 )}
                                 {row.derivedPerUnit !== null && (
-                                  <span className="nc-numeric whitespace-nowrap text-xs text-nc-text-muted">≈ {money(row.derivedPerUnit)}/unit, against Approx. Qty</span>
+                                  <span className="nc-numeric whitespace-nowrap text-xs text-nc-text-muted">≈ {money(row.derivedPerUnit)}/unit</span>
                                 )}
                               </div>
                             </TD>
-                            <TD align="right" dense={row.unitPriced}>
+                            <TD align="right" dense={row.unitPriced} className="align-middle">
                               {row.unitPriced ? (
                                 <Input
                                   className="nc-numeric text-right"
+                                  style={{ width: 130 }}
                                   data-cell={`${i}-unitPrice`}
+                                  tabIndex={rows.length + i + 1}
                                   inputMode="decimal"
-                                  placeholder="—"
                                   value={draft.unitPrice}
                                   readOnly={!canEdit}
                                   onChange={(e) => updateDraft(row.item.id, 'unitPrice', e.target.value)}
@@ -352,7 +419,7 @@ export function RatesScreen() {
                                 <span className="text-nc-text-muted">—</span>
                               )}
                             </TD>
-                            <TD align="right" className={`nc-numeric ${row.contractMargin !== null && row.contractMargin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                            <TD align="right" className={`nc-numeric align-middle ${row.contractMargin !== null && row.contractMargin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
                               {row.contractMargin === null ? '—' : money(row.contractMargin)}
                             </TD>
                           </TR>
