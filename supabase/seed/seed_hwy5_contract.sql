@@ -18,7 +18,17 @@
 -- "Integral". Noted here because a line-by-line comparison against Schedule 7
 -- will show a difference on that row.
 --
--- Requires migrations through 0018.
+-- IF YOU ARE CORRECTING AN ITEM'S description/unit/approximate_quantity/
+-- item_kind/provisional_sum/dfpa_category: the INSERT below is upserted
+-- (on conflict (contract_id, item_number) do update) EVERY time this file
+-- runs. A fix applied only in the database — directly via SQL, or via a
+-- future admin UI — will be silently REVERTED back to whatever is
+-- hardcoded here the next time this seed is rerun for any reason (e.g. to
+-- pick up an unrelated new column added by a later migration). Make the
+-- correction HERE, in this file, first. The database is not the source of
+-- truth for these six columns; this file is.
+--
+-- Requires migrations through 0019.
 -- Idempotent: safe to re-run.
 -- =============================================================================
 
@@ -214,6 +224,31 @@ begin
       or (j.name = 'Job B' and i.item_number in ('04.04.02', '05.03.04'))
       or (j.name = 'Job C' and i.item_number in ('05.03.05'))
     );
+
+  -- item_jobs (0019) — the same assignment, mirrored into the join table
+  -- that replaces job_id's one-Job-per-Item limitation. Kept in step with
+  -- the UPDATE above rather than derived from it, so this file stays the
+  -- single source of truth for both during the transition (see 0019's own
+  -- header for why job_id is retained, not dropped, for now). 03.01.02
+  -- "Asphalt Medium Mix Aggregate Job B and C" is deliberately absent from
+  -- both this table and job_id above — Schedule 7 states it covers two
+  -- Jobs, which job_id cannot express and which this seed still does not
+  -- assign automatically; that is a real, deliberate change for whoever
+  -- owns Schedule 7 data entry, not something to guess at here.
+  insert into public.item_jobs (item_id, job_id, contract_id)
+  select i.id, j.id, v_contract
+  from public.items i
+  join public.jobs j on j.contract_id = v_contract
+  where i.contract_id = v_contract
+    and (
+      (j.name = 'Job A' and i.item_number in (
+        '03.01.01', '04.03', '04.04.03', '04.04.04', '04.04.05', '04.05.01',
+        '04.05.02', '04.05.03', '04.05.06', '04.06.04', '04.06.08',
+        '05.03.02', '05.03.03'))
+      or (j.name = 'Job B' and i.item_number in ('04.04.02', '05.03.04'))
+      or (j.name = 'Job C' and i.item_number in ('05.03.05'))
+    )
+  on conflict (item_id, job_id) do nothing;
 
   raise notice 'Hwy 5 Snowshed Hill seeded: % Items, % Jobs, % Items assigned to a Job',
     (select count(*) from public.items where contract_id = v_contract),

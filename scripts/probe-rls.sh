@@ -554,6 +554,61 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "quantities: update contracts.planned_start rejected" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 echo
+echo "=== item_jobs (0019) — Item <-> Job assignment, same right as jobs itself ==="
+
+# A stable Job on the sandbox project — 0017's own seed ('PROBE Job'), not
+# whichever one this suite's Jobs section above just inserted, so this
+# section doesn't depend on staying immediately after that one.
+request GET "jobs?select=id&contract_id=eq.$PROJECT_ID&name=eq.PROBE%20Job" "$FULL_TOKEN"
+JOB_ID=$(json_field "$BODY_OUT" 0 id)
+if [ -z "$JOB_ID" ]; then
+  echo "FATAL: could not find 'PROBE Job' on the sandbox project — has 0017's seed been applied?" >&2
+  exit 1
+fi
+
+# full holds manage_schedule on the sandbox project — the same right that
+# gates jobs itself (0016), reused rather than a new one: assigning an Item
+# to a Job is the same kind of decision as creating the Job.
+request POST "item_jobs" "$FULL_TOKEN" \
+  "{\"item_id\":\"$UNIT_PRICE_ITEM_ID\",\"job_id\":\"$JOB_ID\",\"contract_id\":\"$PROJECT_ID\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
+check "full: assign an Item to a Job (manage_schedule)" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# quantities holds no manage_schedule — WITH CHECK fails outright, same 403
+# shape as jobs' own insert-right probe above (this is an insert being
+# refused, not a row simply invisible under USING).
+request POST "item_jobs" "$QUANTITIES_TOKEN" \
+  "{\"item_id\":\"$UNIT_PRICE_ITEM_ID\",\"job_id\":\"$JOB_ID\",\"contract_id\":\"$PROJECT_ID\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: assign an Item to a Job rejected (no manage_schedule)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# readonly (seated, zero rights) can still see the assignment — membership,
+# not a right, same positive control as jobs/items/quantity_records.
+request GET "item_jobs?select=item_id&contract_id=eq.$PROJECT_ID&job_id=eq.$JOB_ID&item_id=eq.$UNIT_PRICE_ITEM_ID" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  n=$(json_len "$BODY_OUT")
+  [ "$n" != "-1" ] && [ "$n" -ge 1 ] 2>/dev/null && ok=1
+fi
+check "readonly: select item_jobs (membership, not a right)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+# quantities can't remove the assignment either — DELETE's USING clause
+# simply excludes the row for a seat without manage_schedule, so this is
+# PostgREST's "0 rows visible" shape (200, empty body), not a 403 — same
+# distinction this suite already draws for contracts.planned_start above:
+# a policy that only ever gates via USING (no WITH CHECK path for DELETE)
+# fails this way, not with an error status.
+request DELETE "item_jobs?item_id=eq.$UNIT_PRICE_ITEM_ID&job_id=eq.$JOB_ID" "$QUANTITIES_TOKEN" "{}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: unassign an Item from a Job matches 0 rows (no manage_schedule)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# full removes it — cleanup, and proves the delete grant/policy actually
+# works, not just that it's absent for quantities.
+request DELETE "item_jobs?item_id=eq.$UNIT_PRICE_ITEM_ID&job_id=eq.$JOB_ID" "$FULL_TOKEN" "{}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full: unassign an Item from a Job (manage_schedule)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+echo
 echo "=== Actual cost (0018) — behind the finance wall exactly as item_prices, gated to write by record_actual_cost ==="
 
 # quantities holds no view_rates — same wall as item_prices, by construction

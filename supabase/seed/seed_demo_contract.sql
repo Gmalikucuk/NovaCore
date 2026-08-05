@@ -60,7 +60,7 @@
 --    quantity_records, and transitively item_prices, pinned_items,
 --    actual_cost_entries)
 --
--- Requires migrations through 0018.
+-- Requires migrations through 0019.
 -- =============================================================================
 
 do $$
@@ -200,6 +200,21 @@ begin
       (j.name = 'Job A' and i.item_number = '05.03.03')
       or (j.name = 'Job B' and i.item_number = '04.06.01')
     );
+
+  -- item_jobs (0019) — mirrors the assignment above into the join table
+  -- that replaces job_id's one-Job-per-Item limitation. See Hwy 5's own
+  -- seed for the fuller reasoning; this contract has no Item that needs
+  -- more than one Job, so the mirror is exact here.
+  insert into public.item_jobs (item_id, job_id, contract_id)
+  select i.id, j.id, v_contract
+  from public.items i
+  join public.jobs j on j.contract_id = v_contract
+  where i.contract_id = v_contract
+    and (
+      (j.name = 'Job A' and i.item_number = '05.03.03')
+      or (j.name = 'Job B' and i.item_number = '04.06.01')
+    )
+  on conflict (item_id, job_id) do nothing;
 
   -- ---------------------------------------------------------------------------
   -- Unit Prices and costs
