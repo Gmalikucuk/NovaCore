@@ -82,7 +82,11 @@ export function PortfolioScreen() {
 
   function openContract(contractId: string) {
     setCurrentId(contractId)
-    navigate('/overview')
+    // Lands at project level, not company-level Overview — "opening a
+    // project" per the nav-restructure brief means entering the project's
+    // own workspace (Tracker, Items, Rates, ...); Overview lives one level
+    // up now and is reached from there directly, not through a contract.
+    navigate('/tracker')
   }
 
   return (
@@ -111,47 +115,76 @@ export function PortfolioScreen() {
               />
             </div>
 
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Contract</TH>
-                  <TH align="right">Value to date</TH>
-                  <TH align="right">Est. margin to date</TH>
-                  <TH />
-                </TR>
-              </THead>
-              <TBody>
-                {summaries.map((s) => (
-                  <TR key={s.contract.id} className="cursor-pointer hover:bg-nc-secondary/60" onClick={() => openContract(s.contract.id)}>
-                    <TD>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-nc-text">{s.contract.contractNo ? `${s.contract.contractNo} — ${s.contract.name}` : s.contract.name}</span>
-                        {/* Row-level tag, not a banner — see loadContractSummary's own comment. */}
-                        {s.contract.isSandbox && <span className="shrink-0 rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
-                      </div>
-                    </TD>
-                    <TD align="right" className="nc-numeric">
-                      {money(s.valueToDate)}
-                    </TD>
-                    <TD align="right" className={`nc-numeric ${s.marginToDate !== null && s.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                      {money(s.marginToDate)}
-                    </TD>
-                    <TD align="right" dense>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openContract(s.contract.id)
-                        }}
-                      >
-                        Open
-                      </Button>
-                    </TD>
+            {/* Four sections, per the nav-restructure brief — Pipeline,
+                Active, Warranty Period, Archived. `contracts` has no state
+                column (an unsettled modelling decision — see this brief's
+                report), so every real contract renders under Active today;
+                the other three are scaffolding, not a claim that nothing
+                belongs there. Plain muted text, not EmptyState — EmptyState
+                says "we looked, there's genuinely nothing here"; these
+                sections say "this isn't wired up yet," the same distinction
+                CompanyShell's own reserved Admin slot already draws with its
+                "Coming soon" text rather than a bordered empty state. */}
+            <section className="mb-8">
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Pipeline</h2>
+              <p className="text-sm text-nc-text-subtle">Placeholder — contracts have no state field yet to sort into this section.</p>
+            </section>
+
+            <section className="mb-8">
+              <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Active</h2>
+              <p className="mb-2 text-sm text-nc-text-subtle">Every contract lives here until state exists to sort them otherwise — not a claim that all {summaries.length} are actually active.</p>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Contract</TH>
+                    <TH align="right">Value to date</TH>
+                    <TH align="right">Est. margin to date</TH>
+                    <TH />
                   </TR>
-                ))}
-              </TBody>
-            </Table>
+                </THead>
+                <TBody>
+                  {summaries.map((s) => (
+                    <TR key={s.contract.id} className="cursor-pointer hover:bg-nc-secondary/60" onClick={() => openContract(s.contract.id)}>
+                      <TD>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-nc-text">{s.contract.contractNo ? `${s.contract.contractNo} — ${s.contract.name}` : s.contract.name}</span>
+                          {/* Row-level tag, not a banner — see loadContractSummary's own comment. */}
+                          {s.contract.isSandbox && <span className="shrink-0 rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
+                        </div>
+                      </TD>
+                      <TD align="right" className="nc-numeric">
+                        {money(s.valueToDate)}
+                      </TD>
+                      <TD align="right" className={`nc-numeric ${s.marginToDate !== null && s.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                        {money(s.marginToDate)}
+                      </TD>
+                      <TD align="right" dense>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openContract(s.contract.id)
+                          }}
+                        >
+                          Open
+                        </Button>
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </section>
+
+            <section className="mb-8">
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Warranty Period</h2>
+              <p className="text-sm text-nc-text-subtle">Placeholder — contracts have no state field yet to sort into this section.</p>
+            </section>
+
+            <section className="mb-8">
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Archived</h2>
+              <p className="text-sm text-nc-text-subtle">Placeholder — contracts have no state field yet to sort into this section.</p>
+            </section>
           </>
         ))}
     </div>

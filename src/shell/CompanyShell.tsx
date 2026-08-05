@@ -1,4 +1,4 @@
-import { IconDeviceMobile, IconHome, IconLogout } from '@tabler/icons-react'
+import { IconDeviceMobile, IconGavel, IconHome, IconLayoutDashboard, IconLogout } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
@@ -16,17 +16,29 @@ function NavGroupHeading({ children }: { children: React.ReactNode }) {
 
 /**
  * The company level's own shell — same 220px navy sidebar as the contract
- * level's (Sidebar.tsx), but a different nav: Portfolio (the one screen
- * today) plus a reserved Admin slot, rather than anything scoped to a
- * single contract. Deliberately a separate component rather than a mode
- * flag on Sidebar — the two levels' nav content doesn't overlap at all
- * (nothing here is gated on a contract's rights, everything in Sidebar is),
- * and this is exactly where Admin (contract creation, member seating — a
- * separate brief) hangs off later without touching contract-level nav.
+ * level's (Sidebar.tsx), but a different nav: Portfolio, Overview, and
+ * Tenders (pre-award), plus a reserved Admin slot, rather than anything
+ * scoped to a single contract. Deliberately a separate component rather
+ * than a mode flag on Sidebar — the two levels' nav content doesn't overlap
+ * at all (nothing here is gated on a contract's rights, everything in
+ * Sidebar is), and this is exactly where Admin (contract creation, member
+ * seating — a separate brief) hangs off later without touching
+ * contract-level nav.
  *
- * No contract switcher here — there's no "current contract" concept at
- * this level to switch. See Sidebar's own comment for where switching
- * moved instead.
+ * Overview moved here from Sidebar: it's the top-management, spans-several-
+ * projects question, not a single contract's. This pass still renders it
+ * against exactly one contract at a time (App.tsx's CompanyOverviewBridge
+ * supplies contractState.current, same value Sidebar used to hand it) —
+ * see App.tsx for why, and the final report for what true multi-project
+ * selection would need.
+ *
+ * Tenders is pre-award — a tender has no Items, no Unit Prices, no
+ * Ministry Representative, no seated members, so it is not a Contract and
+ * has nothing to read from contractState beyond the sidebar chrome itself.
+ *
+ * No contract switcher here — there's no single "current contract" concept
+ * at this level to switch, Overview's bridge notwithstanding. See Sidebar's
+ * own comment for where switching moved instead.
  */
 export function CompanyShell() {
   const contractState = useOutletContext<CurrentContractState>()
@@ -55,6 +67,20 @@ export function CompanyShell() {
               <NavLink to="/portfolio" className={navLinkClass}>
                 <IconHome size={18} stroke={1.75} />
                 Portfolio
+              </NavLink>
+              <NavLink to="/overview" className={navLinkClass}>
+                <IconLayoutDashboard size={18} stroke={1.75} />
+                Overview
+              </NavLink>
+            </div>
+          </div>
+
+          <div>
+            <NavGroupHeading>Pre-award</NavGroupHeading>
+            <div className="space-y-0.5">
+              <NavLink to="/tenders" className={navLinkClass}>
+                <IconGavel size={18} stroke={1.75} />
+                Tenders
               </NavLink>
             </div>
           </div>

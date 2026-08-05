@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconHome, IconLayoutDashboard, IconListDetails, IconLogout, IconTable } from '@tabler/icons-react'
+import { IconCalculator, IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconHome, IconListDetails, IconLogout, IconTable } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
@@ -31,16 +31,24 @@ function NavGroupHeading({ children }: { children: React.ReactNode }) {
  * still inside a contract. The name shown here is always plain text, not a
  * control, regardless of how many contracts the seat holds.
  *
+ * "Projects" is this group's nav label, not a schema term — 0009 removed
+ * "project" from the schema vocabulary in favour of Contract, and that
+ * stands everywhere the data itself is named (Items, Approximate Quantity,
+ * everything a Ministry Representative reads). The workspace section label
+ * is allowed to differ from that; nothing below renames the contract itself.
+ *
  * Each link is gated on the specific right that screen needs, per 0008 —
  * no bundled role check standing in for all three. Items needs
  * create_items (nothing useful there without it — the screen would be a
- * bare read-only catalog). Rates needs view_rates alone. Daily Entry needs
+ * bare read-only catalog). Rates and Cost build need view_rates alone (Cost
+ * build is a placeholder today, but its whole subject — a cost buildup — is
+ * finance information behind the same wall as Rates and item_prices'
+ * cost_price everywhere else in this app, so it inherits that gate rather
+ * than reserving a right that doesn't exist yet). Daily Entry needs
  * enter_quantity OR correct_quantity — either one reaches it, with the
- * unavailable half of the form disabled inside. Overview is never gated
- * here: it's reachable by every contract member, same as the Dashboard it
- * replaced — the finance-specific bands inside it hide themselves when the
- * seat lacks view_rates, the same pattern Dashboard used for its finance
- * columns.
+ * unavailable half of the form disabled inside. Overview moved to the
+ * company level (CompanyShell) — see that file's own nav instead; it is no
+ * longer reachable from here.
  *
  * The ADMIN group renders nothing — no heading, no content — while both
  * company-wide rights (profiles.create_projects/manage_members, not
@@ -115,12 +123,8 @@ export function Sidebar() {
             element stop at its flex-basis and scroll its overflow. */}
         <nav className="min-h-0 flex-1 space-y-6 overflow-y-auto px-3" aria-label="Office">
           <div>
-            <NavGroupHeading>Contract</NavGroupHeading>
+            <NavGroupHeading>Projects</NavGroupHeading>
             <div className="space-y-0.5">
-              <NavLink to="/overview" className={navLinkClass}>
-                <IconLayoutDashboard size={18} stroke={1.75} />
-                Overview
-              </NavLink>
               <NavLink to="/tracker" className={navLinkClass}>
                 <IconTable size={18} stroke={1.75} />
                 Tracker
@@ -135,6 +139,12 @@ export function Sidebar() {
                 <NavLink to="/rates" className={navLinkClass}>
                   <IconCurrencyDollar size={18} stroke={1.75} />
                   Rates
+                </NavLink>
+              )}
+              {contract.viewRates && (
+                <NavLink to="/cost-build" className={navLinkClass}>
+                  <IconCalculator size={18} stroke={1.75} />
+                  Cost build
                 </NavLink>
               )}
             </div>
