@@ -88,6 +88,66 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   })
 }
 
+export interface NewContractInput {
+  contractNo: string | null
+  name: string
+  /** GC 52.00's own dates — the Ministry's period, not Keywest's own schedule. Coherent-pair + start<=end enforced by contracts_given_pair_coherent/contracts_given_start_before_end (0016); both null or both set. */
+  contractStart: string | null
+  contractEnd: string | null
+  /** Keywest's own planning dates, distinct from the Ministry period above (0016) — both null or both set (contracts_planned_pair_coherent). */
+  plannedStart: string | null
+  plannedEnd: string | null
+  isSandbox: boolean
+}
+
+/**
+ * create_projects only (company-wide, per contracts_insert_right) —
+ * created_by must be the caller (RLS with_check), never settable to anyone
+ * else. The creator gets create_items on the new contract automatically
+ * (enrol_global_roles(), 0028) — enough to enter its Items in the same
+ * flow — but nothing else; seating them with any other right still goes
+ * through Seat Members like anyone else's.
+ */
+export async function createContract(input: NewContractInput): Promise<MyContract> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not signed in.')
+
+  const { data, error } = await supabase
+    .from('contracts')
+    .insert({
+      contract_no: input.contractNo,
+      contract_name: input.name,
+      contract_start: input.contractStart,
+      contract_end: input.contractEnd,
+      planned_start: input.plannedStart,
+      planned_end: input.plannedEnd,
+      is_sandbox: input.isSandbox,
+      created_by: user.id,
+    })
+    .select('id, contract_name, contract_no, is_sandbox')
+    .single()
+  if (error) throw error
+
+  return {
+    id: data.id,
+    name: data.contract_name,
+    contractNo: data.contract_no,
+    isSandbox: data.is_sandbox,
+    // The creator's own rights on their brand-new contract — create_items
+    // only (see above), everything else false until seated separately.
+    createItems: true,
+    setCost: false,
+    setUnitPrice: false,
+    enterQuantity: false,
+    correctQuantity: false,
+    confirmQuantity: false,
+    viewRates: false,
+    extractReport: false,
+  }
+}
+
 /** The signed-in user's two company-wide rights — see CompanyRights. */
 export async function fetchMyCompanyRights(): Promise<CompanyRights> {
   const {

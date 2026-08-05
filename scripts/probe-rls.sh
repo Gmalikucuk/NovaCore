@@ -14,15 +14,27 @@
 # Five fixtures, seated on the sandbox project (projects.is_sandbox = true)
 # with deliberately narrow, awkward right sets — chosen so every probe below
 # is proving an ABSENCE of a right did something, not just that a
-# convenient bundle of rights happened to work:
+# convenient bundle of rights happened to work. Per-PROJECT rights (below)
+# are unrelated to the two COMPANY-WIDE ones on profiles (create_projects,
+# manage_members, 0011) — noted separately since 0030 added targeted,
+# isolated grants of those to two of the five specifically so neither
+# company-wide right ever has to be proven using readonly, which holds BOTH
+# already (backfilled from global_role = 'owner', 0008) and is therefore
+# useless for isolating either in the Admin surface's own probes (see that
+# section's own comment for why):
 #   quantities     enter_quantity + correct_quantity only      (old field)
+#                  + create_projects company-wide (0030)
 #   full           every per-project right, no company-wide    (old pm)
 #   viewer         view_rates + extract_report only            (old cfo)
-#   readonly       seated, zero rights                         (old owner,
+#                  no company-wide rights
+#   readonly       seated, zero PER-PROJECT rights              (old owner,
 #                                                                repurposed)
+#                  + create_projects AND manage_members company-wide
+#                  (backfilled from global_role = 'owner', not 0030)
 #   correct_only   correct_quantity only, NOT enter_quantity   (new — no old
 #                                                                role could
 #                                                                express this)
+#                  + manage_members company-wide (0030)
 #
 # Re-runs, against the REAL linked Supabase project (never a local stub):
 #   - the finance wall (item_prices has no grant path to a seat lacking
@@ -53,6 +65,20 @@
 #     or "rejected" passes just as well when authentication is silently
 #     broken, which is the failure mode most likely to fool a human skimming
 #     curl output
+#   - Admin: contract creation and member seating (0028/0029/0030/0031) — a seat
+#     without create_projects cannot create a contract by any query shape;
+#     a seat without manage_members cannot seat anyone, read the roster, or
+#     widen its own view of a contract it isn't a member of; a seat WITH
+#     manage_members (correct_only) sees a contract and its member list it
+#     isn't itself a member of, via the two widened SELECT policies; the
+#     contract creator's own enrol_global_roles() grant is exactly
+#     create_items and nothing else (not the seed scripts' all-rights-true
+#     shape); seating a person is a fresh INSERT carrying only the rights
+#     checked, and a single-column right PATCH afterward leaves every other
+#     right on that row untouched; find_profile_by_email rejects a caller
+#     lacking manage_members outright, resolves a real signed-in address
+#     case/whitespace-insensitively, and returns empty (not an error) for an
+#     address with no profiles row
 #
 # Meant to be re-run after every migration that touches a policy or a
 # trigger on quantity_records or project_members — not read once and trusted
@@ -246,7 +272,7 @@ done
 
 QUANTITIES_TOKEN="${QUANTITIES_AUTH%%|*}"; QUANTITIES_ID="${QUANTITIES_AUTH##*|}"
 FULL_TOKEN="${FULL_AUTH%%|*}"; FULL_ID="${FULL_AUTH##*|}"
-VIEWER_TOKEN="${VIEWER_AUTH%%|*}"
+VIEWER_TOKEN="${VIEWER_AUTH%%|*}"; VIEWER_ID="${VIEWER_AUTH##*|}"
 READONLY_TOKEN="${READONLY_AUTH%%|*}"; READONLY_ID="${READONLY_AUTH##*|}"
 CORRECT_ONLY_TOKEN="${CORRECT_ONLY_AUTH%%|*}"; CORRECT_ONLY_ID="${CORRECT_ONLY_AUTH##*|}"
 echo "Signed in: quantities=$QUANTITIES_ID full=$FULL_ID correct_only=$CORRECT_ONLY_ID"
@@ -798,6 +824,178 @@ check "full: cost_price without a matching cost_basis rejected (0023 constraint)
 request GET "item_prices?select=cost_price,cost_basis&item_id=eq.$LUMP_SUM_ITEM_ID" "$QUANTITIES_TOKEN"
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "quantities: Lump Sum Item cost invisible (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
+# Admin: contract creation and member seating (0028/0029/0030/0031) — the new
+# reachable surface. readonly (owner@novacore.test) already holds BOTH
+# company-wide rights but is ALSO auto-enrolled on every contract that has
+# ever existed (global_role holders get view_rates/extract_report the
+# moment ANY contract is created), which confounds exactly the two things
+# worth proving here: "the creator gets create_items and nothing else" and
+# "manage_members sees a contract it isn't a member of". 0030 gave
+# quantities create_projects and correct_only manage_members specifically
+# because neither holds a global_role — clean isolation, not readonly's
+# blanket case.
+#
+# 0031 exists because isolating quantities this way caught a REAL bug in
+# the shipped CreateContractScreen, not just a probe artifact: createContract()
+# (contracts.ts) chains .select() after .insert(), which sends Prefer:
+# return=representation. Postgres checks an INSERT's RETURNING rows against
+# the table's SELECT policy at the moment the row is inserted — BEFORE any
+# AFTER INSERT trigger runs. enrol_global_roles() (the trigger that gives
+# the creator their own create_items) is exactly such a trigger, so a
+# create_projects-only creator with no manage_members and no global_role
+# failed contracts_select_member's is_member(id) check on their own
+# just-created row, every time — a 403 on contract creation itself, for
+# precisely the "holds one right without the other" seat this whole brief
+# exists to support. readonly never surfaces this (has_global_right(
+# 'manage_members') already satisfies the policy regardless of trigger
+# timing); only an isolated create_projects-only fixture like quantities
+# does. 0031 adds `created_by = auth.uid()` as a third OR branch — a
+# creator can always see the row they just made. The two checks below
+# (contract creation succeeding at all, then the exact-match rights check)
+# are what catch a regression back to this if the policy is ever narrowed
+# again.
+# =============================================================================
+echo
+echo "=== Admin: contract creation and member seating (0028/0029/0030/0031) ==="
+
+ADMIN_CONTRACT_ID="ba5eba11-0000-0000-0000-000000000000"
+
+# viewer holds neither company-wide right — the wall for BOTH new actions
+# is the same has_global_right() gate the rest of this suite already
+# proves works everywhere else.
+request POST "contracts" "$VIEWER_TOKEN" \
+  "{\"contract_name\":\"should not be created\",\"created_by\":\"$VIEWER_ID\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer: create a contract rejected (no create_projects)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# quantities creates the fixed-id PROBE-ADMIN contract. Plain INSERT, not
+# an upsert: unlike item_prices/jobs, contracts carries NO general UPDATE
+# grant on contract_name/contract_no/is_sandbox/created_by (by design —
+# 0017's own header notes this gap was deliberately left for "the queued
+# contract-admin UI", and this brief did not open it, since nothing in
+# either screen ever edits an existing contract's own details). An
+# on_conflict=id upsert 403s outright even on a FRESH insert, because
+# Postgres checks UPDATE privilege on every SET-clause column the moment
+# the statement is parsed, before it even knows whether the conflict
+# branch will fire. So: plain POST, and a rerun's 409 (primary-key
+# conflict — the row already exists from a prior run) is treated as
+# success too, re-fetched via GET to confirm its shape rather than assumed.
+request POST "contracts" "$QUANTITIES_TOKEN" \
+  "{\"id\":\"$ADMIN_CONTRACT_ID\",\"contract_name\":\"PROBE-ADMIN — do not use\",\"contract_no\":\"PROBE-ADMIN-0000\",\"is_sandbox\":true,\"created_by\":\"$QUANTITIES_ID\"}"
+ok=0
+if [ "$STATUS" = "201" ]; then
+  sandbox=$(json_field "$BODY_OUT" 0 is_sandbox)
+  [ "$sandbox" = "True" ] || [ "$sandbox" = "true" ] && ok=1
+elif [ "$STATUS" = "409" ]; then
+  request GET "contracts?select=is_sandbox&id=eq.$ADMIN_CONTRACT_ID" "$QUANTITIES_TOKEN"
+  if [ "$STATUS" = "200" ]; then
+    sandbox=$(json_field "$BODY_OUT" 0 is_sandbox)
+    [ "$sandbox" = "True" ] || [ "$sandbox" = "true" ] && ok=1
+  fi
+fi
+check "quantities: create the PROBE-ADMIN sandbox contract (create_projects)" "201 (or 409 on rerun), is_sandbox=true" "$ok" "$STATUS $BODY_OUT"
+
+# enrol_global_roles' new branch (0028): the creator gets create_items and
+# ONLY create_items. quantities holds no global_role, so this row is not
+# also touched by the OTHER branch (which would add view_rates/
+# extract_report for a global_role holder) — an exact-match check, not
+# just "create_items is true", precisely so a future regression back
+# toward the seed scripts' all-rights-true shape would be caught here.
+request GET "contract_members?select=create_items,set_cost,set_unit_price,enter_quantity,correct_quantity,confirm_quantity,view_rates,extract_report&contract_id=eq.$ADMIN_CONTRACT_ID&user_id=eq.$QUANTITIES_ID" "$QUANTITIES_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  exact=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+expected = {
+  'create_items': True, 'set_cost': False, 'set_unit_price': False,
+  'enter_quantity': False, 'correct_quantity': False, 'confirm_quantity': False,
+  'view_rates': False, 'extract_report': False,
+}
+print('1' if len(d) == 1 and d[0] == expected else '0')
+" "$BODY_OUT")
+  [ "$exact" = "1" ] && ok=1
+fi
+check "quantities: creator auto-granted create_items ONLY, not every right" "exact match" "$ok" "$STATUS $BODY_OUT"
+
+# correct_only holds manage_members but has never been added to this
+# contract by anyone — seeing it at all is the widened contracts_select_
+# member (0028) actually doing something, not is_member() coincidentally
+# already covering it (readonly's global_role would have).
+request GET "contracts?select=id&id=eq.$ADMIN_CONTRACT_ID" "$CORRECT_ONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "correct_only: sees PROBE-ADMIN contract despite no membership (manage_members, 0028)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# Same widening one table over (0029) — seeing who's already seated,
+# before seating anyone else, needs contract_members visible too.
+request GET "contract_members?select=user_id&contract_id=eq.$ADMIN_CONTRACT_ID" "$CORRECT_ONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  n=$(json_len "$BODY_OUT")
+  [ "$n" != "-1" ] && [ "$n" -ge 1 ] 2>/dev/null && ok=1
+fi
+check "correct_only: sees PROBE-ADMIN's members despite no membership (manage_members, 0029)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+# viewer holds no manage_members — cannot seat anyone, on this contract or
+# any other.
+request POST "contract_members" "$VIEWER_TOKEN" \
+  "{\"contract_id\":\"$ADMIN_CONTRACT_ID\",\"user_id\":\"$VIEWER_ID\",\"view_rates\":true}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer: seat a member rejected (no manage_members)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# correct_only seats viewer with EXACTLY view_rates true. Plain INSERT, not
+# an upsert: contract_members' own column-scoped UPDATE grant (0017) covers
+# only the nine boolean right columns, not contract_id/user_id — an
+# on_conflict upsert's SET clause includes every submitted column
+# (including the two conflict-target ones), so it 403s for the same reason
+# the contracts upsert above did. A rerun's 409 (already seated from a
+# prior run) is treated as success, re-fetched via GET rather than assumed.
+request POST "contract_members" "$CORRECT_ONLY_TOKEN" \
+  "{\"contract_id\":\"$ADMIN_CONTRACT_ID\",\"user_id\":\"$VIEWER_ID\",\"view_rates\":true}"
+ok=0
+if [ "$STATUS" = "201" ]; then
+  vr=$(json_field "$BODY_OUT" 0 view_rates)
+  [ "$vr" = "True" ] || [ "$vr" = "true" ] && ok=1
+elif [ "$STATUS" = "409" ]; then
+  request GET "contract_members?select=view_rates&contract_id=eq.$ADMIN_CONTRACT_ID&user_id=eq.$VIEWER_ID" "$CORRECT_ONLY_TOKEN"
+  if [ "$STATUS" = "200" ]; then
+    vr=$(json_field "$BODY_OUT" 0 view_rates)
+    [ "$vr" = "True" ] || [ "$vr" = "true" ] && ok=1
+  fi
+fi
+check "correct_only: seat viewer with exactly view_rates (manage_members)" "201 (or 409 on rerun), view_rates=true" "$ok" "$STATUS $BODY_OUT"
+
+# A single-column PATCH adds extract_report WITHOUT disturbing view_rates —
+# the actual "never a wholesale rewrite" property this whole feature exists
+# to guarantee, checked directly: both rights present after touching only
+# one of them.
+request PATCH "contract_members?contract_id=eq.$ADMIN_CONTRACT_ID&user_id=eq.$VIEWER_ID" "$CORRECT_ONLY_TOKEN" '{"extract_report": true}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  vr=$(json_field "$BODY_OUT" 0 view_rates)
+  er=$(json_field "$BODY_OUT" 0 extract_report)
+  [ "$vr" = "True" ] || [ "$vr" = "true" ] && { [ "$er" = "True" ] || [ "$er" = "true" ]; } && ok=1
+fi
+check "correct_only: adding extract_report leaves view_rates untouched (single-column PATCH)" "200, both true" "$ok" "$STATUS $BODY_OUT"
+
+# find_profile_by_email (0028) — same wall, same shape.
+request POST "rpc/find_profile_by_email" "$VIEWER_TOKEN" '{"p_email":"field@novacore.test"}'
+ok=0; case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+check "viewer: find_profile_by_email rejected (no manage_members)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request POST "rpc/find_profile_by_email" "$CORRECT_ONLY_TOKEN" '{"p_email":"field@novacore.test"}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  found_id=$(json_field "$BODY_OUT" 0 id)
+  [ "$found_id" = "$QUANTITIES_ID" ] && ok=1
+fi
+check "correct_only: find_profile_by_email resolves a known address (manage_members)" "200, id=$QUANTITIES_ID" "$ok" "$STATUS $BODY_OUT"
+
+request POST "rpc/find_profile_by_email" "$CORRECT_ONLY_TOKEN" '{"p_email":"nobody-real-probe@keywestasphalt.com"}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "correct_only: find_profile_by_email returns empty, not an error, for no account" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 echo
 echo "=== Preservation, not just denial (rights regression on Hwy 97C) ==="

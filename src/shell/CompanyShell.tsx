@@ -1,4 +1,4 @@
-import { IconDeviceMobile, IconGavel, IconHome, IconLayoutDashboard, IconLogout } from '@tabler/icons-react'
+import { IconDeviceMobile, IconFilePlus, IconGavel, IconHome, IconLayoutDashboard, IconLogout, IconUsersGroup } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
@@ -85,14 +85,27 @@ export function CompanyShell() {
             </div>
           </div>
 
-          {/* Reserved, not built — contract creation and member management
-              are a separate brief. Same gate Sidebar's own placeholder
-              uses (company-wide rights, not a per-contract one), so this
-              slot only shows for someone who could eventually use it. */}
+          {/* Each link gated on the SPECIFIC right it needs, not the OR
+              above — a create_projects-only admin never sees "Seat
+              members" just because the group itself is visible, and vice
+              versa. The brief is explicit: don't conflate the two. */}
           {(companyRights.createProjects || companyRights.manageMembers) && (
             <div>
               <NavGroupHeading>Admin</NavGroupHeading>
-              <p className="px-3 py-2 text-sm text-white/40">Coming soon</p>
+              <div className="space-y-0.5">
+                {companyRights.createProjects && (
+                  <NavLink to="/admin/contracts/new" className={navLinkClass}>
+                    <IconFilePlus size={18} stroke={1.75} />
+                    Create contract
+                  </NavLink>
+                )}
+                {companyRights.manageMembers && (
+                  <NavLink to="/admin/members" className={navLinkClass}>
+                    <IconUsersGroup size={18} stroke={1.75} />
+                    Seat members
+                  </NavLink>
+                )}
+              </div>
             </div>
           )}
         </nav>

@@ -99,6 +99,42 @@ export async function createItem(contractId: string, input: ItemInput): Promise<
   return mapItemRow(data as unknown as RawItemRow)
 }
 
+export interface BulkItemInput {
+  itemNumber: string
+  description: string
+  unit: string
+  itemKind: ItemKind
+  approximateQuantity: number
+}
+
+/**
+ * One statement, every row or none — the Schedule 7 paste-a-block path
+ * (Admin: create contract). A single INSERT with N rows is checked against
+ * items_insert_right (create_items) per row inside the same statement, so a
+ * rejection on any row rejects the whole batch rather than leaving Schedule
+ * 7 partially entered with no clear record of which Items actually landed.
+ */
+export async function bulkCreateItems(contractId: string, inputs: BulkItemInput[]): Promise<Item[]> {
+  const { data, error } = await supabase
+    .from('items')
+    .insert(
+      inputs.map((input) => ({
+        contract_id: contractId,
+        item_number: input.itemNumber,
+        description: input.description,
+        unit: input.unit,
+        item_kind: input.itemKind,
+        approximate_quantity: input.approximateQuantity,
+      })),
+    )
+    .select(ITEM_SELECT)
+  if (error) {
+    if (error.code === '23505') throw new Error('One of these Item numbers is already used on this contract.')
+    throw new Error(error.message)
+  }
+  return (data ?? []).map((row) => mapItemRow(row as unknown as RawItemRow))
+}
+
 /** project_manager only, per RLS (items_update_right). */
 export async function updateItem(id: string, input: ItemInput): Promise<Item> {
   const { data, error } = await supabase

@@ -21,6 +21,8 @@ import { FinanceMonthScreen } from './screens/Finance/FinanceMonthScreen'
 import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
 import { TrackerScreen } from './screens/Tracker/TrackerScreen'
 import { TrackerItemScreen } from './screens/Tracker/TrackerItemScreen'
+import { CreateContractScreen } from './screens/Admin/CreateContractScreen'
+import { SeatMembersScreen } from './screens/Admin/SeatMembersScreen'
 
 /**
  * Overview now lives at the company level (CompanyShell), but its own
@@ -129,6 +131,26 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <TendersScreen />
+                  </ErrorBoundary>
+                }
+              />
+              {/* Admin — contract creation and member seating. Both screens
+                  gate themselves on their own specific company-wide right
+                  (create_projects / manage_members respectively); the
+                  routes themselves aren't gated a second time here. */}
+              <Route
+                path="/admin/contracts/new"
+                element={
+                  <ErrorBoundary>
+                    <CreateContractScreen />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/admin/members"
+                element={
+                  <ErrorBoundary>
+                    <SeatMembersScreen />
                   </ErrorBoundary>
                 }
               />

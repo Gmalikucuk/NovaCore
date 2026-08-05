@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { IconCalculator, IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconHome, IconListDetails, IconLogout, IconTable } from '@tabler/icons-react'
+import { IconCalculator, IconCalendarPlus, IconClipboardCheck, IconCurrencyDollar, IconDeviceMobile, IconFilePlus, IconHome, IconListDetails, IconLogout, IconTable, IconUsersGroup } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
 import type { CurrentContractState } from '../lib/useCurrentContract'
 import { useViewMode } from '../lib/useViewMode'
@@ -169,15 +169,29 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Reserved, not built — contract creation and member management
-              have no screens yet (a separate task). Gated on the rights so
-              the slot only appears for someone who could eventually use it,
-              but there is nowhere to link to yet, so it shows a
-              placeholder rather than a route that would 404. */}
+          {/* Company-wide rights (profiles), not per-contract — reachable
+              from inside a single contract's own nav too, since an admin
+              deep in one contract's screens shouldn't have to leave to
+              company level just to seat someone elsewhere. Each link
+              gated on its own specific right, same as CompanyShell's copy
+              of this group. */}
           {(companyRights.createProjects || companyRights.manageMembers) && (
             <div>
               <NavGroupHeading>Admin</NavGroupHeading>
-              <p className="px-3 py-2 text-sm text-white/40">Coming soon</p>
+              <div className="space-y-0.5">
+                {companyRights.createProjects && (
+                  <NavLink to="/admin/contracts/new" className={navLinkClass}>
+                    <IconFilePlus size={18} stroke={1.75} />
+                    Create contract
+                  </NavLink>
+                )}
+                {companyRights.manageMembers && (
+                  <NavLink to="/admin/members" className={navLinkClass}>
+                    <IconUsersGroup size={18} stroke={1.75} />
+                    Seat members
+                  </NavLink>
+                )}
+              </div>
             </div>
           )}
         </nav>
