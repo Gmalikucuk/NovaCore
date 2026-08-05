@@ -424,43 +424,65 @@ export function RatesScreen() {
                               )}
                             </TD>
                             <TD align="right" dense className="align-middle">
-                              <div className="flex items-center justify-end gap-1.5">
+                              {/* Visibility is driven by focus anywhere in
+                                  this GROUP, not by focus on the cost input
+                                  specifically — that was the bug (713d0e2's
+                                  basis picker used input-focus alone, so
+                                  clicking the select blurred the input,
+                                  the control's visibility condition flipped
+                                  false, and it unmounted out from under the
+                                  click before it could land). blur only
+                                  counts as "left the group" when relatedTarget
+                                  isn't a child of this div — a focus move
+                                  between the input and the select never
+                                  reaches that branch. The basis-control slot
+                                  is a fixed width always, rendered or not, so
+                                  this row's own Est. cost column never
+                                  changes its natural width as focus comes
+                                  and goes — that width feeds the whole
+                                  column's auto-layout, and letting it change
+                                  was what pushed Unit Price out of alignment
+                                  on whichever row currently had focus. */}
+                              <div
+                                className="flex items-center justify-end gap-1.5"
+                                onFocus={() => setFocusedCostId(row.item.id)}
+                                onBlur={(e) => {
+                                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                                  setFocusedCostId(null)
+                                  void commitRate(row.item, 'cost')
+                                }}
+                              >
                                 <Input
                                   className={`nc-numeric text-right ${costFailed !== undefined ? 'border-nc-danger-text' : ''}`}
                                   style={{ width: 110 }}
                                   data-cell={`${i}-cost`}
-                                  tabIndex={i + 1}
+                                  tabIndex={i * 2 + 1}
                                   inputMode="decimal"
                                   value={draft.cost}
                                   readOnly={!canEdit}
                                   onChange={(e) => updateDraft(row.item.id, 'cost', e.target.value)}
-                                  onFocus={() => setFocusedCostId(row.item.id)}
-                                  onBlur={() => {
-                                    setFocusedCostId(null)
-                                    void commitRate(row.item, 'cost')
-                                  }}
                                   onKeyDown={(e) => handleKeyDown(e, row.item, 'cost', i)}
                                 />
-                                {row.unitPriced ? (
-                                  showBasisControl && (
-                                    <Select
-                                      aria-label={`${row.item.itemNumber} cost basis`}
-                                      style={{ width: 80 }}
-                                      className="py-1 text-xs"
-                                      tabIndex={-1}
-                                      value={draft.costBasis}
-                                      disabled={!canEdit}
-                                      onFocus={() => setFocusedCostId(row.item.id)}
-                                      onBlur={() => setFocusedCostId(null)}
-                                      onChange={(e) => void changeBasis(row.item, e.target.value as CostBasis)}
-                                    >
-                                      <option value="per_unit">/unit</option>
-                                      <option value="total">total</option>
-                                    </Select>
-                                  )
-                                ) : (
-                                  <span className="text-xs text-nc-text-muted">total</span>
-                                )}
+                                <div style={{ width: 100 }} className="shrink-0">
+                                  {row.unitPriced ? (
+                                    showBasisControl && (
+                                      <Select
+                                        aria-label={`${row.item.itemNumber} cost basis`}
+                                        style={{ width: 100 }}
+                                        className="py-1 text-xs"
+                                        tabIndex={i * 2 + 2}
+                                        value={draft.costBasis}
+                                        disabled={!canEdit}
+                                        onChange={(e) => void changeBasis(row.item, e.target.value as CostBasis)}
+                                      >
+                                        <option value="per_unit">per unit</option>
+                                        <option value="total">total</option>
+                                      </Select>
+                                    )
+                                  ) : (
+                                    <span className="text-xs text-nc-text-muted">total</span>
+                                  )}
+                                </div>
                                 {row.derivedPerUnit !== null && (
                                   <span className="nc-numeric whitespace-nowrap text-xs text-nc-text-muted">≈ {money(row.derivedPerUnit)}/unit</span>
                                 )}
@@ -472,7 +494,7 @@ export function RatesScreen() {
                                   className={`nc-numeric text-right ${unitPriceFailed !== undefined ? 'border-nc-danger-text' : ''}`}
                                   style={{ width: 130 }}
                                   data-cell={`${i}-unitPrice`}
-                                  tabIndex={rows.length + i + 1}
+                                  tabIndex={rows.length * 2 + i + 1}
                                   inputMode="decimal"
                                   value={draft.unitPrice}
                                   readOnly={!canEdit}
