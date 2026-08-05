@@ -25,6 +25,14 @@ Copy `scripts/.env.probe.example` to `.env.probe` and fill in the five fixture p
 
 **A seed script's own upserted columns are not safe to correct in the database alone.** `seed_hwy5_contract.sql`'s Items `insert` is `on conflict (contract_id, item_number) do update` on six columns — description, unit, approximate_quantity, item_kind, provisional_sum, dfpa_category. A fix applied directly to the database (by hand, or via a future admin UI) for any of those six, on any Item, is silently reverted the next time this file is rerun for any reason — including a rerun with nothing to do with that Item, e.g. picking up an unrelated new column from a later migration. The seed file's own hardcoded `values (...)` list is the actual source of truth for those six columns on Hwy 5, not the live database. Found auditing Hwy 5's 48 seeded Items against the real Schedule 7 tender document (04.06.05's Job assignment and 04.07.02's deliberate typo correction) — the fix belongs in the `.sql` source first, same file, same commit as whatever prompted it.
 
+## Verifying against real data
+
+**Live verification that writes anything runs against the sandbox contract, never a real one.** Hwy 97C Pennask Summit Resurfacing (`26914-0000`, `contracts.is_sandbox = true`) exists for exactly this — entirely fictional, seeded and re-seeded idempotently by `seed_demo_contract.sql`, safe to write to, confirm, and rerun against freely. Every other contract — Hwy 5 Snowshed Hill included — is **read-only for verification purposes**: look, click through, inspect, but don't submit a form, confirm a record, or otherwise write, on a real contract while checking that a feature works, even when it'll be reverted afterward.
+
+The reason is structural, not a matter of care. `quantity_records` is append-only once a row is confirmed (0021/0022) — there is no un-confirm, by design. A mistaken write to a real contract can't be undone, only superseded, and the correction leaves permanent history describing work nobody actually did. `scripts/probe-rls.sh` already gets the discovery half of this right: it finds its target project via `is_sandbox = true`, never a hardcoded contract id, precisely so a probe run can't land a row on a real contract by accident. Extend the same discipline to manual/agent-driven browser verification, which has no such built-in guard.
+
+Where a check genuinely can't be done on the sandbox — a rights regression tied to one specific real seat, for instance — say so *before* running it, not after.
+
 ## Stack
 
 - `vite-plugin-pwa` — installable, offline-capable (service worker + manifest)
