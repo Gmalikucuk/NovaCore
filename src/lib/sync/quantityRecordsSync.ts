@@ -1,6 +1,6 @@
 import { db, type QueuedQuantityRecord } from '../db'
 import { errorMessage } from '../errorMessage'
-import { fetchContractQuantityRecords, pushQuantityRecord } from '../supabase/quantityRecords'
+import { fetchContractQuantityRecords, pushQuantityRecord, type Direction } from '../supabase/quantityRecords'
 
 /**
  * quantity_records is append-only, same reasoning as the archived build's
@@ -38,6 +38,11 @@ export async function enqueueQuantityRecord(entry: {
   deviceId: string | null
   stationFrom: number | null
   stationTo: number | null
+  direction: Direction | null
+  lkiSegment: number | null
+  lkiVersion: number | null
+  averageWidth: number | null
+  area: number | null
 }): Promise<void> {
   await db.quantityRecords.put({
     id: entry.id,
@@ -61,6 +66,11 @@ export async function enqueueQuantityRecord(entry: {
     syncedAt: null,
     stationFrom: entry.stationFrom,
     stationTo: entry.stationTo,
+    direction: entry.direction,
+    lkiSegment: entry.lkiSegment,
+    lkiVersion: entry.lkiVersion,
+    averageWidth: entry.averageWidth,
+    area: entry.area,
     // Matches the server column's own default (0022) — a brand-new row has
     // never been edited yet.
     version: 1,

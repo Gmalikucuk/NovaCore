@@ -3,19 +3,40 @@ import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom
 import { IconCalendarPlus } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
-import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
-import { confirmQuantityRecord, fetchContractQuantityRecords, fetchDistinctLocations, pushQuantityRecord, StaleQuantityRecordError, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
+import { fetchItems, isApplicationRateItem, isAreaUnit, isUnitPriceItem, type Item } from '../../lib/supabase/items'
+import {
+  confirmQuantityRecord,
+  DIRECTIONS,
+  fetchContractQuantityRecords,
+  fetchDistinctLocations,
+  pushQuantityRecord,
+  StaleQuantityRecordError,
+  updateQuantityRecordDraft,
+  type Direction,
+} from '../../lib/supabase/quantityRecords'
 import { fetchItemMonths, fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { formatDayLabel, todayLocalDateString } from '../../lib/dateFormat'
 import { parseStation, quantity as fmtQuantity, station } from '../../lib/format'
-import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, StatusBadge, Spinner } from '../../components/ui'
+import { areaDifference, computeAreaFromWidth } from '../../lib/calculations/stretch'
+import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, StatusBadge, Spinner } from '../../components/ui'
 
 type DayRecord = Omit<QueuedQuantityRecord, 'pending' | 'lastError'>
 
-const BLANK = { location: '', stationFrom: '', stationTo: '', quantity: '', note: '' }
+const BLANK = {
+  location: '',
+  stationFrom: '',
+  stationTo: '',
+  quantity: '',
+  note: '',
+  direction: '' as Direction | '',
+  lkiSegment: '',
+  lkiVersion: '',
+  averageWidth: '',
+  area: '',
+}
 
 const LOCATIONS_LIST_ID = 'daily-entry-locations'
 
@@ -55,6 +76,12 @@ export function QuantityRecordsScreen() {
   const [correctingId, setCorrectingId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [fields, setFields] = useState(BLANK)
+  // See EntryScreen's own copy of this same flag for the full reasoning —
+  // true once the person has typed into the area-ish field themselves (for
+  // an Item whose own quantity IS area, that's the quantity field), or on
+  // prefill for a correction/edit (an existing record's figure is already
+  // the record of truth).
+  const [areaFieldTouched, setAreaFieldTouched] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
@@ -191,12 +218,43 @@ export function QuantityRecordsScreen() {
     return to - from
   }, [fields.stationFrom, fields.stationTo])
 
+  // See EntryScreen's own copy of this same logic for the full reasoning —
+  // a Square-Metre Item's quantity IS its area (no separate area field);
+  // isApplicationRateItem is the narrower Tonne subset actually applied
+  // over a stretch, as opposed to aggregate simply supplied/stockpiled.
+  const areaUnit = formItem ? isAreaUnit(formItem.unit) : false
+  const applicationRate = formItem ? isApplicationRateItem(formItem) : false
+  const showStretchFields = areaUnit || applicationRate
+
+  const parsedStationFromForArea = useMemo(() => (fields.stationFrom === '' ? null : parseStation(fields.stationFrom)), [fields.stationFrom])
+  const parsedStationToForArea = useMemo(() => (fields.stationTo === '' ? null : parseStation(fields.stationTo)), [fields.stationTo])
+  const widthNum = fields.averageWidth === '' ? null : Number(fields.averageWidth)
+  const computedArea = useMemo(
+    () => computeAreaFromWidth(widthNum !== null && !Number.isNaN(widthNum) ? widthNum : null, parsedStationFromForArea, parsedStationToForArea),
+    [widthNum, parsedStationFromForArea, parsedStationToForArea],
+  )
+
+  // The convenience-fill: while untouched, the area-ish field tracks
+  // width x reach live; the instant the person types into it directly, this
+  // stops — their figure is accepted as recorded, never silently
+  // overwritten by a later width or station change.
+  useEffect(() => {
+    if (!showStretchFields || areaFieldTouched || computedArea === null) return
+    const str = computedArea.toFixed(2)
+    setFields((f) => (areaUnit ? { ...f, quantity: str } : { ...f, area: str }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computedArea, showStretchFields, areaFieldTouched, areaUnit])
+
+  const enteredAreaIsh = areaUnit ? (fields.quantity === '' ? null : Number(fields.quantity)) : fields.area === '' ? null : Number(fields.area)
+  const areaDiff = areaDifference(enteredAreaIsh !== null && !Number.isNaN(enteredAreaIsh) ? enteredAreaIsh : null, computedArea)
+
   function openAdd() {
     setPanelOpen(true)
     setFormItem(null)
     setCorrectingId(null)
     setEditingId(null)
     setFields(BLANK)
+    setAreaFieldTouched(false)
     setFormError(null)
     setPickerSearch('')
     requestAnimationFrame(() => pickerSearchRef.current?.focus())
@@ -205,6 +263,7 @@ export function QuantityRecordsScreen() {
   function pickItemForAdd(item: Item) {
     setFormItem(item)
     setFields(BLANK)
+    setAreaFieldTouched(false)
     setCorrectingId(null)
     setEditingId(null)
     setFormError(null)
@@ -217,6 +276,7 @@ export function QuantityRecordsScreen() {
     setCorrectingId(null)
     setEditingId(null)
     setFields(BLANK)
+    setAreaFieldTouched(false)
     setFormError(null)
   }
 
@@ -235,7 +295,16 @@ export function QuantityRecordsScreen() {
       stationTo: record.stationTo !== null ? String(record.stationTo) : '',
       quantity: String(record.quantity),
       note: record.note ?? '',
+      direction: record.direction ?? '',
+      lkiSegment: record.lkiSegment !== null ? String(record.lkiSegment) : '',
+      lkiVersion: record.lkiVersion !== null ? String(record.lkiVersion) : '',
+      averageWidth: record.averageWidth !== null ? String(record.averageWidth) : '',
+      area: record.area !== null ? String(record.area) : '',
     })
+    // The record being corrected already has its own figure — never
+    // silently recomputed just because a width and stations happen to be
+    // present on it.
+    setAreaFieldTouched(true)
     setFormError(null)
     requestAnimationFrame(() => stationFromRef.current?.focus())
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -257,7 +326,13 @@ export function QuantityRecordsScreen() {
       stationTo: record.stationTo !== null ? String(record.stationTo) : '',
       quantity: String(record.quantity),
       note: record.note ?? '',
+      direction: record.direction ?? '',
+      lkiSegment: record.lkiSegment !== null ? String(record.lkiSegment) : '',
+      lkiVersion: record.lkiVersion !== null ? String(record.lkiVersion) : '',
+      averageWidth: record.averageWidth !== null ? String(record.averageWidth) : '',
+      area: record.area !== null ? String(record.area) : '',
     })
+    setAreaFieldTouched(true)
     setFormError(null)
     requestAnimationFrame(() => stationFromRef.current?.focus())
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -330,6 +405,33 @@ export function QuantityRecordsScreen() {
         return
       }
     }
+    const lkiSegmentNum = fields.lkiSegment === '' ? null : Number(fields.lkiSegment)
+    if (fields.lkiSegment !== '' && (lkiSegmentNum === null || Number.isNaN(lkiSegmentNum) || lkiSegmentNum <= 0)) {
+      setFormError('LKI segment is not a valid number.')
+      return
+    }
+    const lkiVersionNum = fields.lkiVersion === '' ? null : Number(fields.lkiVersion)
+    if (fields.lkiVersion !== '' && (lkiVersionNum === null || Number.isNaN(lkiVersionNum) || lkiVersionNum <= 0)) {
+      setFormError('LKI version is not a valid number.')
+      return
+    }
+    if (lkiVersionNum !== null && lkiSegmentNum === null) {
+      setFormError('LKI version needs an LKI segment — a version means nothing without knowing which segment it versions.')
+      return
+    }
+    const averageWidthNum = fields.averageWidth === '' ? null : Number(fields.averageWidth)
+    if (fields.averageWidth !== '' && (averageWidthNum === null || Number.isNaN(averageWidthNum) || averageWidthNum < 0)) {
+      setFormError('Average width is not a valid number.')
+      return
+    }
+    // area is only ever a real, separate field for a non-Square-Metre
+    // application-rate Item — for an area Item, the "area" figure IS
+    // quantity (already validated above), and this stays null.
+    const areaNum = !areaUnit && fields.area !== '' ? Number(fields.area) : null
+    if (!areaUnit && fields.area !== '' && (areaNum === null || Number.isNaN(areaNum) || areaNum < 0)) {
+      setFormError('Area is not a valid number.')
+      return
+    }
 
     setSubmitting(true)
     try {
@@ -345,6 +447,11 @@ export function QuantityRecordsScreen() {
           note: fields.note.trim() || null,
           stationFrom: from,
           stationTo: to,
+          direction: fields.direction === '' ? null : fields.direction,
+          lkiSegment: lkiSegmentNum,
+          lkiVersion: lkiVersionNum,
+          averageWidth: averageWidthNum,
+          area: areaNum,
         })
         closePanel()
         refreshSilently()
@@ -367,6 +474,11 @@ export function QuantityRecordsScreen() {
           syncedAt: new Date().toISOString(),
           stationFrom: from,
           stationTo: to,
+          direction: fields.direction === '' ? null : fields.direction,
+          lkiSegment: lkiSegmentNum,
+          lkiVersion: lkiVersionNum,
+          averageWidth: averageWidthNum,
+          area: areaNum,
           // Matches the server column's own default (0022) — pushQuantityRecord
           // doesn't send this to the server; the row's real version is read
           // back from the server response instead.
@@ -377,6 +489,7 @@ export function QuantityRecordsScreen() {
         // Item in a row, and reopening the picker each time would undo the
         // whole point of inverting this screen.
         setFields(BLANK)
+        setAreaFieldTouched(false)
         setCorrectingId(null)
         stationFromRef.current?.focus()
         refreshSilently()
@@ -537,6 +650,7 @@ export function QuantityRecordsScreen() {
                             onClick={() => {
                               setCorrectingId(null)
                               setFields(BLANK)
+                              setAreaFieldTouched(false)
                             }}
                           >
                             Cancel correction
@@ -563,6 +677,56 @@ export function QuantityRecordsScreen() {
                             list={LOCATIONS_LIST_ID}
                             value={fields.location}
                             onChange={(e) => setFields({ ...fields, location: e.target.value })}
+                            onKeyDown={handleFormKeyDown}
+                            disabled={!formUsable}
+                          />
+                        </div>
+                        <div className="w-24">
+                          <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-direction">
+                            Direction
+                          </label>
+                          <Select
+                            id="de-direction"
+                            value={fields.direction}
+                            onChange={(e) => setFields({ ...fields, direction: e.target.value as Direction | '' })}
+                            disabled={!formUsable}
+                          >
+                            <option value="">—</option>
+                            {DIRECTIONS.map((d) => (
+                              <option key={d} value={d}>
+                                {d}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <div className="w-24">
+                          <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-lki-segment">
+                            LKI segment
+                          </label>
+                          <Input
+                            id="de-lki-segment"
+                            className="nc-numeric"
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="2090"
+                            value={fields.lkiSegment}
+                            onChange={(e) => setFields({ ...fields, lkiSegment: e.target.value })}
+                            onKeyDown={handleFormKeyDown}
+                            disabled={!formUsable}
+                          />
+                        </div>
+                        <div className="w-24">
+                          <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-lki-version">
+                            LKI version
+                          </label>
+                          <Input
+                            id="de-lki-version"
+                            className="nc-numeric"
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="1"
+                            value={fields.lkiVersion}
+                            onChange={(e) => setFields({ ...fields, lkiVersion: e.target.value })}
                             onKeyDown={handleFormKeyDown}
                             disabled={!formUsable}
                           />
@@ -604,6 +768,44 @@ export function QuantityRecordsScreen() {
                           <p className="mb-1 text-xs text-nc-text-muted">Reach</p>
                           <p className="nc-numeric px-3 py-2 text-sm text-nc-text-muted">{reachMetres !== null ? station(reachMetres) : '—'}</p>
                         </div>
+                        {showStretchFields && (
+                          <div className="w-28">
+                            <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-average-width">
+                              Avg width (m)
+                            </label>
+                            <Input
+                              id="de-average-width"
+                              className="nc-numeric"
+                              type="text"
+                              inputMode="decimal"
+                              placeholder="5.50"
+                              value={fields.averageWidth}
+                              onChange={(e) => setFields({ ...fields, averageWidth: e.target.value })}
+                              onKeyDown={handleFormKeyDown}
+                              disabled={!formUsable}
+                            />
+                          </div>
+                        )}
+                        {applicationRate && (
+                          <div className="w-28">
+                            <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-area">
+                              Area (m²)
+                            </label>
+                            <Input
+                              id="de-area"
+                              className="nc-numeric"
+                              type="text"
+                              inputMode="decimal"
+                              value={fields.area}
+                              onChange={(e) => {
+                                setAreaFieldTouched(true)
+                                setFields({ ...fields, area: e.target.value })
+                              }}
+                              onKeyDown={handleFormKeyDown}
+                              disabled={!formUsable}
+                            />
+                          </div>
+                        )}
                         <div className="w-28">
                           <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-quantity">
                             Quantity{formItem ? ` (${formItem.unit})` : ''}
@@ -614,11 +816,24 @@ export function QuantityRecordsScreen() {
                             type="number"
                             step="0.01"
                             value={fields.quantity}
-                            onChange={(e) => setFields({ ...fields, quantity: e.target.value })}
+                            onChange={(e) => {
+                              if (areaUnit) setAreaFieldTouched(true)
+                              setFields({ ...fields, quantity: e.target.value })
+                            }}
                             onKeyDown={handleFormKeyDown}
                             disabled={!formUsable}
                           />
+                          {areaUnit && <p className="mt-1 w-40 text-xs text-nc-text-subtle">This Item's quantity is its area.</p>}
                         </div>
+                        {showStretchFields && areaDiff !== null && areaDiff !== 0 && (
+                          // Never an alarm tone — a difference here can
+                          // legitimately mean the field sheet's own measured
+                          // figure, which supersedes the calculation by
+                          // standing rule on this contract, not an error.
+                          <p className="w-full text-xs text-nc-text-muted">
+                            {areaUnit ? 'Quantity' : 'Area'} is {fmtQuantity(Math.abs(areaDiff))} m² {areaDiff > 0 ? 'more' : 'less'} than width × reach ({fmtQuantity(computedArea)} m²).
+                          </p>
+                        )}
                         <div className="min-w-[200px] flex-1">
                           <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-note">
                             Note

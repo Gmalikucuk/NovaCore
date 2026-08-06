@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
+import type { Direction } from './supabase/quantityRecords'
 
 /**
  * Local, offline-first store for quantity_records. Mirrors the server table
@@ -36,6 +37,16 @@ export interface QueuedQuantityRecord {
   stationTo: number | null
   /** Bumped server-side on every real draft edit (0022). Read back before confirming — confirm_quantity_record() requires this to match the row's CURRENT version, atomically, or it refuses rather than silently confirming an edit nobody saw. */
   version: number
+  /** NBL/SBL/EBL/WBL — null for point work and named locations with no meaningful direction. */
+  direction: Direction | null
+  /** The Landmark Kilometre Inventory segment a station is only unique within. Null on historical records. */
+  lkiSegment: number | null
+  /** The version MoTT reissued lkiSegment under. Requires lkiSegment to be set. */
+  lkiVersion: number | null
+  /** One average width per stretch, metres — null where width is meaningless (point work, intersections, count-measured Items). */
+  averageWidth: number | null
+  /** The field-measured area in m², entered directly when it disagrees with (or was never computed from) averageWidth times the station reach — the field sheet supersedes the calculation, permanently. Null for Square-Metre Items, where quantity already is the area. */
+  area: number | null
   /** Local-only: true until this row has been successfully pushed to (or confirmed already present on) the server. */
   pending: boolean
   lastError: string | null

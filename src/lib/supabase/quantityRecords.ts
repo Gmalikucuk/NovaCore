@@ -1,6 +1,10 @@
 import { supabase } from './client'
 import type { QueuedQuantityRecord } from '../db'
 
+/** A constrained set, not free text — feeds generated documents (the daily report to the Ministry states direction in every paragraph). Nothing beyond these four was found in use on any contract before this was added. */
+export const DIRECTIONS = ['NBL', 'SBL', 'EBL', 'WBL'] as const
+export type Direction = (typeof DIRECTIONS)[number]
+
 interface RawQuantityRecordRow {
   id: string
   contract_id: string
@@ -20,10 +24,15 @@ interface RawQuantityRecordRow {
   station_from: string | null
   station_to: string | null
   version: number
+  direction: Direction | null
+  lki_segment: number | null
+  lki_version: number | null
+  average_width: string | null
+  area: string | null
 }
 
 const QUANTITY_RECORD_SELECT =
-  'id, contract_id, item_id, work_date, location, quantity, note, status, supersedes, confirmed_by, confirmed_at, created_by, device_id, created_at, synced_at, station_from, station_to, version'
+  'id, contract_id, item_id, work_date, location, quantity, note, status, supersedes, confirmed_by, confirmed_at, created_by, device_id, created_at, synced_at, station_from, station_to, version, direction, lki_segment, lki_version, average_width, area'
 
 function mapQuantityRecordRow(row: RawQuantityRecordRow): Omit<QueuedQuantityRecord, 'pending' | 'lastError'> {
   return {
@@ -45,6 +54,11 @@ function mapQuantityRecordRow(row: RawQuantityRecordRow): Omit<QueuedQuantityRec
     stationFrom: row.station_from === null ? null : Number(row.station_from),
     stationTo: row.station_to === null ? null : Number(row.station_to),
     version: row.version,
+    direction: row.direction,
+    lkiSegment: row.lki_segment,
+    lkiVersion: row.lki_version,
+    averageWidth: row.average_width === null ? null : Number(row.average_width),
+    area: row.area === null ? null : Number(row.area),
   }
 }
 
@@ -133,6 +147,11 @@ export async function pushQuantityRecord(
         device_id: entry.deviceId,
         station_from: entry.stationFrom,
         station_to: entry.stationTo,
+        direction: entry.direction,
+        lki_segment: entry.lkiSegment,
+        lki_version: entry.lkiVersion,
+        average_width: entry.averageWidth,
+        area: entry.area,
       },
       { onConflict: 'id', ignoreDuplicates: true },
     )
@@ -181,6 +200,11 @@ export interface QuantityRecordDraftEdit {
   note: string | null
   stationFrom: number | null
   stationTo: number | null
+  direction: Direction | null
+  lkiSegment: number | null
+  lkiVersion: number | null
+  averageWidth: number | null
+  area: number | null
 }
 
 /**
@@ -205,6 +229,11 @@ export async function updateQuantityRecordDraft(id: string, fields: QuantityReco
       note: fields.note,
       station_from: fields.stationFrom,
       station_to: fields.stationTo,
+      direction: fields.direction,
+      lki_segment: fields.lkiSegment,
+      lki_version: fields.lkiVersion,
+      average_width: fields.averageWidth,
+      area: fields.area,
     })
     .eq('id', id)
   if (error) throw error

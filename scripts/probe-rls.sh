@@ -1190,6 +1190,70 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "readonly: edit a draft rejected (no enter_quantity)" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# direction/LKI/average_width/area — the five columns added on top of
+# draft-editing/append-only/witnessed-version. Not new mechanisms, the SAME
+# ones proven above, re-run against fields that didn't exist when those
+# mechanisms were first built — the exact risk flagged before writing that
+# migration: a column left out of guard_entry_transitions()'s row(...) lists
+# would be silently unprotected regardless of how solid the six original
+# columns' coverage is.
+# =============================================================================
+echo
+echo "=== direction/LKI/average_width/area — new columns share the existing guards, not exempt from them ==="
+
+# A record with all five entirely absent must still insert — nothing here
+# may ever block entry of a record that lacks them (historical records,
+# point work, count-measured Items).
+BARE_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+request POST "quantity_records" "$FULL_TOKEN" \
+  "{\"id\":\"$BARE_ID\",\"contract_id\":\"$PROJECT_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"work_date\":\"2026-08-02\",\"quantity\":1,\"created_by\":\"$FULL_ID\",\"device_id\":\"probe-rls\"}"
+ok=0; [ "$STATUS" = "201" ] && ok=1
+check "full: insert with direction/LKI/width/area all absent still succeeds" "201" "$ok" "$STATUS $BODY_OUT"
+
+# quantity_records_lki_pair — a version without a segment means nothing
+# (which segment does it version?), same asymmetric shape as station_pair's
+# own "a to needs a from."
+LKI_BAD_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+request POST "quantity_records" "$FULL_TOKEN" \
+  "{\"id\":\"$LKI_BAD_ID\",\"contract_id\":\"$PROJECT_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"work_date\":\"2026-08-02\",\"quantity\":1,\"lki_version\":2,\"created_by\":\"$FULL_ID\",\"device_id\":\"probe-rls\"}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+check "full: lki_version without lki_segment rejected (quantity_records_lki_pair)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# A draft edit touching ONLY a new field (no change to any of the original
+# six) must still bump version — proving all five new columns are actually
+# wired into guard_entry_transitions()'s row(...) comparison, not just the
+# pre-existing set.
+NEW_FIELD_DRAFT_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+request POST "quantity_records" "$FULL_TOKEN" \
+  "{\"id\":\"$NEW_FIELD_DRAFT_ID\",\"contract_id\":\"$PROJECT_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"work_date\":\"2026-08-02\",\"quantity\":1,\"created_by\":\"$FULL_ID\",\"device_id\":\"probe-rls\"}"
+NEW_FIELD_DRAFT_VERSION_BEFORE=$(json_field "$BODY_OUT" 0 version)
+
+request PATCH "quantity_records?id=eq.$NEW_FIELD_DRAFT_ID" "$QUANTITIES_TOKEN" '{"direction": "NBL", "lki_segment": 2090, "lki_version": 1, "average_width": 5.5, "area": 15345}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  v=$(json_field "$BODY_OUT" 0 version)
+  dir=$(json_field "$BODY_OUT" 0 direction)
+  [ "$v" -gt "$NEW_FIELD_DRAFT_VERSION_BEFORE" ] 2>/dev/null && [ "$dir" = "NBL" ] && ok=1
+fi
+check "quantities: draft edit touching ONLY new fields still bumps version" "200, version incremented, direction=NBL" "$ok" "$STATUS $BODY_OUT"
+
+# Confirm it, then confirm the new fields are just as append-only as the
+# original six — matches 0 rows via RLS, same shape as every other confirmed-
+# row-edit-attempt in this suite (0022 removed the applicable policy
+# entirely; there's no route left for PostgREST to even reach the trigger).
+request GET "quantity_records?select=version&id=eq.$NEW_FIELD_DRAFT_ID" "$FULL_TOKEN"
+NEW_FIELD_DRAFT_VERSION=$(json_field "$BODY_OUT" 0 version)
+request POST "rpc/confirm_quantity_record" "$FULL_TOKEN" \
+  "{\"p_id\":\"$NEW_FIELD_DRAFT_ID\",\"p_expected_version\":$NEW_FIELD_DRAFT_VERSION}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(obj_field "$BODY_OUT" status)" = "confirmed" ] && ok=1
+check "full: confirm the new-fields draft" "200, status=confirmed" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "quantity_records?id=eq.$NEW_FIELD_DRAFT_ID" "$FULL_TOKEN" '{"average_width": 6.0}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "full: average_width edit on confirmed entry matches 0 rows — append-only covers the new columns too" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # Confirmation requires a witnessed version (0022). SHARED_DRAFT_ID has been
 # edited once already (quantity -> 51 above), so its version has moved past
 # 1 — confirming with the version from BEFORE that edit must be rejected as

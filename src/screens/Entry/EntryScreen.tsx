@@ -6,14 +6,15 @@ import { useSession } from '../../lib/useSession'
 import { useLiveQuery } from '../../lib/sync/useLiveQuery'
 import { db, type QueuedQuantityRecord } from '../../lib/db'
 import { enqueueQuantityRecord, importServerQuantityRecords, registerSyncListeners, syncQueuedQuantityRecords } from '../../lib/sync/quantityRecordsSync'
-import { confirmQuantityRecord, fetchDistinctLocations, StaleQuantityRecordError, updateQuantityRecordDraft } from '../../lib/supabase/quantityRecords'
-import { fetchItems, isUnitPriceItem, type Item } from '../../lib/supabase/items'
+import { confirmQuantityRecord, DIRECTIONS, fetchDistinctLocations, StaleQuantityRecordError, updateQuantityRecordDraft, type Direction } from '../../lib/supabase/quantityRecords'
+import { fetchItems, isApplicationRateItem, isAreaUnit, isUnitPriceItem, type Item } from '../../lib/supabase/items'
 import { fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { formatDayLabel, todayLocalDateString } from '../../lib/dateFormat'
+import { areaDifference, computeAreaFromWidth } from '../../lib/calculations/stretch'
 import { ChainageStrip, type ChainageEntry } from '../../components/ChainageStrip'
-import { Button, EmptyState, Input, NotificationBanner, StatusBadge, Textarea } from '../../components/ui'
+import { Button, EmptyState, Input, NotificationBanner, Select, StatusBadge, Textarea } from '../../components/ui'
 import { quantity as fmtQuantity, parseStation, station } from '../../lib/format'
 
 type StationMode = 'single' | 'range'
@@ -66,6 +67,18 @@ export function EntryScreen() {
   const [quantity, setQuantity] = useState('')
   const [note, setNote] = useState('')
   const [location, setLocation] = useState('')
+  const [direction, setDirection] = useState<Direction | ''>('')
+  const [lkiSegment, setLkiSegment] = useState('')
+  const [lkiVersion, setLkiVersion] = useState('')
+  const [averageWidth, setAverageWidth] = useState('')
+  const [area, setArea] = useState('')
+  // True once the person has typed into the area-ish field themselves (for
+  // an Item whose own quantity IS area, that's the quantity field; the
+  // convenience-fill below stops touching it the instant they have — see
+  // the effect after computedArea. Also set on prefill (startEdit/
+  // startCorrection): an existing record's own figure is already the record
+  // of truth and must never be silently recomputed out from under it.
+  const [areaFieldTouched, setAreaFieldTouched] = useState(false)
   const [correctingId, setCorrectingId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -108,6 +121,42 @@ export function EntryScreen() {
 
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const selectedItem = itemById.get(itemId)
+
+  // A Square-Metre Item's own quantity IS its area — the width-derived-area
+  // convenience-fill and disagreement check apply to QUANTITY directly for
+  // these, never a second, separately-stored area figure (items.ts's own
+  // isAreaUnit doc comment). isApplicationRateItem is the narrower set of
+  // Tonne Items actually applied over a stretch (paving lifts, shouldering,
+  // constructed base) as opposed to aggregate simply supplied/stockpiled —
+  // only these get their own area input. Neither applies to Each/Metre/
+  // Cubic Metre Items (manholes, pipe outfall, barrier, excavation) — no
+  // width/area input renders for those at all.
+  const areaUnit = selectedItem ? isAreaUnit(selectedItem.unit) : false
+  const applicationRate = selectedItem ? isApplicationRateItem(selectedItem) : false
+  const showStretchFields = areaUnit || applicationRate
+
+  const parsedStationFromForArea = useMemo(() => (stationFrom === '' ? null : parseStation(stationFrom)), [stationFrom])
+  const parsedStationToForArea = useMemo(() => (stationMode === 'range' && stationTo !== '' ? parseStation(stationTo) : null), [stationMode, stationTo])
+  const widthNum = averageWidth === '' ? null : Number(averageWidth)
+  const computedArea = useMemo(
+    () => computeAreaFromWidth(widthNum !== null && !Number.isNaN(widthNum) ? widthNum : null, parsedStationFromForArea, parsedStationToForArea),
+    [widthNum, parsedStationFromForArea, parsedStationToForArea],
+  )
+
+  // The convenience-fill: while untouched, the area-ish field tracks
+  // width × reach live. The instant the person types into it directly
+  // (areaFieldTouched), this stops — their figure is accepted as recorded,
+  // never silently overwritten by a later width or station change.
+  useEffect(() => {
+    if (!showStretchFields || areaFieldTouched || computedArea === null) return
+    const str = computedArea.toFixed(2)
+    if (areaUnit) setQuantity(str)
+    else setArea(str)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computedArea, showStretchFields, areaFieldTouched, areaUnit])
+
+  const enteredAreaIsh = areaUnit ? (quantity === '' ? null : Number(quantity)) : area === '' ? null : Number(area)
+  const areaDiff = areaDifference(enteredAreaIsh !== null && !Number.isNaN(enteredAreaIsh) ? enteredAreaIsh : null, computedArea)
 
   const progressByItemId = useMemo(() => new Map(itemProgress.map((p) => [p.itemId, p])), [itemProgress])
 
@@ -174,6 +223,12 @@ export function EntryScreen() {
     setQuantity('')
     setNote('')
     setLocation('')
+    setDirection('')
+    setLkiSegment('')
+    setLkiVersion('')
+    setAverageWidth('')
+    setArea('')
+    setAreaFieldTouched(false)
     setFormError(null)
   }
 
@@ -218,6 +273,15 @@ export function EntryScreen() {
     setQuantity(String(record.quantity))
     setNote(record.note ?? '')
     setLocation(record.location ?? '')
+    setDirection(record.direction ?? '')
+    setLkiSegment(record.lkiSegment !== null ? String(record.lkiSegment) : '')
+    setLkiVersion(record.lkiVersion !== null ? String(record.lkiVersion) : '')
+    setAverageWidth(record.averageWidth !== null ? String(record.averageWidth) : '')
+    setArea(record.area !== null ? String(record.area) : '')
+    // The record being corrected already has its own figure — never
+    // silently recomputed just because a width and stations happen to be
+    // present on it.
+    setAreaFieldTouched(true)
     setFormError(null)
     setScreenMode('form')
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -237,6 +301,12 @@ export function EntryScreen() {
     setQuantity(String(record.quantity))
     setNote(record.note ?? '')
     setLocation(record.location ?? '')
+    setDirection(record.direction ?? '')
+    setLkiSegment(record.lkiSegment !== null ? String(record.lkiSegment) : '')
+    setLkiVersion(record.lkiVersion !== null ? String(record.lkiVersion) : '')
+    setAverageWidth(record.averageWidth !== null ? String(record.averageWidth) : '')
+    setArea(record.area !== null ? String(record.area) : '')
+    setAreaFieldTouched(true)
     setFormError(null)
     setScreenMode('form')
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -319,6 +389,33 @@ export function EntryScreen() {
         return
       }
     }
+    const lkiSegmentNum = lkiSegment === '' ? null : Number(lkiSegment)
+    if (lkiSegment !== '' && (lkiSegmentNum === null || Number.isNaN(lkiSegmentNum) || lkiSegmentNum <= 0)) {
+      setFormError('LKI segment is not a valid number.')
+      return
+    }
+    const lkiVersionNum = lkiVersion === '' ? null : Number(lkiVersion)
+    if (lkiVersion !== '' && (lkiVersionNum === null || Number.isNaN(lkiVersionNum) || lkiVersionNum <= 0)) {
+      setFormError('LKI version is not a valid number.')
+      return
+    }
+    if (lkiVersionNum !== null && lkiSegmentNum === null) {
+      setFormError('LKI version needs an LKI segment — a version means nothing without knowing which segment it versions.')
+      return
+    }
+    const averageWidthNum = averageWidth === '' ? null : Number(averageWidth)
+    if (averageWidth !== '' && (averageWidthNum === null || Number.isNaN(averageWidthNum) || averageWidthNum < 0)) {
+      setFormError('Average width is not a valid number.')
+      return
+    }
+    // area is only ever a real, separate field for a non-Square-Metre
+    // application-rate Item — for an area Item, the "area" figure IS
+    // quantity (already validated above), and this stays null.
+    const areaNum = !areaUnit && area !== '' ? Number(area) : null
+    if (!areaUnit && area !== '' && (areaNum === null || Number.isNaN(areaNum) || areaNum < 0)) {
+      setFormError('Area is not a valid number.')
+      return
+    }
 
     setSubmitting(true)
     try {
@@ -334,6 +431,11 @@ export function EntryScreen() {
           note: note.trim() || null,
           stationFrom: from,
           stationTo: to,
+          direction: direction === '' ? null : direction,
+          lkiSegment: lkiSegmentNum,
+          lkiVersion: lkiVersionNum,
+          averageWidth: averageWidthNum,
+          area: areaNum,
         })
         await importServerQuantityRecords(contract.id)
         closeToList()
@@ -351,6 +453,11 @@ export function EntryScreen() {
           deviceId: getDeviceId(),
           stationFrom: from,
           stationTo: to,
+          direction: direction === '' ? null : direction,
+          lkiSegment: lkiSegmentNum,
+          lkiVersion: lkiVersionNum,
+          averageWidth: averageWidthNum,
+          area: areaNum,
         })
         // Fields reset, correction cleared, but the form stays open on the
         // same Item — a day's work is often several stations against the
@@ -587,6 +694,52 @@ export function EntryScreen() {
 
                 <div className="flex gap-3">
                   <div className="flex-1">
+                    <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-direction">
+                      Direction
+                    </label>
+                    <Select id="entry-direction" value={direction} onChange={(e) => setDirection(e.target.value as Direction | '')} disabled={!formUsable}>
+                      <option value="">—</option>
+                      {DIRECTIONS.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-lki-segment">
+                      LKI segment
+                    </label>
+                    <Input
+                      id="entry-lki-segment"
+                      className="nc-numeric"
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="2090"
+                      value={lkiSegment}
+                      onChange={(e) => setLkiSegment(e.target.value)}
+                      disabled={!formUsable}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-lki-version">
+                      LKI version
+                    </label>
+                    <Input
+                      id="entry-lki-version"
+                      className="nc-numeric"
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="1"
+                      value={lkiVersion}
+                      onChange={(e) => setLkiVersion(e.target.value)}
+                      disabled={!formUsable}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <div className="flex-1">
                     <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-station-from">
                       Station {stationMode === 'range' ? 'From' : ''}
                     </label>
@@ -622,6 +775,54 @@ export function EntryScreen() {
                 </div>
                 {stationMode === 'range' && <p className="nc-numeric -mt-1 min-h-[1.2em] text-sm text-nc-accent">{reachMetres !== null ? `reach ${station(reachMetres)}` : ' '}</p>}
 
+                {showStretchFields && (
+                  <div className="flex gap-3">
+                    <div className="flex-1">
+                      <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-average-width">
+                        Average width (m)
+                      </label>
+                      <Input
+                        id="entry-average-width"
+                        className="nc-numeric"
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="5.50"
+                        value={averageWidth}
+                        onChange={(e) => setAverageWidth(e.target.value)}
+                        disabled={!formUsable}
+                      />
+                    </div>
+                    {applicationRate && (
+                      <div className="flex-1">
+                        <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-area">
+                          Area (m²)
+                        </label>
+                        <Input
+                          id="entry-area"
+                          className="nc-numeric"
+                          type="text"
+                          inputMode="decimal"
+                          value={area}
+                          onChange={(e) => {
+                            setAreaFieldTouched(true)
+                            setArea(e.target.value)
+                          }}
+                          disabled={!formUsable}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Never an alarm tone — a difference here can legitimately
+                    mean the field sheet's own measured figure, which
+                    supersedes the width x reach calculation by standing
+                    rule on this contract, not an error to correct. */}
+                {showStretchFields && areaDiff !== null && areaDiff !== 0 && (
+                  <p className="-mt-1 text-xs text-nc-text-muted">
+                    {areaUnit ? 'Quantity' : 'Area'} is {fmtQuantity(Math.abs(areaDiff))} m² {areaDiff > 0 ? 'more' : 'less'} than width × reach ({fmtQuantity(computedArea)} m²).
+                  </p>
+                )}
+
                 <div>
                   <label className="mb-1 block text-sm font-semibold text-nc-text-muted" htmlFor="entry-quantity">
                     Quantity{selectedItem ? ` (${selectedItem.unit})` : ''}
@@ -633,11 +834,15 @@ export function EntryScreen() {
                     inputMode="decimal"
                     step="0.01"
                     value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
+                    onChange={(e) => {
+                      if (areaUnit) setAreaFieldTouched(true)
+                      setQuantity(e.target.value)
+                    }}
                     required
                     disabled={!formUsable}
                   />
                   {selectedItem && selectedItem.itemKind === 'lump_sum' && <p className="mt-1 text-xs text-nc-text-muted">Lump-sum item — quantity is a % or portion complete, per contract convention.</p>}
+                  {areaUnit && <p className="mt-1 text-xs text-nc-text-subtle">This Item's quantity is its area — no separate area field.</p>}
                 </div>
 
                 <div>
