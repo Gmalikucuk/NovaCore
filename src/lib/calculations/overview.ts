@@ -1,3 +1,4 @@
+import type { ContractState } from '../supabase/contracts'
 import type { Item } from '../supabase/items'
 import type { ItemProgressRate } from '../supabase/monthlyPeriods'
 import type { ItemPrice } from '../supabase/prices'
@@ -118,22 +119,23 @@ export function buildProblemList(rows: readonly ItemProgressRate[], now: Date): 
 // problems. buildProblemList above stays as it was for ProgressScreen's
 // per-contract list, which never asked for this split.
 //
-// Stalled detection is suppressed on a contract whose contract_end has
-// already passed — is_stalled has no notion of "the contract is over," so
-// a finished contract's every incomplete Item reads as stalled forever,
-// which is 20 false alarms on a contract that's simply done (Venables,
-// finished 2026-07-31, no contract-state field exists yet to ask this
-// properly — a separately queued piece of work, not built here).
-// Suppression is stated, never silent — the caller surfaces
-// suppressedStalledCount rather than just omitting the rows.
+// Stalled detection is suppressed on a contract that isn't actively being
+// worked — is_stalled has no notion of "the contract is over," so a
+// finished-but-not-yet-active-again contract's every incomplete Item would
+// otherwise read as stalled forever (Venables: paving finished 2026-07-31,
+// contract_end not until 2026-08-10 — a date-based check would have kept
+// flagging it as still active for another ten days, then never stopped
+// flagging it after that either, since contract_end passing doesn't mean
+// work stopped and work stopping doesn't mean the contract ended). A
+// person's own contract_state is the only honest signal here — see
+// ContractState (lib/supabase/contracts.ts). Suppression is stated, never
+// silent — the caller surfaces suppressedStalledCount rather than just
+// omitting the rows.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function isContractFinished(contractEnd: string | null, now: Date): boolean {
-  if (contractEnd === null) return false
-  // Compared against the END of contract_end's own day, not its start — a
-  // contract isn't "finished" from midnight on its last day, only once
-  // that whole day has actually elapsed.
-  return new Date(`${contractEnd}T23:59:59.999`) < now
+/** 'active' is the only state where an Item going quiet is a real problem — every other state (not yet started, wrapping up, closed, archived) means the absence of recent work is expected, not a fault. */
+export function contractNeedsStalledSuppression(state: ContractState): boolean {
+  return state !== 'active'
 }
 
 export interface AttentionResult {

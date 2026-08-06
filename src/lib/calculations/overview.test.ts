@@ -6,9 +6,9 @@ import {
   buildAttention,
   buildProblemList,
   classifyProblem,
+  contractNeedsStalledSuppression,
   DEFAULT_OVERVIEW_PREFERENCES,
   formatMonthLabel,
-  isContractFinished,
   itemsInProgress,
   moneyMakerRow,
   monthDirection,
@@ -159,14 +159,16 @@ describe('buildProblemList', () => {
   })
 })
 
-describe('isContractFinished', () => {
-  const now = new Date('2026-08-15T12:00:00')
-  it('is false when contract_end is null', () => expect(isContractFinished(null, now)).toBe(false))
-  it('is false when contract_end is today or in the future', () => {
-    expect(isContractFinished('2026-08-15', now)).toBe(false)
-    expect(isContractFinished('2026-09-01', now)).toBe(false)
+describe('contractNeedsStalledSuppression', () => {
+  it('is false only for active — the one state where a quiet Item is a real problem', () => {
+    expect(contractNeedsStalledSuppression('active')).toBe(false)
   })
-  it('is true once contract_end has passed', () => expect(isContractFinished('2026-07-31', now)).toBe(true))
+  it('is true for every other state, regardless of any date', () => {
+    expect(contractNeedsStalledSuppression('pipeline')).toBe(true)
+    expect(contractNeedsStalledSuppression('warranty_period')).toBe(true)
+    expect(contractNeedsStalledSuppression('closed_out')).toBe(true)
+    expect(contractNeedsStalledSuppression('archived')).toBe(true)
+  })
 })
 
 describe('buildAttention', () => {

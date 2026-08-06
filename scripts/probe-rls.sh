@@ -1455,6 +1455,37 @@ request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"tender_price":null}
 check "cleanup: tender_price reverted to null" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# contract_state — gated on manage_members (company-wide), same right
+# SeatMembers already requires to administer a contract, not a new
+# decision. correct_only holds manage_members but none of full's
+# per-project rights, isolating that manage_members alone is what gates
+# this, not set_cost/set_unit_price/anything project-scoped. Readable by
+# any member regardless of rights, same posture as tender_price above.
+# =============================================================================
+echo
+echo "=== contract_state ==="
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"contract_state":"warranty_period"}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
+check "correct_only: set contract_state (manage_members)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$VIEWER_TOKEN" '{"contract_state":"archived"}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "viewer: set contract_state rejected (no manage_members)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"contract_state":"not_a_real_state"}'
+ok=0; [ "$STATUS" -ge 400 ] && ok=1
+check "correct_only: invalid contract_state value rejected" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request GET "contracts?id=eq.$PROJECT_ID&select=contract_state" "$VIEWER_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 contract_state)" = "warranty_period" ] && ok=1
+check "viewer: read contract_state (no rights needed to read)" "200, warranty_period" "$ok" "$STATUS $BODY_OUT"
+
+# Revert — this project is a shared fixture across the whole suite.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"contract_state":"active"}'
+check "cleanup: contract_state reverted to active" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # Privileged-path checks — a different layer, tested separately on purpose.
 # Unaffected by the rights rewrite: these exercise guard_entry_transitions()
 # directly at the postgres role, below PostgREST's grant system entirely.

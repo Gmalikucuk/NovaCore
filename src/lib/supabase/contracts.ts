@@ -1,5 +1,14 @@
 import { supabase } from './client'
 
+/**
+ * Set by a person, never inferred from contract_end or any other date — a
+ * contract can be finished before its own end date (Venables: paving done
+ * July 31, period ends August 10) or still active past it. No enforced
+ * transition graph; pipeline -> active -> warranty_period -> closed_out ->
+ * archived is the expected path, not a constraint.
+ */
+export type ContractState = 'pipeline' | 'active' | 'warranty_period' | 'closed_out' | 'archived'
+
 export interface ContractRights {
   createItems: boolean
   setCost: boolean
@@ -19,8 +28,10 @@ export interface MyContract extends ContractRights {
   isSandbox: boolean
   /** The tendered total off the award document (0035) — null until someone enters it. Never derived from the sum of Ext. amount; see Rates' own reconciliation line. */
   tenderPrice: number | null
-  /** The Ministry's given contract period end (0016) — null until entered. Used to suppress stalled-Item detection on a contract that has already finished (no contract-state field exists yet to ask this properly). */
+  /** The Ministry's given contract period end (0016) — null until entered. No longer drives stalled-Item suppression (see contractState) — kept for display/reference only. */
   contractEnd: string | null
+  /** pipeline/active/warranty_period/closed_out/archived — see ContractState. Drives Needs Attention's stalled suppression and, going forward, Portfolio's sectioning. */
+  contractState: ContractState
 }
 
 /**
@@ -45,7 +56,15 @@ interface RawMembershipRow {
   confirm_quantity: boolean
   view_rates: boolean
   extract_report: boolean
-  contracts: { id: string; contract_name: string; contract_no: string | null; is_sandbox: boolean; tender_price: string | null; contract_end: string | null }
+  contracts: {
+    id: string
+    contract_name: string
+    contract_no: string | null
+    is_sandbox: boolean
+    tender_price: string | null
+    contract_end: string | null
+    contract_state: ContractState
+  }
 }
 
 /**
@@ -68,7 +87,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   const { data, error } = await supabase
     .from('contract_members')
     .select(
-      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end )',
+      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end, contract_state )',
     )
     .eq('user_id', user.id)
   if (error) throw error
@@ -82,6 +101,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       isSandbox: r.contracts.is_sandbox,
       tenderPrice: r.contracts.tender_price === null ? null : Number(r.contracts.tender_price),
       contractEnd: r.contracts.contract_end,
+      contractState: r.contracts.contract_state,
       createItems: r.create_items,
       setCost: r.set_cost,
       setUnitPrice: r.set_unit_price,
@@ -132,7 +152,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
       is_sandbox: input.isSandbox,
       created_by: user.id,
     })
-    .select('id, contract_name, contract_no, is_sandbox')
+    .select('id, contract_name, contract_no, is_sandbox, contract_state')
     .single()
   if (error) throw error
 
@@ -143,6 +163,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
     isSandbox: data.is_sandbox,
     tenderPrice: null,
     contractEnd: input.contractEnd,
+    contractState: data.contract_state,
     // The creator's own rights on their brand-new contract — create_items
     // only (see above), everything else false until seated separately.
     createItems: true,

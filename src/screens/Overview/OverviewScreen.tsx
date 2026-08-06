@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { IconArrowDown, IconArrowUp, IconArrowsSort, IconBuildingSkyscraper } from '@tabler/icons-react'
 import type { CurrentContractState } from '../../lib/useCurrentContract'
+import type { ContractState } from '../../lib/supabase/contracts'
 import { loadContractSummary, type ContractSummary } from '../../lib/supabase/contractSummary'
 import { fetchViewPreferences, resetViewPreferences, saveViewPreferences } from '../../lib/supabase/viewPreferences'
 import { aggregateFinancials, rowFinancials } from '../../lib/calculations/bidSummary'
 import {
   buildAttention,
+  contractNeedsStalledSuppression,
   DEFAULT_OVERVIEW_PREFERENCES,
-  isContractFinished,
   moneyMakerRow,
   overQuantityValueAboveSchedule,
   pipelineFigures,
@@ -31,6 +32,16 @@ const PREFS_SCOPE = 'overview_dashboard'
 const OVER_QUANTITY_CAP = 5
 const PROBLEM_CAP = 5
 const PROBLEM_ORDER: Record<ProblemItem['kind'], number> = { over_quantity: 0, behind_rate: 1, stalled: 2 }
+
+// 'active' never appears here — contractNeedsStalledSuppression is false for
+// it, so the suppression banner never fires for an actively-worked contract.
+const CONTRACT_STATE_SUPPRESSION_REASON: Record<ContractState, string> = {
+  pipeline: 'it hasn’t started yet',
+  active: 'it is active',
+  warranty_period: 'it is in its warranty period',
+  closed_out: 'it is closed out',
+  archived: 'it is archived',
+}
 
 function contractLabel(contract: ContractSummary['contract']): string {
   return contract.contractNo ? `${contract.contractNo} — ${contract.name}` : contract.name
@@ -265,7 +276,7 @@ export function OverviewScreen() {
     () =>
       realSummaries.map((s) => ({
         summary: s,
-        result: buildAttention(s.progressRate, now, isContractFinished(s.contract.contractEnd, now)),
+        result: buildAttention(s.progressRate, now, contractNeedsStalledSuppression(s.contract.contractState)),
       })),
     [realSummaries, now],
   )
@@ -584,8 +595,8 @@ export function OverviewScreen() {
                   <NotificationBanner tone="info" className="mb-3">
                     {suppressedNotes.map(({ summary, count }) => (
                       <p key={summary.contract.id}>
-                        Stalled detection is suppressed for {contractLabel(summary.contract)} — its contract period ended {summary.contract.contractEnd}, and {count} Item
-                        {count === 1 ? '' : 's'} would otherwise read as stalled. Contract state isn't modelled yet; this will be revisited when it is.
+                        Stalled detection is suppressed for {contractLabel(summary.contract)} — {CONTRACT_STATE_SUPPRESSION_REASON[summary.contract.contractState]}, and {count} Item
+                        {count === 1 ? '' : 's'} would otherwise read as stalled.
                       </p>
                     ))}
                   </NotificationBanner>
