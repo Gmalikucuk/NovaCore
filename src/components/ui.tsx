@@ -1,4 +1,5 @@
 import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TdHTMLAttributes, type TextareaHTMLAttributes, type ThHTMLAttributes } from 'react'
+import type { ContractState } from '../lib/supabase/contracts'
 
 /**
  * NovaCore UI primitives — ported from Vektor Freight's `ui.jsx` (the
@@ -120,6 +121,36 @@ interface StatusBadgeProps {
 
 export function StatusBadge({ status, children, className = '' }: StatusBadgeProps) {
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CLASSES[STATUS_TONE[status]]} ${className}`}>{children ?? status}</span>
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ContractStateTag — pipeline/active/warranty_period/closed_out/archived.
+// Neutral tone throughout except warranty_period (info — a contract still
+// winding down is worth a glance, not an alert): none of the five states
+// is a fault, so nothing here reaches for warning/danger. active is
+// deliberately unflagged everywhere this is actually used — the common
+// case needs no badge — but included in the maps below so the component
+// stays total over ContractState rather than partial.
+// ─────────────────────────────────────────────────────────────────────────
+
+const CONTRACT_STATE_LABEL: Record<ContractState, string> = {
+  pipeline: 'Pipeline',
+  active: 'Active',
+  warranty_period: 'Warranty Period',
+  closed_out: 'Closed out',
+  archived: 'Archived',
+}
+
+const CONTRACT_STATE_TONE: Record<ContractState, StatusTone> = {
+  pipeline: 'neutral',
+  active: 'neutral',
+  warranty_period: 'info',
+  closed_out: 'neutral',
+  archived: 'neutral',
+}
+
+export function ContractStateTag({ state, className = '' }: { state: ContractState; className?: string }) {
+  return <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CLASSES[CONTRACT_STATE_TONE[state]]} ${className}`}>{CONTRACT_STATE_LABEL[state]}</span>
 }
 
 // ─────────────────────────────────────────────────────────────────────────

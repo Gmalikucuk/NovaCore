@@ -138,6 +138,76 @@ export function contractNeedsStalledSuppression(state: ContractState): boolean {
   return state !== 'active'
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Contract-state participation in company-wide figures. Five states, three
+// figures, each state answering a different question about each figure —
+// see the brief's own rules table, reproduced exactly here rather than
+// re-derived: pipeline counts toward contract value and backlog but not
+// earned (nothing has been earned yet); active counts toward all three;
+// warranty_period counts toward all three, same as active — its backlog
+// reads near zero on its own, from the numbers, not because anything here
+// forces it to; closed_out counts toward earned only — finished work is
+// not pipeline and has no backlog remaining by definition; archived counts
+// toward nothing, and is filtered out of the candidate set entirely by
+// every caller before contractCountsToward is ever asked (see
+// "archived: excluded from every figure and every list").
+// ─────────────────────────────────────────────────────────────────────────
+
+export type OverviewFigure = 'contractValue' | 'earned' | 'backlog'
+
+const FIGURE_STATES: Record<OverviewFigure, ReadonlySet<ContractState>> = {
+  contractValue: new Set<ContractState>(['pipeline', 'active', 'warranty_period']),
+  earned: new Set<ContractState>(['active', 'warranty_period', 'closed_out']),
+  backlog: new Set<ContractState>(['pipeline', 'active', 'warranty_period']),
+}
+
+export function contractCountsToward(figure: OverviewFigure, state: ContractState): boolean {
+  return FIGURE_STATES[figure].has(state)
+}
+
+/** pipeline hasn't started: no Item progress to rank as a money-maker and no schedule to be behind or stalled on. Every other non-archived state participates normally — archived never reaches this check, filtered out upstream by every caller (same rule as contractCountsToward above). */
+export function contractParticipatesInProduction(state: ContractState): boolean {
+  return state !== 'pipeline'
+}
+
+export interface FigureCoverage {
+  /** Eligible by state AND has the underlying number. */
+  count: number
+  /** Counts toward this figure by state, regardless of whether the number is actually on file yet. */
+  eligible: number
+  /** Every real (non-sandbox) contract considered, regardless of state. */
+  total: number
+}
+
+export function figureCoverage(figure: OverviewFigure, rows: readonly { state: ContractState; hasData: boolean }[]): FigureCoverage {
+  const eligibleRows = rows.filter((r) => contractCountsToward(figure, r.state))
+  return { count: eligibleRows.filter((r) => r.hasData).length, eligible: eligibleRows.length, total: rows.length }
+}
+
+/**
+ * "Covers N of M real contracts" — same convention Rates' own subtotal
+ * coverage already uses. Two distinct reasons can each contribute a
+ * clause: some contracts don't count toward this particular figure at all
+ * (a closed_out contract in Contract value under management, say — not a
+ * gap, a rule), and some that DO count are still missing the underlying
+ * number (no tender price entered yet — an actual gap). Kept as two
+ * separate clauses rather than one folded count, because they mean
+ * different things to someone reconciling one figure against another: the
+ * same contract can be the "excluded by state" reason on one figure and
+ * not appear in either reason on the next, which is exactly the situation
+ * that motivated stating this at all (see the brief's own "Coverage
+ * language" section). Null — say nothing — only when the figure is
+ * genuinely complete: every real contract both counts toward it and has
+ * the number on file.
+ */
+export function coverageNote(coverage: FigureCoverage, missingDataReason: string): string | null {
+  if (coverage.total === 0 || coverage.count === coverage.total) return null
+  const parts: string[] = []
+  if (coverage.eligible < coverage.total) parts.push(`${coverage.total - coverage.eligible} excluded by contract state`)
+  if (coverage.count < coverage.eligible) parts.push(`${coverage.eligible - coverage.count} ${missingDataReason}`)
+  return `Covers ${coverage.count} of ${coverage.total} real contracts — ${parts.join(', ')}`
+}
+
 export interface AttentionResult {
   overQuantity: ProblemItem[]
   problems: ProblemItem[]
@@ -206,6 +276,7 @@ export function pipelineFigures(tenderPrice: number | null, valueToDate: number 
 export interface MoneyMakerRow {
   contractId: string
   contractLabel: string
+  contractState: ContractState
   itemId: string
   itemNumber: string
   description: string
@@ -292,11 +363,12 @@ export function sanitizeOverviewPreferences(raw: Record<string, unknown> | null)
 export function moneyMakerRow(params: {
   contractId: string
   contractLabel: string
+  contractState: ContractState
   item: Item
   price: ItemPrice | undefined
   progress: ItemProgressRate | undefined
 }): MoneyMakerRow {
-  const { contractId, contractLabel, item, price, progress } = params
+  const { contractId, contractLabel, contractState, item, price, progress } = params
   const financials = rowFinancials({
     itemKind: item.itemKind,
     approximateQuantity: item.approximateQuantity,
@@ -312,6 +384,7 @@ export function moneyMakerRow(params: {
   return {
     contractId,
     contractLabel,
+    contractState,
     itemId: item.id,
     itemNumber: item.itemNumber,
     description: item.description,

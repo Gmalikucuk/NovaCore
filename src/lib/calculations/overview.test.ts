@@ -6,8 +6,12 @@ import {
   buildAttention,
   buildProblemList,
   classifyProblem,
+  contractCountsToward,
   contractNeedsStalledSuppression,
+  contractParticipatesInProduction,
+  coverageNote,
   DEFAULT_OVERVIEW_PREFERENCES,
+  figureCoverage,
   formatMonthLabel,
   itemsInProgress,
   moneyMakerRow,
@@ -171,6 +175,94 @@ describe('contractNeedsStalledSuppression', () => {
   })
 })
 
+describe('contractCountsToward', () => {
+  it('pipeline: contract value and backlog, not earned', () => {
+    expect(contractCountsToward('contractValue', 'pipeline')).toBe(true)
+    expect(contractCountsToward('backlog', 'pipeline')).toBe(true)
+    expect(contractCountsToward('earned', 'pipeline')).toBe(false)
+  })
+
+  it('active: every figure', () => {
+    expect(contractCountsToward('contractValue', 'active')).toBe(true)
+    expect(contractCountsToward('earned', 'active')).toBe(true)
+    expect(contractCountsToward('backlog', 'active')).toBe(true)
+  })
+
+  it('warranty_period: every figure, same as active', () => {
+    expect(contractCountsToward('contractValue', 'warranty_period')).toBe(true)
+    expect(contractCountsToward('earned', 'warranty_period')).toBe(true)
+    expect(contractCountsToward('backlog', 'warranty_period')).toBe(true)
+  })
+
+  it('closed_out: earned only — finished work is not pipeline and has no backlog', () => {
+    expect(contractCountsToward('earned', 'closed_out')).toBe(true)
+    expect(contractCountsToward('contractValue', 'closed_out')).toBe(false)
+    expect(contractCountsToward('backlog', 'closed_out')).toBe(false)
+  })
+
+  it('archived: no figure', () => {
+    expect(contractCountsToward('contractValue', 'archived')).toBe(false)
+    expect(contractCountsToward('earned', 'archived')).toBe(false)
+    expect(contractCountsToward('backlog', 'archived')).toBe(false)
+  })
+})
+
+describe('contractParticipatesInProduction', () => {
+  it('is false only for pipeline — nothing has started, so there is no production to rank and no schedule to be behind on', () => {
+    expect(contractParticipatesInProduction('pipeline')).toBe(false)
+  })
+  it('is true for every other state', () => {
+    expect(contractParticipatesInProduction('active')).toBe(true)
+    expect(contractParticipatesInProduction('warranty_period')).toBe(true)
+    expect(contractParticipatesInProduction('closed_out')).toBe(true)
+    expect(contractParticipatesInProduction('archived')).toBe(true)
+  })
+})
+
+describe('figureCoverage', () => {
+  it('counts eligible-by-state separately from has-data', () => {
+    const rows = [
+      { state: 'active' as const, hasData: true },
+      { state: 'active' as const, hasData: false }, // eligible, missing data
+      { state: 'pipeline' as const, hasData: true }, // not eligible for 'earned'
+      { state: 'archived' as const, hasData: true }, // not eligible for anything
+    ]
+    expect(figureCoverage('earned', rows)).toEqual({ count: 1, eligible: 2, total: 4 })
+  })
+
+  it('is fully complete when every row is eligible and has data', () => {
+    const rows = [
+      { state: 'active' as const, hasData: true },
+      { state: 'warranty_period' as const, hasData: true },
+    ]
+    expect(figureCoverage('contractValue', rows)).toEqual({ count: 2, eligible: 2, total: 2 })
+  })
+})
+
+describe('coverageNote', () => {
+  it('says nothing when the figure is complete', () => {
+    expect(coverageNote({ count: 3, eligible: 3, total: 3 }, 'have no value recorded yet')).toBeNull()
+  })
+
+  it('says nothing when there are no real contracts at all', () => {
+    expect(coverageNote({ count: 0, eligible: 0, total: 0 }, 'have no value recorded yet')).toBeNull()
+  })
+
+  it('states a state-exclusion gap on its own', () => {
+    expect(coverageNote({ count: 2, eligible: 2, total: 3 }, 'have no tender price on file yet')).toBe('Covers 2 of 3 real contracts — 1 excluded by contract state')
+  })
+
+  it('states a missing-data gap on its own', () => {
+    expect(coverageNote({ count: 2, eligible: 3, total: 3 }, 'have no tender price on file yet')).toBe('Covers 2 of 3 real contracts — 1 have no tender price on file yet')
+  })
+
+  it('states both gaps together, distinctly, when a figure has each kind', () => {
+    expect(coverageNote({ count: 2, eligible: 4, total: 5 }, 'have no tender price on file yet')).toBe(
+      'Covers 2 of 5 real contracts — 1 excluded by contract state, 2 have no tender price on file yet',
+    )
+  })
+})
+
 describe('buildAttention', () => {
   const now = new Date('2026-08-15T12:00:00')
 
@@ -248,6 +340,7 @@ describe('moneyMakerRow', () => {
     const r = moneyMakerRow({
       contractId: 'c1',
       contractLabel: 'Test Contract',
+      contractState: 'active',
       item: item({ approximateQuantity: 100 }),
       price: price({ unitPrice: 10 }),
       progress: { ...row({ quantityToDate: 40, approximateQuantity: 100 }) },
@@ -262,6 +355,7 @@ describe('moneyMakerRow', () => {
     const r = moneyMakerRow({
       contractId: 'c1',
       contractLabel: 'Test Contract',
+      contractState: 'active',
       item: item({ itemKind: 'lump_sum', approximateQuantity: 1 }),
       price: price({ unitPrice: 52000 }),
       progress: undefined,
@@ -276,6 +370,7 @@ describe('moneyMakerRow', () => {
     const r = moneyMakerRow({
       contractId: 'c1',
       contractLabel: 'Test Contract',
+      contractState: 'active',
       item: item({ itemKind: 'provisional_sum', approximateQuantity: 1, provisionalSum: 150000 }),
       price: price({ unitPrice: 999 }),
       progress: undefined,

@@ -3,10 +3,59 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import { IconBuildingSkyscraper } from '@tabler/icons-react'
 import type { CurrentContractState } from '../../lib/useCurrentContract'
 import { loadContractSummary, type ContractSummary } from '../../lib/supabase/contractSummary'
+import { contractCountsToward, coverageNote, figureCoverage } from '../../lib/calculations/overview'
 import { sumOrNull } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money } from '../../lib/format'
-import { Button, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, ContractStateTag, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+
+/** Shared row shape for every section below — module-level so it isn't recreated (and every row's identity lost) on each PortfolioScreen render. */
+function ContractTable({ rows, showStateBadge, onOpen }: { rows: ContractSummary[]; showStateBadge: boolean; onOpen: (contractId: string) => void }) {
+  return (
+    <Table>
+      <THead>
+        <TR>
+          <TH>Contract</TH>
+          <TH align="right">Value to date</TH>
+          <TH align="right">Est. margin to date</TH>
+          <TH />
+        </TR>
+      </THead>
+      <TBody>
+        {rows.map((s) => (
+          <TR key={s.contract.id} className="cursor-pointer hover:bg-nc-secondary/60" onClick={() => onOpen(s.contract.id)}>
+            <TD>
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-nc-text">{s.contract.contractNo ? `${s.contract.contractNo} — ${s.contract.name}` : s.contract.name}</span>
+                {showStateBadge && <ContractStateTag state={s.contract.contractState} />}
+                {/* Row-level tag, not a banner — see loadContractSummary's own comment. */}
+                {s.contract.isSandbox && <span className="shrink-0 rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
+              </div>
+            </TD>
+            <TD align="right" className="nc-numeric">
+              {money(s.valueToDate)}
+            </TD>
+            <TD align="right" className={`nc-numeric ${s.marginToDate !== null && s.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+              {money(s.marginToDate)}
+            </TD>
+            <TD align="right" dense>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpen(s.contract.id)
+                }}
+              >
+                Open
+              </Button>
+            </TD>
+          </TR>
+        ))}
+      </TBody>
+    </Table>
+  )
+}
 
 /**
  * Company level — the portfolio across every contract the signed-in user
@@ -15,6 +64,16 @@ import { Button, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, 
  * is this one contract doing"). Clicking a row is how a contract is
  * entered now — see Sidebar's own comment for why the dropdown switcher
  * moved here instead.
+ *
+ * Four sections, one per contract_state group: Pipeline, Active, Warranty
+ * Period & Closed Out (merged — see that section's own comment for why
+ * closed_out doesn't get a fifth), Archived. Every contract lands in
+ * exactly one, including archived ones — Portfolio is the one place an
+ * archived contract stays browsable at all; "archived: excluded from
+ * every figure and every list" is an Overview rule, not a Portfolio one.
+ * Sandbox contracts keep their own row (tagged) within whichever section
+ * their state puts them in, same courtesy the pre-state version already
+ * extended to the one section that existed.
  */
 export function PortfolioScreen() {
   const { contracts, setCurrentId } = useOutletContext<CurrentContractState>()
@@ -43,8 +102,33 @@ export function PortfolioScreen() {
   // contract, but wrong for a row in a list of many; the tag here is that
   // row's own answer to the same requirement.
   const realSummaries = useMemo(() => summaries.filter((s) => !s.contract.isSandbox), [summaries])
-  const portfolioValue = useMemo(() => sumOrNull(realSummaries.map((s) => s.valueToDate)), [realSummaries])
-  const portfolioMargin = useMemo(() => sumOrNull(realSummaries.map((s) => s.marginToDate)), [realSummaries])
+  // Portfolio value/margin are an "earned to date" figure, same rule
+  // Overview's own Earned to date uses (contractCountsToward('earned', ...)):
+  // a pipeline contract hasn't started, so it has nothing to contribute
+  // yet, and an archived one is out of every figure by its own definition.
+  const earningSummaries = useMemo(() => realSummaries.filter((s) => contractCountsToward('earned', s.contract.contractState)), [realSummaries])
+  const portfolioValue = useMemo(() => sumOrNull(earningSummaries.map((s) => s.valueToDate)), [earningSummaries])
+  const portfolioMargin = useMemo(() => sumOrNull(earningSummaries.map((s) => s.marginToDate)), [earningSummaries])
+  const portfolioValueCoverage = useMemo(
+    () => figureCoverage('earned', realSummaries.map((s) => ({ state: s.contract.contractState, hasData: s.valueToDate !== null }))),
+    [realSummaries],
+  )
+  const portfolioMarginCoverage = useMemo(
+    () => figureCoverage('earned', realSummaries.map((s) => ({ state: s.contract.contractState, hasData: s.marginToDate !== null }))),
+    [realSummaries],
+  )
+  const portfolioValueNote = coverageNote(portfolioValueCoverage, 'have no value recorded yet')
+  const portfolioMarginNote = coverageNote(portfolioMarginCoverage, 'have no cost recorded yet')
+
+  // Four groups, one per section below — every contract (sandbox included)
+  // lands in exactly one.
+  const pipelineSummaries = useMemo(() => summaries.filter((s) => s.contract.contractState === 'pipeline'), [summaries])
+  const activeSummaries = useMemo(() => summaries.filter((s) => s.contract.contractState === 'active'), [summaries])
+  const windingDownSummaries = useMemo(
+    () => summaries.filter((s) => s.contract.contractState === 'warranty_period' || s.contract.contractState === 'closed_out'),
+    [summaries],
+  )
+  const archivedSummaries = useMemo(() => summaries.filter((s) => s.contract.contractState === 'archived'), [summaries])
 
   function openContract(contractId: string) {
     setCurrentId(contractId)
@@ -73,83 +157,62 @@ export function PortfolioScreen() {
         ) : (
           <>
             <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <StatCard label="Portfolio value to date" value={money(portfolioValue)} sub="Real contracts only — sandbox excluded" />
+              <StatCard label="Portfolio value to date" value={money(portfolioValue)} sub={portfolioValueNote ?? 'Real contracts only — sandbox excluded'} />
               <StatCard
                 label="Est. portfolio margin to date"
                 value={<span className={portfolioMargin !== null && portfolioMargin < 0 ? 'text-nc-danger-text' : ''}>{money(portfolioMargin)}</span>}
-                sub="Real contracts only — sandbox excluded"
+                sub={portfolioMarginNote ?? 'Real contracts only — sandbox excluded'}
               />
             </div>
 
-            {/* Four sections, per the nav-restructure brief — Pipeline,
-                Active, Warranty Period, Archived. `contracts` has no state
-                column (an unsettled modelling decision — see this brief's
-                report), so every real contract renders under Active today;
-                the other three are scaffolding, not a claim that nothing
-                belongs there. Plain muted text, not EmptyState — EmptyState
-                says "we looked, there's genuinely nothing here"; these
-                sections say "this isn't wired up yet," the same distinction
-                CompanyShell's own reserved Admin slot already draws with its
-                "Coming soon" text rather than a bordered empty state. */}
             <section className="mb-8">
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Pipeline</h2>
-              <p className="text-sm text-nc-text-subtle">Placeholder — contracts have no state field yet to sort into this section.</p>
+              {pipelineSummaries.length === 0 ? (
+                <p className="text-sm text-nc-text-subtle">No contracts in the pipeline.</p>
+              ) : (
+                <ContractTable rows={pipelineSummaries} showStateBadge={false} onOpen={openContract} />
+              )}
             </section>
 
             <section className="mb-8">
-              <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Active</h2>
-              <p className="mb-2 text-sm text-nc-text-subtle">Every contract lives here until state exists to sort them otherwise — not a claim that all {summaries.length} are actually active.</p>
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Contract</TH>
-                    <TH align="right">Value to date</TH>
-                    <TH align="right">Est. margin to date</TH>
-                    <TH />
-                  </TR>
-                </THead>
-                <TBody>
-                  {summaries.map((s) => (
-                    <TR key={s.contract.id} className="cursor-pointer hover:bg-nc-secondary/60" onClick={() => openContract(s.contract.id)}>
-                      <TD>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-nc-text">{s.contract.contractNo ? `${s.contract.contractNo} — ${s.contract.name}` : s.contract.name}</span>
-                          {/* Row-level tag, not a banner — see loadContractSummary's own comment. */}
-                          {s.contract.isSandbox && <span className="shrink-0 rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
-                        </div>
-                      </TD>
-                      <TD align="right" className="nc-numeric">
-                        {money(s.valueToDate)}
-                      </TD>
-                      <TD align="right" className={`nc-numeric ${s.marginToDate !== null && s.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                        {money(s.marginToDate)}
-                      </TD>
-                      <TD align="right" dense>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openContract(s.contract.id)
-                          }}
-                        >
-                          Open
-                        </Button>
-                      </TD>
-                    </TR>
-                  ))}
-                </TBody>
-              </Table>
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Active</h2>
+              {activeSummaries.length === 0 ? (
+                <p className="text-sm text-nc-text-subtle">No active contracts.</p>
+              ) : (
+                <ContractTable rows={activeSummaries} showStateBadge={false} onOpen={openContract} />
+              )}
             </section>
 
+            {/* Merged, not a fifth section — closed_out has nowhere else
+                that fits. It isn't archived (still browsable everywhere
+                else, including Overview's money-makers ranking — see that
+                screen's own brief), and it isn't active production either.
+                Both states share the "not being actively worked, not yet
+                removed from view" shape Warranty Period already occupied,
+                so it joins that section rather than inventing a new one —
+                the per-row tag is what actually tells the two apart, since
+                the heading alone can't. */}
             <section className="mb-8">
-              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Warranty Period</h2>
-              <p className="text-sm text-nc-text-subtle">Placeholder — contracts have no state field yet to sort into this section.</p>
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Warranty Period &amp; Closed Out</h2>
+              {windingDownSummaries.length === 0 ? (
+                <p className="text-sm text-nc-text-subtle">No contracts in warranty period or closed out.</p>
+              ) : (
+                <ContractTable rows={windingDownSummaries} showStateBadge={true} onOpen={openContract} />
+              )}
             </section>
 
+            {/* Unlike Overview, which drops an archived contract entirely
+                ("removed from view" is Overview's own rule for that state),
+                Portfolio is the one place it stays browsable — Finance's
+                full-book view is exactly where a closed, historical
+                contract should still be findable. */}
             <section className="mb-8">
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Archived</h2>
-              <p className="text-sm text-nc-text-subtle">Placeholder — contracts have no state field yet to sort into this section.</p>
+              {archivedSummaries.length === 0 ? (
+                <p className="text-sm text-nc-text-subtle">No archived contracts.</p>
+              ) : (
+                <ContractTable rows={archivedSummaries} showStateBadge={false} onOpen={openContract} />
+              )}
             </section>
           </>
         ))}

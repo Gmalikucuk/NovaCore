@@ -8,8 +8,12 @@ import { fetchViewPreferences, resetViewPreferences, saveViewPreferences } from 
 import { aggregateFinancials, rowFinancials } from '../../lib/calculations/bidSummary'
 import {
   buildAttention,
+  contractCountsToward,
   contractNeedsStalledSuppression,
+  contractParticipatesInProduction,
+  coverageNote,
   DEFAULT_OVERVIEW_PREFERENCES,
+  figureCoverage,
   moneyMakerRow,
   overQuantityValueAboveSchedule,
   pipelineFigures,
@@ -25,7 +29,7 @@ import { sumOrNull } from '../../lib/calculations/margin'
 import type { ItemPrice } from '../../lib/supabase/prices'
 import { errorMessage } from '../../lib/errorMessage'
 import { percent, quantity as fmtQuantity, rate } from '../../lib/format'
-import { Button, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, ContractStateTag, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 import { ProblemRow } from '../../components/ProblemRow'
 
 const PREFS_SCOPE = 'overview_dashboard'
@@ -70,6 +74,17 @@ function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
  * totals, money-makers ranking, needs-attention) — same rule Portfolio's
  * own totals already use. They still get their own row in the pipeline
  * table, tagged, same as Portfolio.
+ *
+ * contract_state further narrows which contracts count toward which
+ * figure — see overview.ts's own contractCountsToward/coverageNote
+ * comments for the full rule table. archived is excluded from every
+ * figure AND the pipeline table's row list entirely (removed from view,
+ * by that state's own definition); pipeline counts toward contract value
+ * and backlog but not earned, and is excluded from money-makers and
+ * needs-attention (nothing has started, so there's no production to rank
+ * and no schedule to be behind or stalled on); closed_out counts toward
+ * earned only. A non-active state gets a small tag wherever its row could
+ * otherwise be mistaken for an active one.
  *
  * Desktop-only by design (1400px and up) — no phone breakpoints here; a
  * separate mobile surface is planned.
@@ -144,7 +159,16 @@ export function OverviewScreen() {
     void resetViewPreferences(PREFS_SCOPE)
   }
 
-  const realSummaries = useMemo(() => summaries.filter((s) => !s.contract.isSandbox), [summaries])
+  // archived is "removed from view" by its own definition — excluded here,
+  // upstream of every aggregate and the pipeline table's row list both,
+  // rather than filtered out at each individual call site.
+  const realSummaries = useMemo(() => summaries.filter((s) => !s.contract.isSandbox && s.contract.contractState !== 'archived'), [summaries])
+  // The pipeline table itself keeps sandbox rows (tagged, same as
+  // Portfolio) — only archived drops out of the row list entirely.
+  const visibleSummaries = useMemo(() => summaries.filter((s) => s.contract.contractState !== 'archived'), [summaries])
+  // pipeline hasn't started: no Item progress to rank as a money-maker and
+  // no schedule to be behind or stalled on. See contractParticipatesInProduction's own comment.
+  const productionSummaries = useMemo(() => realSummaries.filter((s) => contractParticipatesInProduction(s.contract.contractState)), [realSummaries])
   // Margin is only ever worth offering when at least one real contract can
   // actually be priced — otherwise the toggle would just reveal columns of
   // em-dashes across the board.
@@ -153,27 +177,49 @@ export function OverviewScreen() {
   // ── Pipeline band ─────────────────────────────────────────────────────
   const pipelineRows = useMemo(
     () =>
-      summaries.map((s) => ({
+      visibleSummaries.map((s) => ({
         summary: s,
         figures: pipelineFigures(s.contract.tenderPrice, s.valueToDate),
       })),
-    [summaries],
+    [visibleSummaries],
   )
-  const contractValueTotal = useMemo(() => sumOrNull(realSummaries.map((s) => s.contract.tenderPrice)), [realSummaries])
-  const earnedTotal = useMemo(() => sumOrNull(realSummaries.map((s) => s.valueToDate)), [realSummaries])
+  // Three totals, three different state-eligible subsets — see
+  // contractCountsToward's own rule table (pipeline: value+backlog, not
+  // earned; closed_out: earned only; warranty_period: all three, same as
+  // active). archived never reaches this — already dropped from
+  // realSummaries above.
+  const contractValueTotal = useMemo(
+    () => sumOrNull(realSummaries.filter((s) => contractCountsToward('contractValue', s.contract.contractState)).map((s) => s.contract.tenderPrice)),
+    [realSummaries],
+  )
+  const earnedTotal = useMemo(
+    () => sumOrNull(realSummaries.filter((s) => contractCountsToward('earned', s.contract.contractState)).map((s) => s.valueToDate)),
+    [realSummaries],
+  )
   const backlogTotal = useMemo(
-    () => sumOrNull(realSummaries.map((s) => pipelineFigures(s.contract.tenderPrice, s.valueToDate).backlog)),
+    () =>
+      sumOrNull(
+        realSummaries.filter((s) => contractCountsToward('backlog', s.contract.contractState)).map((s) => pipelineFigures(s.contract.tenderPrice, s.valueToDate).backlog),
+      ),
     [realSummaries],
   )
-  // A contract without a tender price on file doesn't drop out of the sum
-  // (sumOrNull already handles that) — this is the plain-language half of
-  // the same rule: say how many of the visible real contracts the total
-  // actually covers, same convention as Rates' own "covers N of M items".
-  // Backlog shares the same coverage — it's tenderPrice-derived too.
+  // Coverage — how many of the real, non-archived contracts each total
+  // actually reflects, and why the rest don't: excluded by contract_state
+  // (a rule, not a gap) versus simply missing the underlying number (an
+  // actual gap). Backlog reuses contract value's own coverage — same
+  // eligible state set, same tenderPrice-presence check, exactly as before
+  // this brief (the pre-existing approximation already treated the two as
+  // one gap; not revisited here).
   const contractValueCoverage = useMemo(
-    () => ({ count: realSummaries.filter((s) => s.contract.tenderPrice !== null).length, total: realSummaries.length }),
+    () => figureCoverage('contractValue', realSummaries.map((s) => ({ state: s.contract.contractState, hasData: s.contract.tenderPrice !== null }))),
     [realSummaries],
   )
+  const earnedCoverage = useMemo(
+    () => figureCoverage('earned', realSummaries.map((s) => ({ state: s.contract.contractState, hasData: s.valueToDate !== null }))),
+    [realSummaries],
+  )
+  const contractValueNote = coverageNote(contractValueCoverage, 'have no tender price on file yet')
+  const earnedNote = coverageNote(earnedCoverage, 'have no value recorded yet')
 
   const sortedPipelineRows = useMemo(() => {
     const dir = prefs.pipelineSortDir === 'asc' ? 1 : -1
@@ -205,16 +251,18 @@ export function OverviewScreen() {
   // ── Money makers ──────────────────────────────────────────────────────
   const allMoneyMakerRows = useMemo(() => {
     const rows: MoneyMakerRow[] = []
-    for (const s of realSummaries) {
+    for (const s of productionSummaries) {
       const priceByItem = new Map(s.prices.map((p) => [p.itemId, p]))
       const progressByItem = new Map(s.progressRate.map((p) => [p.itemId, p]))
       const label = contractLabel(s.contract)
       for (const item of s.items) {
-        rows.push(moneyMakerRow({ contractId: s.contract.id, contractLabel: label, item, price: priceByItem.get(item.id), progress: progressByItem.get(item.id) }))
+        rows.push(
+          moneyMakerRow({ contractId: s.contract.id, contractLabel: label, contractState: s.contract.contractState, item, price: priceByItem.get(item.id), progress: progressByItem.get(item.id) }),
+        )
       }
     }
     return rows
-  }, [realSummaries])
+  }, [productionSummaries])
 
   const sortedMoneyMakerRows = useMemo(() => {
     const dir = prefs.moneyMakerSortDir === 'asc' ? 1 : -1
@@ -274,11 +322,11 @@ export function OverviewScreen() {
   const now = useMemo(() => new Date(), [])
   const attentionByContract = useMemo(
     () =>
-      realSummaries.map((s) => ({
+      productionSummaries.map((s) => ({
         summary: s,
         result: buildAttention(s.progressRate, now, contractNeedsStalledSuppression(s.contract.contractState)),
       })),
-    [realSummaries, now],
+    [productionSummaries, now],
   )
   const taggedOverQuantity = useMemo(
     () => attentionByContract.flatMap(({ summary, result }) => result.overQuantity.map((problem) => ({ problem, contractLabel: contractLabel(summary.contract) }))),
@@ -337,24 +385,12 @@ export function OverviewScreen() {
             <section className="mb-8">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Pipeline</h2>
               <div className="mb-4 grid grid-cols-3 gap-4">
-                <StatCard
-                  label="Contract value under management"
-                  value={rate(contractValueTotal)}
-                  sub={
-                    contractValueCoverage.total > 0 && contractValueCoverage.count < contractValueCoverage.total
-                      ? `Covers ${contractValueCoverage.count} of ${contractValueCoverage.total} real contracts — the rest have no tender price on file yet`
-                      : 'Real contracts only — sandbox excluded'
-                  }
-                />
-                <StatCard label="Earned to date" value={rate(earnedTotal)} sub="Real contracts only — sandbox excluded" />
+                <StatCard label="Contract value under management" value={rate(contractValueTotal)} sub={contractValueNote ?? 'Real contracts only — sandbox excluded'} />
+                <StatCard label="Earned to date" value={rate(earnedTotal)} sub={earnedNote ?? 'Real contracts only — sandbox excluded'} />
                 <StatCard
                   label="Backlog remaining"
                   value={rate(backlogTotal)}
-                  sub={
-                    contractValueCoverage.total > 0 && contractValueCoverage.count < contractValueCoverage.total
-                      ? `Covers ${contractValueCoverage.count} of ${contractValueCoverage.total} real contracts — same gap as contract value`
-                      : 'Real contracts only — sandbox excluded'
-                  }
+                  sub={contractValueNote ? `${contractValueNote} — same gap as contract value` : 'Real contracts only — sandbox excluded'}
                 />
               </div>
 
@@ -433,6 +469,7 @@ export function OverviewScreen() {
                       <TD>
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-nc-text">{contractLabel(s.contract)}</span>
+                          {s.contract.contractState !== 'active' && <ContractStateTag state={s.contract.contractState} />}
                           {s.contract.isSandbox && <span className="shrink-0 rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
                         </div>
                       </TD>
@@ -546,7 +583,12 @@ export function OverviewScreen() {
                     <TBody>
                       {visibleMoneyMakerRows.map((r) => (
                         <TR key={r.itemId}>
-                          <TD className="text-xs text-nc-text-subtle">{r.contractLabel}</TD>
+                          <TD className="text-xs text-nc-text-subtle">
+                            <div className="flex items-center gap-1.5">
+                              <span>{r.contractLabel}</span>
+                              {r.contractState !== 'active' && <ContractStateTag state={r.contractState} />}
+                            </div>
+                          </TD>
                           <TD className="nc-numeric">{r.itemNumber}</TD>
                           <TD prose>
                             <div className="max-w-[220px] truncate" title={r.description}>
