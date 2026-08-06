@@ -1475,6 +1475,72 @@ except Exception:
   check "postgres: confirmed_by/confirmed_at spoof on re-touch still pinned" "confirmed_by=$FULL_ID, confirmed_at=now" "$ok" "$spoof_out"
 fi
 
+echo
+echo "=== Per-user view preferences — a seat cannot read or write another seat's saved layout ==="
+
+# Upsert, not a plain insert — this table has SELECT/INSERT/UPDATE grants
+# for the owner but deliberately no DELETE (a saved layout is only ever
+# replaced with a fresh default, never removed as a row), so a rerun of
+# this probe has no DELETE path to clean up with. on_conflict alone isn't
+# enough to make PostgREST actually MERGE on a genuine conflict — needs
+# Prefer: resolution=merge-duplicates too (same finding as the jobs probe
+# above) — so this one raw curl call bypasses the shared request() helper.
+resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/user_view_preferences?on_conflict=user_id,scope" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $QUANTITIES_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"user_id\":\"$QUANTITIES_ID\",\"scope\":\"overview_dashboard\",\"preferences\":{\"marginOn\":true}}")
+STATUS=$(printf '%s' "$resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$resp" | sed '$d')
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities: save own preferences row (no right needed — per-user, not per-contract)" "201/200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# A seat may only ever write its OWN row — the WITH CHECK (user_id =
+# auth.uid()) is what's actually being proven here, not a contract right.
+request POST "user_view_preferences" "$QUANTITIES_TOKEN" \
+  "{\"user_id\":\"$READONLY_ID\",\"scope\":\"overview_dashboard\",\"preferences\":{}}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: insert with someone else's user_id rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# readonly saves its own row under the same scope — same table, different owner.
+resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/user_view_preferences?on_conflict=user_id,scope" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $READONLY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"user_id\":\"$READONLY_ID\",\"scope\":\"overview_dashboard\",\"preferences\":{\"marginOn\":false}}")
+STATUS=$(printf '%s' "$resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$resp" | sed '$d')
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "readonly: save own preferences row" "201/200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# The one probe this table exists to have: a seat's select must not include
+# another seat's row, even under the identical scope.
+request GET "user_view_preferences?select=user_id&scope=eq.overview_dashboard" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  contains_others=$(python3 -c "
+import json, sys
+ids = [r['user_id'] for r in json.loads(sys.argv[1])]
+print('1' if '$QUANTITIES_ID' in ids else '0')
+" "$BODY_OUT")
+  [ "$contains_others" = "0" ] && ok=1
+fi
+check "readonly: select does not include quantities' preferences row" "quantities' row not present" "$ok" "$STATUS $BODY_OUT"
+
+# Update is scoped the same way — a seat can update its own row...
+request PATCH "user_view_preferences?user_id=eq.$READONLY_ID&scope=eq.overview_dashboard" "$READONLY_TOKEN" \
+  "{\"preferences\":{\"marginOn\":true}}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "readonly: update own preferences row" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# ...but not someone else's — matches 0 rows, not an error (RLS filters the
+# UPDATE's own target set, same shape as every other own-row-only policy in
+# this suite).
+request PATCH "user_view_preferences?user_id=eq.$QUANTITIES_ID&scope=eq.overview_dashboard" "$READONLY_TOKEN" \
+  "{\"preferences\":{\"marginOn\":false}}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: update on quantities' preferences row matches 0 rows" "200, []" "$ok" "$STATUS $BODY_OUT"
+
 # TODO: nothing here tests daily_entries_effective live against the database
 # — the view holding the rule that a confirmed row leaves the placed total
 # only when its replacement ENTERS it (supersession takes effect on

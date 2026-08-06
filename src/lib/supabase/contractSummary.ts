@@ -1,4 +1,5 @@
 import type { MyContract } from './contracts'
+import { fetchItems, type Item } from './items'
 import { fetchItemProgressRate, type ItemProgressRate } from './monthlyPeriods'
 import { fetchItemPrices, type ItemPrice } from './prices'
 import { margin, sumOrNull } from '../calculations/margin'
@@ -7,9 +8,11 @@ export interface ContractSummary {
   contract: MyContract
   valueToDate: number | null
   marginToDate: number | null
-  /** For a per-Item breakdown beyond the two totals above — the needs-attention aggregate on Overview. */
+  /** Every Item on the contract, all three kinds — progressRate below only ever covers unit_price. Overview's money-makers ranking needs Lump Sum/Provisional Sum Items too (rowFinancials' extAmount applies to all three kinds; a per-Item quantity reading does not). */
+  items: Item[]
+  /** For a per-Item breakdown beyond the two totals above — the needs-attention aggregate on Overview. unit_price only, same as items_kind's own scope (0013's v_item_progress_rate). */
   progressRate: ItemProgressRate[]
-  /** Raw price rows, not just the two summed totals — Overview merges these across contracts for the "at cost" figure on an over-quantity row. */
+  /** Raw price rows, not just the two summed totals — Overview merges these across contracts for the "at cost" figure on an over-quantity row, and for the money-makers ranking's own Ext. amount/margin figures. */
   prices: ItemPrice[]
 }
 
@@ -30,7 +33,11 @@ export interface ContractSummary {
  * at-cost figures) — one fetch, not two independent copies of this logic.
  */
 export async function loadContractSummary(contract: MyContract): Promise<ContractSummary> {
-  const [progressRate, prices] = await Promise.all([fetchItemProgressRate(contract.id), contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([])])
+  const [items, progressRate, prices] = await Promise.all([
+    fetchItems(contract.id),
+    fetchItemProgressRate(contract.id),
+    contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([]),
+  ])
   const priceByItem = new Map(prices.map((p) => [p.itemId, p]))
   const valueToDate = sumOrNull(
     progressRate.map((r) => {
@@ -41,5 +48,5 @@ export async function loadContractSummary(contract: MyContract): Promise<Contrac
   const marginToDate = sumOrNull(
     progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
   )
-  return { contract, valueToDate, marginToDate, progressRate, prices }
+  return { contract, valueToDate, marginToDate, items, progressRate, prices }
 }

@@ -19,6 +19,8 @@ export interface MyContract extends ContractRights {
   isSandbox: boolean
   /** The tendered total off the award document (0035) — null until someone enters it. Never derived from the sum of Ext. amount; see Rates' own reconciliation line. */
   tenderPrice: number | null
+  /** The Ministry's given contract period end (0016) — null until entered. Used to suppress stalled-Item detection on a contract that has already finished (no contract-state field exists yet to ask this properly). */
+  contractEnd: string | null
 }
 
 /**
@@ -43,7 +45,7 @@ interface RawMembershipRow {
   confirm_quantity: boolean
   view_rates: boolean
   extract_report: boolean
-  contracts: { id: string; contract_name: string; contract_no: string | null; is_sandbox: boolean; tender_price: string | null }
+  contracts: { id: string; contract_name: string; contract_no: string | null; is_sandbox: boolean; tender_price: string | null; contract_end: string | null }
 }
 
 /**
@@ -66,7 +68,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   const { data, error } = await supabase
     .from('contract_members')
     .select(
-      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price )',
+      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end )',
     )
     .eq('user_id', user.id)
   if (error) throw error
@@ -79,6 +81,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       contractNo: r.contracts.contract_no,
       isSandbox: r.contracts.is_sandbox,
       tenderPrice: r.contracts.tender_price === null ? null : Number(r.contracts.tender_price),
+      contractEnd: r.contracts.contract_end,
       createItems: r.create_items,
       setCost: r.set_cost,
       setUnitPrice: r.set_unit_price,
@@ -139,6 +142,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
     contractNo: data.contract_no,
     isSandbox: data.is_sandbox,
     tenderPrice: null,
+    contractEnd: input.contractEnd,
     // The creator's own rights on their brand-new contract — create_items
     // only (see above), everything else false until seated separately.
     createItems: true,
