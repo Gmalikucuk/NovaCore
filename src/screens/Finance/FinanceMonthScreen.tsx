@@ -11,7 +11,7 @@ import { estimatedCost, margin as computeMargin, sumOrNull } from '../../lib/cal
 import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportFinanceWorkbook, type FinanceExportRow } from '../../lib/export/financeExport'
-import { money, quantity as fmtQuantity } from '../../lib/format'
+import { rate, quantity as fmtQuantity } from '../../lib/format'
 import { Button, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 function DirectionBadge({ direction, sameIsGood }: { direction: Direction; sameIsGood?: boolean }) {
@@ -19,6 +19,16 @@ function DirectionBadge({ direction, sameIsGood }: { direction: Direction; sameI
   const good = direction === 'up'
   const Icon = good ? IconTrendingUp : IconTrendingDown
   return <Icon size={14} stroke={2} className={`inline ${good || sameIsGood === false ? 'text-nc-success-text' : 'text-nc-danger-text'}`} />
+}
+
+/** Same convention as Rates' subtotal/grand-total rows: silent when a total is complete, stated in plain language only when it's genuinely partial. */
+function CoverageNote({ coverage }: { coverage: { count: number; total: number } }) {
+  if (coverage.total === 0 || coverage.count === coverage.total) return null
+  return (
+    <span className="ml-1.5 block whitespace-nowrap text-xs font-normal text-nc-text-muted">
+      covers {coverage.count} of {coverage.total}
+    </span>
+  )
 }
 
 /** A malformed or missing :period param (a hand-edited URL — every link this app generates itself is well-formed) falls back to the current month rather than an error page. */
@@ -60,6 +70,13 @@ export function FinanceMonthScreen() {
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
+  // Value — this period/to date — is the spine everyone reads; cost and
+  // margin are Keywest's own bid estimate, a second opinion behind a click,
+  // not the first thing on screen. Off by default: the table fits the
+  // desktop viewport without horizontal scroll this way (14 columns did
+  // not).
+  const [showCostMargin, setShowCostMargin] = useState(false)
+
   useEffect(() => {
     setStatus('loading')
     Promise.all([
@@ -90,10 +107,14 @@ export function FinanceMonthScreen() {
 
   const currentContractMonth = contractMonths.find((m) => m.periodMonth === selectedPeriod)
   const previousContractMonth = contractMonths.find((m) => m.periodMonth === previousSelectedPeriod)
-  const valueThisMonth = currentContractMonth?.valueInPeriod ?? 0
-  const valueLastMonth = previousContractMonth?.valueInPeriod ?? 0
-  const marginThisMonth = currentContractMonth?.marginInPeriod ?? 0
-  const marginLastMonth = previousContractMonth?.marginInPeriod ?? 0
+  // A month CAN have real recorded value while its cost/margin stays null —
+  // cost coverage incomplete that month, not zero margin. `?? 0` here would
+  // repeat the exact absent/zero conflation this screen exists to fix, one
+  // level up from the per-item table.
+  const valueThisMonth = currentContractMonth?.valueInPeriod ?? null
+  const valueLastMonth = previousContractMonth?.valueInPeriod ?? null
+  const marginThisMonth = currentContractMonth?.marginInPeriod ?? null
+  const marginLastMonth = previousContractMonth?.marginInPeriod ?? null
 
   const availableMonths = useMemo(() => {
     const keys = new Set(itemMonths.map((m) => m.periodMonth))
@@ -112,8 +133,13 @@ export function FinanceMonthScreen() {
         const price = priceByItem.get(item.id)
         const progress = progressByItem.get(item.id)
         const unitPriced = item.itemKind === 'unit_price'
-        const quantityInPeriod = unitPriced ? (inPeriod?.quantityInPeriod ?? 0) : null
-        const quantityInPreviousPeriod = unitPriced ? (inPreviousPeriod?.quantityInPeriod ?? 0) : null
+        // No itemMonth row for this Item this period means literally no
+        // records were confirmed then — absent, not a zero quantity. `?? 0`
+        // here would silently turn "nothing happened" into a real placed
+        // amount of zero, which is exactly the em-dash/$0.00 conflation
+        // this screen exists to fix.
+        const quantityInPeriod = unitPriced ? (inPeriod ? inPeriod.quantityInPeriod : null) : null
+        const quantityInPreviousPeriod = unitPriced ? (inPreviousPeriod ? inPreviousPeriod.quantityInPeriod : null) : null
         const cost = unitPriced ? (price?.costPrice ?? null) : null
         const costBasis = unitPriced ? (price?.costBasis ?? null) : null
         const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
@@ -135,9 +161,10 @@ export function FinanceMonthScreen() {
           quantityInPeriod,
           valueInPeriod: unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null,
           costInPeriod: periodCost !== null && quantityInPeriod !== null ? quantityInPeriod * periodCost : null,
-          marginInPeriod: unitPriced && costBasis === 'per_unit' ? computeMargin(quantityInPeriod ?? 0, cost, unitPrice, costBasis) : null,
+          marginInPeriod: unitPriced && costBasis === 'per_unit' && quantityInPeriod !== null ? computeMargin(quantityInPeriod, cost, unitPrice, costBasis) : null,
           previousValueInPeriod: unitPrice !== null && quantityInPreviousPeriod !== null ? quantityInPreviousPeriod * unitPrice : null,
-          previousMarginInPeriod: unitPriced && costBasis === 'per_unit' ? computeMargin(quantityInPreviousPeriod ?? 0, cost, unitPrice, costBasis) : null,
+          previousMarginInPeriod:
+            unitPriced && costBasis === 'per_unit' && quantityInPreviousPeriod !== null ? computeMargin(quantityInPreviousPeriod, cost, unitPrice, costBasis) : null,
           quantityToDate,
           valueToDate: unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null,
           costToDate: unitPriced ? estimatedCost(quantityToDate ?? 0, cost, costBasis) : null,
@@ -162,6 +189,37 @@ export function FinanceMonthScreen() {
       toDateMargin: sumOrNull(monthRows.map((r) => r.marginToDate)),
     }),
     [monthRows],
+  )
+
+  // Coverage — same convention as Rates: state it wherever a total is
+  // genuinely partial, say nothing where it's complete. Value's coverage is
+  // about whether a Unit Price is on file at all (a stable contract-data
+  // fact); cost/margin's is scoped to whichever Items the figure actually
+  // applies to this period (period cost only ever applies to a per_unit
+  // basis, to-date cost applies to every priced Item regardless of basis) —
+  // narrower denominators than "all Items", matching how aggregateFinancials
+  // scopes Rates' own cost coverage.
+  const unitPriceRows = useMemo(() => monthRows.filter((r) => r.item.itemKind === 'unit_price'), [monthRows])
+  const valueCoverage = useMemo(
+    () => ({ count: unitPriceRows.filter((r) => priceByItem.get(r.item.id)?.unitPrice != null).length, total: unitPriceRows.length }),
+    [unitPriceRows, priceByItem],
+  )
+  const periodActiveRows = useMemo(() => unitPriceRows.filter((r) => r.quantityInPeriod !== null), [unitPriceRows])
+  const periodCostCoverage = useMemo(
+    () => ({ count: periodActiveRows.filter((r) => r.costInPeriod !== null).length, total: periodActiveRows.length }),
+    [periodActiveRows],
+  )
+  const periodMarginCoverage = useMemo(
+    () => ({ count: periodActiveRows.filter((r) => r.marginInPeriod !== null).length, total: periodActiveRows.length }),
+    [periodActiveRows],
+  )
+  const toDateCostCoverage = useMemo(
+    () => ({ count: unitPriceRows.filter((r) => r.costToDate !== null).length, total: unitPriceRows.length }),
+    [unitPriceRows],
+  )
+  const toDateMarginCoverage = useMemo(
+    () => ({ count: unitPriceRows.filter((r) => r.marginToDate !== null).length, total: unitPriceRows.length }),
+    [unitPriceRows],
   )
 
   async function handleFinanceExport() {
@@ -254,20 +312,36 @@ export function FinanceMonthScreen() {
                   <>
                     <StatCard
                       label="Value of Work"
-                      value={money(valueThisMonth)}
+                      value={rate(valueThisMonth)}
                       sub={
-                        <>
-                          <DirectionBadge direction={monthDirection(valueThisMonth, valueLastMonth)} /> {money(valueLastMonth)} the prior month
-                        </>
+                        valueThisMonth !== null && valueLastMonth !== null ? (
+                          <>
+                            <DirectionBadge direction={monthDirection(valueThisMonth, valueLastMonth)} /> {rate(valueLastMonth)} the prior month
+                          </>
+                        ) : (
+                          'No prior month to compare'
+                        )
                       }
                     />
                     <StatCard
                       label="Est. margin"
-                      value={<span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{money(marginThisMonth)}</span>}
+                      value={
+                        marginThisMonth === null ? (
+                          '—'
+                        ) : (
+                          <span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{rate(marginThisMonth)}</span>
+                        )
+                      }
                       sub={
-                        <>
-                          <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {money(marginLastMonth)} the prior month
-                        </>
+                        marginThisMonth === null ? (
+                          "Cost isn't fully priced for this month's Items"
+                        ) : marginLastMonth !== null ? (
+                          <>
+                            <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {rate(marginLastMonth)} the prior month
+                          </>
+                        ) : (
+                          'No prior month to compare'
+                        )
                       }
                     />
                   </>
@@ -311,6 +385,11 @@ export function FinanceMonthScreen() {
                     )
                   })}
                 </Select>
+                {contract.viewRates && (
+                  <Button type="button" variant="secondary" onClick={() => setShowCostMargin((v) => !v)} aria-pressed={showCostMargin}>
+                    {showCostMargin ? 'Hide cost & margin' : 'Show cost & margin'}
+                  </Button>
+                )}
                 <Button type="button" variant="secondary" disabled={exporting} onClick={() => void handleFinanceExport()}>
                   {exporting ? 'Exporting…' : 'Export to Excel'}
                 </Button>
@@ -332,18 +411,24 @@ export function FinanceMonthScreen() {
                   {contract.viewRates && (
                     <>
                       <TH align="right">Value — {formatMonthLabel(selectedMonth)}</TH>
-                      <TH align="right">Est. cost — {formatMonthLabel(selectedMonth)}</TH>
-                      <TH align="right">Est. margin — {formatMonthLabel(selectedMonth)}</TH>
-                      <TH align="right">Value — {formatMonthLabel(previousSelectedMonth)}</TH>
-                      <TH align="right">Est. margin — {formatMonthLabel(previousSelectedMonth)}</TH>
+                      {showCostMargin && (
+                        <>
+                          <TH align="right">Est. cost — {formatMonthLabel(selectedMonth)}</TH>
+                          <TH align="right">Est. margin — {formatMonthLabel(selectedMonth)}</TH>
+                        </>
+                      )}
                     </>
                   )}
                   <TH align="right">Qty to date</TH>
                   {contract.viewRates && (
                     <>
                       <TH align="right">Value to date</TH>
-                      <TH align="right">Est. cost to date</TH>
-                      <TH align="right">Est. margin to date</TH>
+                      {showCostMargin && (
+                        <>
+                          <TH align="right">Est. cost to date</TH>
+                          <TH align="right">Est. margin to date</TH>
+                        </>
+                      )}
                     </>
                   )}
                   <TH align="right">Approx. Qty</TH>
@@ -392,20 +477,18 @@ export function FinanceMonthScreen() {
                     {contract.viewRates && (
                       <>
                         <TD align="right" className="nc-numeric">
-                          {money(r.valueInPeriod)}
+                          {rate(r.valueInPeriod)}
                         </TD>
-                        <TD align="right" className="nc-numeric">
-                          {money(r.costInPeriod)}
-                        </TD>
-                        <TD align="right" className={`nc-numeric ${r.marginInPeriod !== null && r.marginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                          {r.marginInPeriod === null ? '—' : money(r.marginInPeriod)}
-                        </TD>
-                        <TD align="right" className="nc-numeric">
-                          {money(r.previousValueInPeriod)}
-                        </TD>
-                        <TD align="right" className={`nc-numeric ${r.previousMarginInPeriod !== null && r.previousMarginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                          {r.previousMarginInPeriod === null ? '—' : money(r.previousMarginInPeriod)}
-                        </TD>
+                        {showCostMargin && (
+                          <>
+                            <TD align="right" className="nc-numeric">
+                              {rate(r.costInPeriod)}
+                            </TD>
+                            <TD align="right" className={`nc-numeric ${r.marginInPeriod !== null && r.marginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                              {r.marginInPeriod === null ? '—' : rate(r.marginInPeriod)}
+                            </TD>
+                          </>
+                        )}
                       </>
                     )}
                     <TD align="right" className="nc-numeric">
@@ -421,14 +504,18 @@ export function FinanceMonthScreen() {
                     {contract.viewRates && (
                       <>
                         <TD align="right" className="nc-numeric">
-                          {money(r.valueToDate)}
+                          {rate(r.valueToDate)}
                         </TD>
-                        <TD align="right" className="nc-numeric">
-                          {money(r.costToDate)}
-                        </TD>
-                        <TD align="right" className={`nc-numeric ${r.marginToDate !== null && r.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                          {r.marginToDate === null ? '—' : money(r.marginToDate)}
-                        </TD>
+                        {showCostMargin && (
+                          <>
+                            <TD align="right" className="nc-numeric">
+                              {rate(r.costToDate)}
+                            </TD>
+                            <TD align="right" className={`nc-numeric ${r.marginToDate !== null && r.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                              {r.marginToDate === null ? '—' : rate(r.marginToDate)}
+                            </TD>
+                          </>
+                        )}
                       </>
                     )}
                     <TD align="right" className="nc-numeric">
@@ -464,27 +551,43 @@ export function FinanceMonthScreen() {
                       <div className="max-w-[200px]">Totals — quantity columns aren't summed (mixed units across Items); the $ columns are.</div>
                     </td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.value)}</td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.cost)}</td>
-                    <td
-                      className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin !== null && monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
-                    >
-                      {money(monthTotals.margin)}
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                      {rate(monthTotals.value)}
+                      <CoverageNote coverage={valueCoverage} />
                     </td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.previousValue)}</td>
-                    <td
-                      className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.previousMargin !== null && monthTotals.previousMargin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
-                    >
-                      {money(monthTotals.previousMargin)}
-                    </td>
+                    {showCostMargin && (
+                      <>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                          {rate(monthTotals.cost)}
+                          <CoverageNote coverage={periodCostCoverage} />
+                        </td>
+                        <td
+                          className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin !== null && monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                        >
+                          {rate(monthTotals.margin)}
+                          <CoverageNote coverage={periodMarginCoverage} />
+                        </td>
+                      </>
+                    )}
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.toDateValue)}</td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(monthTotals.toDateCost)}</td>
-                    <td
-                      className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.toDateMargin !== null && monthTotals.toDateMargin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
-                    >
-                      {money(monthTotals.toDateMargin)}
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                      {rate(monthTotals.toDateValue)}
+                      <CoverageNote coverage={valueCoverage} />
                     </td>
+                    {showCostMargin && (
+                      <>
+                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
+                          {rate(monthTotals.toDateCost)}
+                          <CoverageNote coverage={toDateCostCoverage} />
+                        </td>
+                        <td
+                          className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.toDateMargin !== null && monthTotals.toDateMargin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
+                        >
+                          {rate(monthTotals.toDateMargin)}
+                          <CoverageNote coverage={toDateMarginCoverage} />
+                        </td>
+                      </>
+                    )}
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
                   </tr>

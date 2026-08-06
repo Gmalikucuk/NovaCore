@@ -85,6 +85,30 @@ export function aggregateFinancials(rows: readonly { itemKind: ItemKind; financi
   return { extCostSum, costCoverage, extAmountSum, marginSum, marginCoverage, marginPercent }
 }
 
+export type MarginBand = 'below' | 'neutral' | 'above'
+
+/**
+ * Bands marginPercent into bottom/middle/top third of this SAME contract's
+ * own priced rows — never a fixed threshold (NovaCore has no basis to judge
+ * "15% is bad" on someone else's contract). Rows with no cost simply never
+ * get an entry in the returned map — absent is not low margin. Needs at
+ * least 3 priced rows to say anything about relative position at all; fewer
+ * than that, every row is left unbanded rather than forcing a meaningless
+ * split.
+ */
+export function marginBands(rows: readonly { rowId: string; marginPercent: number | null }[]): Map<string, MarginBand> {
+  const priced = rows.filter((r): r is { rowId: string; marginPercent: number } => r.marginPercent !== null)
+  const bands = new Map<string, MarginBand>()
+  if (priced.length < 3) return bands
+  const sorted = [...priced].sort((a, b) => a.marginPercent - b.marginPercent)
+  const third = sorted.length / 3
+  sorted.forEach((r, i) => {
+    const band: MarginBand = i < third ? 'below' : i < third * 2 ? 'neutral' : 'above'
+    bands.set(r.rowId, band)
+  })
+  return bands
+}
+
 export interface TenderReconciliation {
   matches: boolean
   /** extAmountSum − tenderPrice, in cents, signed — positive means the transcribed total is OVER the tendered price. Compared in cents so float drift never produces a false mismatch. */

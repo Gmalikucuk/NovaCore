@@ -8,8 +8,22 @@ import { fetchLastConfirmedAt } from '../../lib/supabase/quantityRecords'
 import { formatMonthLabel, monthKeyFromDate, monthKeyToPeriod } from '../../lib/calculations/overview'
 import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
-import { money } from '../../lib/format'
+import { rate } from '../../lib/format'
 import { NotificationBanner, PageHeader, SandboxBanner, Spinner } from '../../components/ui'
+
+// The curve of the contract at a glance — a filled track scaled against the
+// largest month on THIS list, so June/July reading as substantial and
+// August as small (Venables' real production profile) is visible without
+// reading twelve numbers. A tiny nonzero floor keeps a genuinely small-but-
+// real month visible as a sliver rather than vanishing entirely.
+function ValueBar({ value, maxValue }: { value: number | null; maxValue: number }) {
+  const pct = value !== null && maxValue > 0 && value > 0 ? Math.max((value / maxValue) * 100, 3) : 0
+  return (
+    <div className="relative mt-1 h-1.5 w-28 overflow-hidden rounded-full bg-nc-secondary" aria-hidden="true">
+      {pct > 0 && <div className="absolute inset-y-0 left-0 rounded-full bg-nc-accent" style={{ width: `${pct}%` }} />}
+    </div>
+  )
+}
 
 /**
  * "What does that come to" — a compact list of months, most recent first,
@@ -89,6 +103,8 @@ export function MonthsScreen() {
       })
   }, [itemMonths, contractMonths, nowMonthKey])
 
+  const maxMonthValue = useMemo(() => financeMonths.reduce((max, fm) => Math.max(max, fm.value ?? 0), 0), [financeMonths])
+
   return (
     <div>
       <PageHeader title="Months" subtitle={contract.name} />
@@ -137,11 +153,12 @@ export function MonthsScreen() {
                     <div className="flex gap-6">
                       <div className="text-right">
                         <div className="text-xs text-nc-text-muted">Value</div>
-                        <div className="nc-numeric text-sm font-semibold text-nc-text">{money(fm.value)}</div>
+                        <div className="nc-numeric text-sm font-semibold text-nc-text">{rate(fm.value)}</div>
+                        <ValueBar value={fm.value} maxValue={maxMonthValue} />
                       </div>
                       <div className="text-right">
                         <div className="text-xs text-nc-text-muted">Est. margin</div>
-                        <div className={`nc-numeric text-sm font-semibold ${fm.margin !== null && fm.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}>{money(fm.margin)}</div>
+                        <div className={`nc-numeric text-sm font-semibold ${fm.margin !== null && fm.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}>{rate(fm.margin)}</div>
                       </div>
                     </div>
                   )}

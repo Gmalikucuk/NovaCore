@@ -46,14 +46,23 @@ export async function fetchItemMonths(contractId: string): Promise<ItemMonth[]> 
   })
 }
 
-/** Contract-level monthly value/cost/margin (0013's v_contract_month) — behind the finance wall by construction (joins item_prices, gated on view_rates); a seat without it gets zero rows, not an error. */
+/**
+ * Contract-level monthly value/cost/margin (0013's v_contract_month) —
+ * behind the finance wall by construction (joins item_prices, gated on
+ * view_rates); a seat without it gets zero rows, not an error.
+ * cost/margin are genuinely nullable independent of value: a month can have
+ * real recorded quantity (value_in_period a real number) while cost
+ * coverage that month is incomplete or absent, which the view itself
+ * reports as a SQL NULL, not a zero — Keywest simply doesn't know that
+ * figure yet.
+ */
 export interface ContractMonth {
   contractId: string
   periodMonth: string
   itemsWorked: number
-  valueInPeriod: number
-  costInPeriod: number
-  marginInPeriod: number
+  valueInPeriod: number | null
+  costInPeriod: number | null
+  marginInPeriod: number | null
   workingDays: number
 }
 
@@ -61,10 +70,14 @@ interface RawContractMonthRow {
   contract_id: string
   period_month: string
   items_worked: number
-  value_in_period: string
-  cost_in_period: string
-  margin_in_period: string
+  value_in_period: string | null
+  cost_in_period: string | null
+  margin_in_period: string | null
   working_days: number
+}
+
+function nullableNumber(v: string | null): number | null {
+  return v === null ? null : Number(v)
 }
 
 export async function fetchContractMonths(contractId: string): Promise<ContractMonth[]> {
@@ -79,9 +92,13 @@ export async function fetchContractMonths(contractId: string): Promise<ContractM
       contractId: r.contract_id,
       periodMonth: r.period_month,
       itemsWorked: r.items_worked,
-      valueInPeriod: Number(r.value_in_period),
-      costInPeriod: Number(r.cost_in_period),
-      marginInPeriod: Number(r.margin_in_period),
+      // `Number(null)` is 0, not NaN — a plain Number() cast here would
+      // silently turn "cost not fully priced this month" into a real $0.00,
+      // the exact absent/zero conflation this app works hard to avoid
+      // everywhere else (sumOrNull, rowFinancials' own null-propagation).
+      valueInPeriod: nullableNumber(r.value_in_period),
+      costInPeriod: nullableNumber(r.cost_in_period),
+      marginInPeriod: nullableNumber(r.margin_in_period),
       workingDays: r.working_days,
     }
   })

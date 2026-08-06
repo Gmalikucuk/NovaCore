@@ -6,7 +6,7 @@ import { updateTenderPrice } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
 import type { CostBasis } from '../../lib/calculations/margin'
-import { aggregateFinancials, reconcileTenderPrice, rowFinancials, type RowFinancials } from '../../lib/calculations/bidSummary'
+import { aggregateFinancials, marginBands, reconcileTenderPrice, rowFinancials, type MarginBand, type RowFinancials } from '../../lib/calculations/bidSummary'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { percent, quantity as fmtQuantity, rate } from '../../lib/format'
@@ -75,6 +75,29 @@ function DashCell({ width, title }: { width: number; title?: string }) {
       —
     </span>
   )
+}
+
+// The Pareto view: a background bar scaled against the largest Ext. amount
+// on the contract, the figure layered on top so it stays the primary,
+// readable element (the brief's own requirement). Deliberately NOT used for
+// Ext. cost — cost coverage is partial and permanent, so a bar chart there
+// would imply a comparability the data doesn't have. A small width floor
+// keeps a genuinely small-but-real figure visible as a sliver rather than
+// vanishing at true-to-scale width.
+function ExtAmountCell({ value, width, maxValue }: { value: number | null; width: number; maxValue: number }) {
+  const pct = value !== null && maxValue > 0 && value > 0 ? Math.max((value / maxValue) * 100, 2) : 0
+  return (
+    <span className="relative inline-block py-2" style={{ width }}>
+      {pct > 0 && <span className="absolute inset-y-0 left-0 rounded-sm bg-nc-accent/15" style={{ width: `${pct}%` }} aria-hidden="true" />}
+      <span className="nc-numeric relative block text-right">{value === null ? '—' : rate(value)}</span>
+    </span>
+  )
+}
+
+const BAND_TONE: Record<MarginBand, string> = {
+  below: 'bg-nc-danger-bg text-nc-danger-text',
+  neutral: '',
+  above: 'bg-nc-success-bg text-nc-success-text',
 }
 
 const UNIT_W = 100
@@ -243,6 +266,16 @@ export function RatesScreen() {
     () => (tenderPrice !== null && grandTotal.extAmountSum !== null ? reconcileTenderPrice(grandTotal.extAmountSum, tenderPrice) : null),
     [tenderPrice, grandTotal.extAmountSum],
   )
+
+  // Scaled against every row on the contract, not just the currently sorted
+  // slice — the bar's meaning ("this Item is N% of the biggest one") has to
+  // stay fixed regardless of sort order or which section is being read.
+  const maxExtAmount = useMemo(() => rows.reduce((max, r) => Math.max(max, r.financials.extAmount ?? 0), 0), [rows])
+  const bandByRowId = useMemo(
+    () => marginBands(rows.map((r) => ({ rowId: r.item.id, marginPercent: r.financials.marginPercent }))),
+    [rows],
+  )
+  const bandsActive = bandByRowId.size > 0
 
   // Section headers/subtotals only mean anything when the visible order
   // actually groups by section — true under the Item # sort (a section's
@@ -540,10 +573,10 @@ export function RatesScreen() {
               canEdit ? (
                 priceInput
               ) : (
-                <MoneyDisplay value={row.financials.extAmount} width={EXT_W} />
+                <ExtAmountCell value={row.financials.extAmount} width={EXT_W} maxValue={maxExtAmount} />
               )
             ) : (
-              <MoneyDisplay value={row.financials.extAmount} width={EXT_W} />
+              <ExtAmountCell value={row.financials.extAmount} width={EXT_W} maxValue={maxExtAmount} />
             )}
           </TD>
 
@@ -553,7 +586,19 @@ export function RatesScreen() {
           <TD align="right" className={`nc-numeric align-middle ${row.financials.margin !== null && row.financials.margin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
             {row.financials.margin === null ? '—' : rate(row.financials.margin)}
           </TD>
-          <TD align="right" className={`nc-numeric align-middle ${row.financials.marginPercent !== null && row.financials.marginPercent < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+          <TD
+            align="right"
+            className={`nc-numeric align-middle ${
+              row.financials.marginPercent !== null && row.financials.marginPercent < 0
+                ? 'font-semibold bg-nc-danger-bg text-nc-danger-text'
+                : BAND_TONE[bandByRowId.get(item.id) ?? 'neutral']
+            }`}
+            title={
+              bandByRowId.has(item.id)
+                ? `${bandByRowId.get(item.id) === 'below' ? 'Bottom' : bandByRowId.get(item.id) === 'above' ? 'Top' : 'Middle'} third of this contract's own priced Items — relative, not a fixed threshold.`
+                : undefined
+            }
+          >
             {row.financials.marginPercent === null ? '—' : percent(row.financials.marginPercent)}
           </TD>
         </TR>
@@ -633,6 +678,11 @@ export function RatesScreen() {
           {!canEdit && (
             <NotificationBanner tone="info" className="mb-4">
               These figures are read-only for you on this contract. If you need to enter them, ask whoever manages rights on this contract.
+            </NotificationBanner>
+          )}
+          {bandsActive && (
+            <NotificationBanner tone="info" className="mb-4">
+              Margin % below is banded against the bottom/top third of this contract's own priced Items — relative to {contract.name}, not a fixed threshold. Rows with no cost show no band.
             </NotificationBanner>
           )}
 

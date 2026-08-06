@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateFinancials, reconcileTenderPrice, rowFinancials, type RowFinancialsInput } from './bidSummary'
+import { aggregateFinancials, marginBands, reconcileTenderPrice, rowFinancials, type RowFinancialsInput } from './bidSummary'
 
 function unitPriceInput(overrides: Partial<RowFinancialsInput> = {}): RowFinancialsInput {
   return {
@@ -142,6 +142,45 @@ describe('aggregateFinancials', () => {
     expect(agg.marginSum).toBeNull()
     expect(agg.marginPercent).toBeNull()
     expect(agg.costCoverage).toEqual({ count: 0, total: 0 })
+  })
+})
+
+describe('marginBands', () => {
+  it('splits priced rows into bottom/middle/top third by marginPercent', () => {
+    const rows = [
+      { rowId: 'a', marginPercent: 0.05 },
+      { rowId: 'b', marginPercent: 0.1 },
+      { rowId: 'c', marginPercent: 0.2 },
+      { rowId: 'd', marginPercent: 0.3 },
+      { rowId: 'e', marginPercent: 0.4 },
+      { rowId: 'f', marginPercent: 0.5 },
+    ]
+    const bands = marginBands(rows)
+    expect(bands.get('a')).toBe('below')
+    expect(bands.get('b')).toBe('below')
+    expect(bands.get('c')).toBe('neutral')
+    expect(bands.get('d')).toBe('neutral')
+    expect(bands.get('e')).toBe('above')
+    expect(bands.get('f')).toBe('above')
+  })
+
+  it('leaves unpriced rows out of the map entirely — absent, not a band', () => {
+    const bands = marginBands([
+      { rowId: 'a', marginPercent: 0.1 },
+      { rowId: 'b', marginPercent: null },
+      { rowId: 'c', marginPercent: 0.2 },
+      { rowId: 'd', marginPercent: 0.3 },
+    ])
+    expect(bands.has('b')).toBe(false)
+    expect(bands.size).toBe(3)
+  })
+
+  it('bands nothing when fewer than 3 rows are priced — no meaningful thirds', () => {
+    const bands = marginBands([
+      { rowId: 'a', marginPercent: 0.1 },
+      { rowId: 'b', marginPercent: 0.2 },
+    ])
+    expect(bands.size).toBe(0)
   })
 })
 
