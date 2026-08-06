@@ -1556,6 +1556,73 @@ request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"contract_st
 check "cleanup: contract_state reverted to active" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# contract_state_history — trigger-only writes, is_member()-only reads.
+# Deliberately NOT gated on any right (unlike item_price_history's
+# view_rates): contract_state itself has no right-gated SELECT policy
+# either (contracts_select_member is is_member() alone), so its history
+# reads on the same terms. quantities holds neither manage_members nor
+# view_rates on PROJECT_ID — a member with no special right at all — the
+# exact seat that proves membership alone is sufficient. correct_only is
+# NOT seated on ADMIN_CONTRACT_ID at all (see the Admin section above,
+# "sees PROBE-ADMIN contract despite no membership") — despite holding
+# manage_members and being able to see that contract's row and roster via
+# the OTHER, deliberately widened policies, it has no widened path into
+# THIS table, which is the point: history follows membership, not a
+# company-wide right.
+# =============================================================================
+echo
+echo "=== contract_state_history ==="
+
+# Baseline count before the real change below.
+request GET "contract_state_history?select=id&contract_id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN"
+before_count=$(json_len "$BODY_OUT")
+
+# A non-state update must not log anything.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"tender_price": 4242}'
+request GET "contract_state_history?select=id&contract_id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$before_count" != "-1" ] && [ "$(json_len "$BODY_OUT")" = "$before_count" ] && ok=1
+check "correct_only: a non-state update to contracts logs nothing" "history row count unchanged" "$ok" "before=$before_count after=$(json_len "$BODY_OUT")"
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"tender_price": null}'
+
+# A real state change logs old -> new.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"contract_state":"warranty_period"}'
+request GET "contract_state_history?select=old_state,new_state&contract_id=eq.$PROJECT_ID&order=changed_at.desc&limit=1" "$QUANTITIES_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  os=$(json_field "$BODY_OUT" 0 old_state)
+  ns=$(json_field "$BODY_OUT" 0 new_state)
+  [ "$os" = "active" ] && [ "$ns" = "warranty_period" ] && ok=1
+fi
+check "quantities: contract_state_history captured old->new (membership alone, no right needed)" "200, active->warranty_period" "$ok" "$STATUS $BODY_OUT"
+
+# Re-sending the same value must not add a second row.
+request GET "contract_state_history?select=id&contract_id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN"
+mid_count=$(json_len "$BODY_OUT")
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"contract_state":"warranty_period"}'
+request GET "contract_state_history?select=id&contract_id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$mid_count" != "-1" ] && [ "$(json_len "$BODY_OUT")" = "$mid_count" ] && ok=1
+check "correct_only: re-sending the same contract_state logs no new row" "history row count unchanged" "$ok" "before=$mid_count after=$(json_len "$BODY_OUT")"
+
+# Revert, per the shared-fixture convention above.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"contract_state":"active"}'
+check "cleanup: contract_state reverted to active (post-history probes)" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# No direct write path exists for anyone — full holds every per-project
+# right and still can't reach this table directly.
+request POST "contract_state_history" "$FULL_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"old_state\":\"active\",\"new_state\":\"archived\"}"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: direct insert into contract_state_history rejected (trigger-only writes)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# correct_only is not seated on ADMIN_CONTRACT_ID — the read gate is
+# membership, not manage_members, so it sees nothing here even though the
+# OTHER, deliberately widened Admin policies let it see that contract's
+# row and roster.
+request GET "contract_state_history?select=*&contract_id=eq.$ADMIN_CONTRACT_ID" "$CORRECT_ONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "correct_only: contract_state_history invisible on a contract it isn't seated on" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # Privileged-path checks — a different layer, tested separately on purpose.
 # Unaffected by the rights rewrite: these exercise guard_entry_transitions()
 # directly at the postgres role, below PostgREST's grant system entirely.
