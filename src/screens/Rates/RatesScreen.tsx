@@ -69,9 +69,9 @@ function MoneyDisplay({ value, width }: { value: number | null; width: number })
     </span>
   )
 }
-function DashCell({ width }: { width: number }) {
+function DashCell({ width, title }: { width: number; title?: string }) {
   return (
-    <span className="inline-block py-2 text-right text-nc-text-muted" style={{ width }}>
+    <span className="inline-block py-2 text-right text-nc-text-muted" style={{ width }} title={title}>
       —
     </span>
   )
@@ -357,7 +357,13 @@ export function RatesScreen() {
     }
   }
 
-  const subtitle = `${contract.name}${status === 'ready' ? ` · ${grandTotal.costCoverage.count} of ${grandTotal.costCoverage.total} Items have an Est. cost` : ''}`
+  // Leads with the TRUE total (every row rendered, all three kinds) before
+  // the cost-coverage fraction — costCoverage.total is deliberately
+  // narrower (unit_price + lump_sum only; a Provisional Sum Item never
+  // carries a cost, so it was never a candidate), and showing that number
+  // alone read as "the contract has 45 Items," not "45 of them can be
+  // costed."
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${rows.length} Items · ${grandTotal.costCoverage.count} of ${grandTotal.costCoverage.total} have an Est. cost` : ''}`
 
   function sortableHeader(key: SortKey, label: string, align: 'left' | 'right' = 'left'): ReactNode {
     return (
@@ -490,7 +496,7 @@ export function RatesScreen() {
                 </div>
               </div>
             ) : (
-              <DashCell width={UNIT_W} />
+              <DashCell width={UNIT_W} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Ext. cost' : undefined} />
             )}
           </TD>
 
@@ -521,7 +527,7 @@ export function RatesScreen() {
                 <MoneyDisplay value={row.unitPrice} width={UNIT_W + 20} />
               )
             ) : (
-              <DashCell width={UNIT_W + 20} />
+              <DashCell width={UNIT_W + 20} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Ext. amount' : undefined} />
             )}
           </TD>
 
