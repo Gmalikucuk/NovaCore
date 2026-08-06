@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
-import { IconCalendarPlus } from '@tabler/icons-react'
+import { IconCalendarPlus, IconCheck } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { useSession } from '../../lib/useSession'
 import { fetchItems, isApplicationRateItem, isAreaUnit, isUnitPriceItem, type Item } from '../../lib/supabase/items'
@@ -165,6 +165,12 @@ export function QuantityRecordsScreen() {
   // first (the order they were actually entered in), same convention the
   // mobile screen's own day list already uses.
   const todaysRecords = useMemo(() => allRecords.filter((r) => r.workDate === workDate).sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [allRecords, workDate])
+
+  // Which Items already have a record on the SELECTED date — distinct from
+  // progressByItemId's lastWorkDate (contract-wide, any date ever). Drives
+  // the picker's "already done today" marker, so someone working down a
+  // field sheet can see progress through it at a glance.
+  const todaysItemIds = useMemo(() => new Set(todaysRecords.map((r) => r.itemId)), [todaysRecords])
 
   // A confirmed record that's been superseded by a CONFIRMED correction no
   // longer counts — "superseded" badge. Separate from pendingCorrectionByTarget
@@ -484,11 +490,16 @@ export function QuantityRecordsScreen() {
           // back from the server response instead.
           version: 1,
         })
-        // Fields reset, correction mode cleared, but the panel and Item stay
-        // open — a day's work is often several stations against the SAME
-        // Item in a row, and reopening the picker each time would undo the
-        // whole point of inverting this screen.
-        setFields(BLANK)
+        // Panel and Item stay open — a day's work is often several stations
+        // against the SAME Item in a row, and reopening the picker each
+        // time would undo the whole point of inverting this screen. Only
+        // the STRETCH-specific fields clear (stations, width, area,
+        // quantity, note) — Location, Direction, and the LKI pair persist,
+        // since consecutive stretches on one Item overwhelmingly share all
+        // three (same crew, same lane, same segment, different chainage).
+        // Explicit "Change item" is the deliberate reset; staying — location
+        // included — is the default for everything else.
+        setFields((f) => ({ ...BLANK, location: f.location, direction: f.direction, lkiSegment: f.lkiSegment, lkiVersion: f.lkiVersion }))
         setAreaFieldTouched(false)
         setCorrectingId(null)
         stationFromRef.current?.focus()
@@ -596,7 +607,14 @@ export function QuantityRecordsScreen() {
                           <p className="p-3 text-sm text-nc-text-muted">No matching Items.</p>
                         ) : (
                           filteredPickableItems.map((item) => {
+                            // lastWorkDate is contract-wide (any date, ever)
+                            // — deliberately worded "Never recorded" rather
+                            // than "Not yet recorded" so it can't be misread
+                            // as "not done today" on a contract an Item has
+                            // been worked on for weeks. Recorded-today is a
+                            // separate, date-scoped check (todaysItemIds).
                             const last = progressByItemId.get(item.id)?.lastWorkDate ?? null
+                            const recordedToday = todaysItemIds.has(item.id)
                             return (
                               <button
                                 key={item.id}
@@ -608,7 +626,13 @@ export function QuantityRecordsScreen() {
                                   <span className="nc-numeric font-semibold text-nc-text">{item.itemNumber}</span>{' '}
                                   <span className="text-sm text-nc-text-muted">{item.description}</span>
                                 </span>
-                                <span className="shrink-0 text-xs text-nc-text-muted">{last ? `Last ${formatDayLabel(last)}` : 'Not yet recorded'}</span>
+                                {recordedToday ? (
+                                  <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-nc-success-text">
+                                    <IconCheck size={14} stroke={2.5} /> {isToday ? 'Recorded today' : `Recorded ${formatDayLabel(workDate)}`}
+                                  </span>
+                                ) : (
+                                  <span className="shrink-0 text-xs text-nc-text-muted">{last ? `Last ${formatDayLabel(last)}` : 'Never recorded'}</span>
+                                )}
                               </button>
                             )
                           })
@@ -731,6 +755,24 @@ export function QuantityRecordsScreen() {
                             disabled={!formUsable}
                           />
                         </div>
+                        {/* Point-located work (Inspect Manholes, Asphalt
+                            Spillways — several discrete stations recorded
+                            under one Item on one date) is one record per
+                            point, Station To left blank, not a point list on
+                            a single record. quantity_records is already
+                            append-only with per-row confirmation; a bundled
+                            record would force confirming or correcting every
+                            point together even when only one needed it, and
+                            the real examples show points that genuinely
+                            diverge in fate (one manhole adjusted, another
+                            replaced) — only representable if each point is
+                            its own row, with Location/Note carrying that
+                            point's own text. No schema change either way:
+                            station_to is already nullable. The above-BLANK
+                            persistence (Location/Direction/LKI survive an
+                            Add, only station/width/area/quantity/note clear)
+                            is what makes typing six of these fast — type the
+                            station, Enter, type the next, Enter. */}
                         <div className="w-28">
                           <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="de-station-from">
                             Station from
