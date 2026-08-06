@@ -154,6 +154,15 @@ export function OverviewScreen() {
     () => sumOrNull(realSummaries.map((s) => pipelineFigures(s.contract.tenderPrice, s.valueToDate).backlog)),
     [realSummaries],
   )
+  // A contract without a tender price on file doesn't drop out of the sum
+  // (sumOrNull already handles that) — this is the plain-language half of
+  // the same rule: say how many of the visible real contracts the total
+  // actually covers, same convention as Rates' own "covers N of M items".
+  // Backlog shares the same coverage — it's tenderPrice-derived too.
+  const contractValueCoverage = useMemo(
+    () => ({ count: realSummaries.filter((s) => s.contract.tenderPrice !== null).length, total: realSummaries.length }),
+    [realSummaries],
+  )
 
   const sortedPipelineRows = useMemo(() => {
     const dir = prefs.pipelineSortDir === 'asc' ? 1 : -1
@@ -317,9 +326,25 @@ export function OverviewScreen() {
             <section className="mb-8">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Pipeline</h2>
               <div className="mb-4 grid grid-cols-3 gap-4">
-                <StatCard label="Contract value under management" value={rate(contractValueTotal)} sub="Real contracts only — sandbox excluded" />
+                <StatCard
+                  label="Contract value under management"
+                  value={rate(contractValueTotal)}
+                  sub={
+                    contractValueCoverage.total > 0 && contractValueCoverage.count < contractValueCoverage.total
+                      ? `Covers ${contractValueCoverage.count} of ${contractValueCoverage.total} real contracts — the rest have no tender price on file yet`
+                      : 'Real contracts only — sandbox excluded'
+                  }
+                />
                 <StatCard label="Earned to date" value={rate(earnedTotal)} sub="Real contracts only — sandbox excluded" />
-                <StatCard label="Backlog remaining" value={rate(backlogTotal)} sub="Real contracts only — sandbox excluded" />
+                <StatCard
+                  label="Backlog remaining"
+                  value={rate(backlogTotal)}
+                  sub={
+                    contractValueCoverage.total > 0 && contractValueCoverage.count < contractValueCoverage.total
+                      ? `Covers ${contractValueCoverage.count} of ${contractValueCoverage.total} real contracts — same gap as contract value`
+                      : 'Real contracts only — sandbox excluded'
+                  }
+                />
               </div>
 
               {marginAvailable && (

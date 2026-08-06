@@ -785,7 +785,10 @@ export function RatesScreen() {
                               Ext. amount totals {grandTotal.extAmountSum === null ? '—' : rate(grandTotal.extAmountSum)} — matches the tendered price of {rate(tenderPrice)}.
                             </span>
                           ) : (
-                            <span className="text-nc-danger-text">
+                            // Plain, not alarmed — a difference here can
+                            // legitimately mean prices are still being
+                            // entered, not that something is wrong.
+                            <span className="text-nc-text">
                               Ext. amount totals {grandTotal.extAmountSum === null ? '—' : rate(grandTotal.extAmountSum)},{' '}
                               {rate(Math.abs(reconciliation.differenceCents) / 100)} {reconciliation.differenceCents > 0 ? 'over' : 'under'} the tendered price of{' '}
                               {rate(tenderPrice)}.
