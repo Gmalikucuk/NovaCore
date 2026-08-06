@@ -9,6 +9,8 @@ import {
   contractCountsToward,
   contractNeedsStalledSuppression,
   contractParticipatesInProduction,
+  contractStateFigureChanges,
+  contractStateStalledChange,
   coverageNote,
   DEFAULT_OVERVIEW_PREFERENCES,
   figureCoverage,
@@ -216,6 +218,57 @@ describe('contractParticipatesInProduction', () => {
     expect(contractParticipatesInProduction('warranty_period')).toBe(true)
     expect(contractParticipatesInProduction('closed_out')).toBe(true)
     expect(contractParticipatesInProduction('archived')).toBe(true)
+  })
+})
+
+describe('contractStateFigureChanges', () => {
+  const amounts = { contractValue: 1000, earned: 400, backlog: 600 }
+
+  it('active -> warranty_period: no figure changes — both count toward all three identically', () => {
+    expect(contractStateFigureChanges('active', 'warranty_period', amounts)).toEqual([])
+  })
+
+  it('pipeline -> active: gains earned only (was already in contract value and backlog)', () => {
+    expect(contractStateFigureChanges('pipeline', 'active', amounts)).toEqual([{ figure: 'earned', gains: true, amount: 400 }])
+  })
+
+  it('active -> closed_out: leaves contract value and backlog, stays in earned (the brief\'s own example)', () => {
+    const changes = contractStateFigureChanges('active', 'closed_out', amounts)
+    expect(changes).toContainEqual({ figure: 'contractValue', gains: false, amount: 1000 })
+    expect(changes).toContainEqual({ figure: 'backlog', gains: false, amount: 600 })
+    expect(changes.find((c) => c.figure === 'earned')).toBeUndefined()
+  })
+
+  it('closed_out -> archived: leaves earned only', () => {
+    expect(contractStateFigureChanges('closed_out', 'archived', amounts)).toEqual([{ figure: 'earned', gains: false, amount: 400 }])
+  })
+
+  it('carries this contract\'s own amount, not a company total, including null when absent', () => {
+    const changes = contractStateFigureChanges('pipeline', 'closed_out', { contractValue: null, earned: null, backlog: null })
+    expect(changes.every((c) => c.amount === null)).toBe(true)
+  })
+
+  it('is empty when the state does not actually change', () => {
+    expect(contractStateFigureChanges('active', 'active', amounts)).toEqual([])
+  })
+})
+
+describe('contractStateStalledChange', () => {
+  it('turns off when leaving active', () => {
+    expect(contractStateStalledChange('active', 'warranty_period')).toBe('turns_off')
+  })
+
+  it('turns on when returning to active', () => {
+    expect(contractStateStalledChange('closed_out', 'active')).toBe('turns_on')
+  })
+
+  it('is unchanged between two non-active states', () => {
+    expect(contractStateStalledChange('pipeline', 'closed_out')).toBe('unchanged')
+    expect(contractStateStalledChange('warranty_period', 'archived')).toBe('unchanged')
+  })
+
+  it('is unchanged when the state does not actually change', () => {
+    expect(contractStateStalledChange('active', 'active')).toBe('unchanged')
   })
 })
 

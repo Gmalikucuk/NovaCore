@@ -3,19 +3,159 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import { IconBuildingSkyscraper } from '@tabler/icons-react'
 import type { CurrentContractState } from '../../lib/useCurrentContract'
 import { loadContractSummary, type ContractSummary } from '../../lib/supabase/contractSummary'
-import { contractCountsToward, coverageNote, figureCoverage } from '../../lib/calculations/overview'
+import { updateContractState } from '../../lib/supabase/contracts'
+import type { ContractState } from '../../lib/supabase/contracts'
+import {
+  CONTRACT_STATE_LABEL,
+  CONTRACT_STATE_OPTIONS,
+  contractCountsToward,
+  contractStateFigureChanges,
+  contractStateStalledChange,
+  coverageNote,
+  figureCoverage,
+  OVERVIEW_FIGURE_LABEL,
+  pipelineFigures,
+} from '../../lib/calculations/overview'
 import { sumOrNull } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
-import { money } from '../../lib/format'
-import { Button, ContractStateTag, EmptyState, NotificationBanner, PageHeader, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { money, rate } from '../../lib/format'
+import { Button, ContractStateTag, EmptyState, NotificationBanner, PageHeader, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+
+function contractLabel(contract: ContractSummary['contract']): string {
+  return contract.contractNo ? `${contract.contractNo} — ${contract.name}` : contract.name
+}
+
+/**
+ * The state control itself. Read-only (just the tag) for a seat without
+ * manage_members — "sees the tag and no control," per the brief, with
+ * nothing in this component's own markup naming the right. canSetState is
+ * the caller's job to compute; this component trusts it, same posture as
+ * every other rights-gated control in this app (RLS is the real wall
+ * either way).
+ *
+ * No modal — nothing in this codebase has one. The Select and its
+ * confirmation grow inside this cell in place; the row's other cells
+ * simply sit beside whatever height that takes, same as a table cell
+ * wrapping normally.
+ */
+function ContractStateCell({ summary, canSetState, onChanged }: { summary: ContractSummary; canSetState: boolean; onChanged: (contractId: string, newState: ContractState) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<ContractState>(summary.contract.contractState)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  if (!canSetState) {
+    return <ContractStateTag state={summary.contract.contractState} />
+  }
+
+  const current = summary.contract.contractState
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="flex items-center gap-1.5 rounded hover:bg-nc-secondary"
+        onClick={(e) => {
+          e.stopPropagation()
+          setDraft(current)
+          setError(null)
+          setEditing(true)
+        }}
+      >
+        <ContractStateTag state={current} />
+        <span className="text-xs text-nc-text-subtle underline">Change</span>
+      </button>
+    )
+  }
+
+  const backlog = pipelineFigures(summary.contract.tenderPrice, summary.valueToDate).backlog
+  const figureChanges = contractStateFigureChanges(current, draft, { contractValue: summary.contract.tenderPrice, earned: summary.valueToDate, backlog })
+  const stalledChange = contractStateStalledChange(current, draft)
+  const hasRealChange = draft !== current
+
+  function cancel() {
+    setEditing(false)
+    setError(null)
+  }
+
+  async function confirm() {
+    setSaving(true)
+    setError(null)
+    try {
+      await updateContractState(summary.contract.id, draft)
+      onChanged(summary.contract.id, draft)
+      setEditing(false)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div onClick={(e) => e.stopPropagation()} className="flex flex-col items-start gap-2">
+      <div className="flex items-center gap-2">
+        <Select value={draft} onChange={(e) => setDraft(e.target.value as ContractState)} disabled={saving} className="w-auto">
+          {CONTRACT_STATE_OPTIONS.map((state) => (
+            <option key={state} value={state}>
+              {CONTRACT_STATE_LABEL[state]}
+            </option>
+          ))}
+        </Select>
+        {!hasRealChange && (
+          <Button type="button" variant="ghost" onClick={cancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
+
+      {hasRealChange && (
+        <NotificationBanner tone="info" className="max-w-sm">
+          <p className="mb-2">
+            Moving {contractLabel(summary.contract)} from {CONTRACT_STATE_LABEL[current]} to {CONTRACT_STATE_LABEL[draft]}:
+          </p>
+          <ul className="mb-2 list-disc space-y-0.5 pl-4">
+            {figureChanges.map((c) => (
+              <li key={c.figure}>
+                {c.gains ? 'Joins' : 'Leaves'} {OVERVIEW_FIGURE_LABEL[c.figure]} ({rate(c.amount)})
+              </li>
+            ))}
+            {stalledChange !== 'unchanged' && <li>Stalled detection turns {stalledChange === 'turns_on' ? 'on' : 'off'} for its Items.</li>}
+            {figureChanges.length === 0 && stalledChange === 'unchanged' && <li>No change to any company-wide figure or stalled detection.</li>}
+          </ul>
+          {error && <p className="mb-2 text-nc-danger-text">{error}</p>}
+          <div className="flex gap-2">
+            <Button type="button" onClick={() => void confirm()} disabled={saving}>
+              {saving ? 'Saving…' : 'Confirm'}
+            </Button>
+            <Button type="button" variant="ghost" onClick={cancel} disabled={saving}>
+              Cancel
+            </Button>
+          </div>
+        </NotificationBanner>
+      )}
+    </div>
+  )
+}
 
 /** Shared row shape for every section below — module-level so it isn't recreated (and every row's identity lost) on each PortfolioScreen render. */
-function ContractTable({ rows, showStateBadge, onOpen }: { rows: ContractSummary[]; showStateBadge: boolean; onOpen: (contractId: string) => void }) {
+function ContractTable({
+  rows,
+  canSetState,
+  onOpen,
+  onStateChanged,
+}: {
+  rows: ContractSummary[]
+  canSetState: boolean
+  onOpen: (contractId: string) => void
+  onStateChanged: (contractId: string, newState: ContractState) => void
+}) {
   return (
     <Table>
       <THead>
         <TR>
           <TH>Contract</TH>
+          <TH>State</TH>
           <TH align="right">Value to date</TH>
           <TH align="right">Est. margin to date</TH>
           <TH />
@@ -26,11 +166,13 @@ function ContractTable({ rows, showStateBadge, onOpen }: { rows: ContractSummary
           <TR key={s.contract.id} className="cursor-pointer hover:bg-nc-secondary/60" onClick={() => onOpen(s.contract.id)}>
             <TD>
               <div className="flex items-center gap-2">
-                <span className="font-medium text-nc-text">{s.contract.contractNo ? `${s.contract.contractNo} — ${s.contract.name}` : s.contract.name}</span>
-                {showStateBadge && <ContractStateTag state={s.contract.contractState} />}
+                <span className="font-medium text-nc-text">{contractLabel(s.contract)}</span>
                 {/* Row-level tag, not a banner — see loadContractSummary's own comment. */}
                 {s.contract.isSandbox && <span className="shrink-0 rounded-full bg-nc-danger-bg px-2 py-0.5 text-xs font-medium text-nc-danger-text">Sandbox</span>}
               </div>
+            </TD>
+            <TD>
+              <ContractStateCell summary={s} canSetState={canSetState} onChanged={onStateChanged} />
             </TD>
             <TD align="right" className="nc-numeric">
               {money(s.valueToDate)}
@@ -76,8 +218,14 @@ function ContractTable({ rows, showStateBadge, onOpen }: { rows: ContractSummary
  * extended to the one section that existed.
  */
 export function PortfolioScreen() {
-  const { contracts, setCurrentId } = useOutletContext<CurrentContractState>()
+  const { contracts, setCurrentId, companyRights } = useOutletContext<CurrentContractState>()
   const navigate = useNavigate()
+  // Gated on the same right the column itself is gated on (manage_members,
+  // contracts_state_update_right) — RLS is the real wall; this only decides
+  // whether the control renders at all. Every contract on this screen came
+  // from fetchMyContracts(), so is_member(id) — the RLS policy's other half
+  // — already holds for every row here; nothing else to check per-row.
+  const canSetState = companyRights.manageMembers
 
   const [summaries, setSummaries] = useState<ContractSummary[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -139,6 +287,17 @@ export function PortfolioScreen() {
     navigate('/tracker')
   }
 
+  // Local merge, not a refetch — the row already knows its own new value
+  // (it just sent it), and a refetch would re-run every valueToDate/
+  // marginToDate calculation across every contract for a change that only
+  // ever touches one column. The memoized section groups above recompute
+  // from this automatically, so the row moves to its new section right
+  // away — the same "see it happen" immediacy the confirmation step exists
+  // to set up, not a page reload later.
+  function handleStateChanged(contractId: string, newState: ContractState) {
+    setSummaries((prev) => prev.map((s) => (s.contract.id === contractId ? { ...s, contract: { ...s.contract, contractState: newState } } : s)))
+  }
+
   return (
     <div>
       <PageHeader title="Portfolio" subtitle={`${contracts.length} contract${contracts.length === 1 ? '' : 's'}`} />
@@ -170,7 +329,7 @@ export function PortfolioScreen() {
               {pipelineSummaries.length === 0 ? (
                 <p className="text-sm text-nc-text-subtle">No contracts in the pipeline.</p>
               ) : (
-                <ContractTable rows={pipelineSummaries} showStateBadge={false} onOpen={openContract} />
+                <ContractTable rows={pipelineSummaries} canSetState={canSetState} onOpen={openContract} onStateChanged={handleStateChanged} />
               )}
             </section>
 
@@ -179,7 +338,7 @@ export function PortfolioScreen() {
               {activeSummaries.length === 0 ? (
                 <p className="text-sm text-nc-text-subtle">No active contracts.</p>
               ) : (
-                <ContractTable rows={activeSummaries} showStateBadge={false} onOpen={openContract} />
+                <ContractTable rows={activeSummaries} canSetState={canSetState} onOpen={openContract} onStateChanged={handleStateChanged} />
               )}
             </section>
 
@@ -197,7 +356,7 @@ export function PortfolioScreen() {
               {windingDownSummaries.length === 0 ? (
                 <p className="text-sm text-nc-text-subtle">No contracts in warranty period or closed out.</p>
               ) : (
-                <ContractTable rows={windingDownSummaries} showStateBadge={true} onOpen={openContract} />
+                <ContractTable rows={windingDownSummaries} canSetState={canSetState} onOpen={openContract} onStateChanged={handleStateChanged} />
               )}
             </section>
 
@@ -211,7 +370,7 @@ export function PortfolioScreen() {
               {archivedSummaries.length === 0 ? (
                 <p className="text-sm text-nc-text-subtle">No archived contracts.</p>
               ) : (
-                <ContractTable rows={archivedSummaries} showStateBadge={false} onOpen={openContract} />
+                <ContractTable rows={archivedSummaries} canSetState={canSetState} onOpen={openContract} onStateChanged={handleStateChanged} />
               )}
             </section>
           </>

@@ -16,6 +16,7 @@ import {
   figureCoverage,
   moneyMakerRow,
   overQuantityValueAboveSchedule,
+  OVERVIEW_FIGURE_LABEL,
   pipelineFigures,
   sanitizeOverviewPreferences,
   type MoneyMakerRow,
@@ -385,10 +386,10 @@ export function OverviewScreen() {
             <section className="mb-8">
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Pipeline</h2>
               <div className="mb-4 grid grid-cols-3 gap-4">
-                <StatCard label="Contract value under management" value={rate(contractValueTotal)} sub={contractValueNote ?? 'Real contracts only — sandbox excluded'} />
-                <StatCard label="Earned to date" value={rate(earnedTotal)} sub={earnedNote ?? 'Real contracts only — sandbox excluded'} />
+                <StatCard label={OVERVIEW_FIGURE_LABEL.contractValue} value={rate(contractValueTotal)} sub={contractValueNote ?? 'Real contracts only — sandbox excluded'} />
+                <StatCard label={OVERVIEW_FIGURE_LABEL.earned} value={rate(earnedTotal)} sub={earnedNote ?? 'Real contracts only — sandbox excluded'} />
                 <StatCard
-                  label="Backlog remaining"
+                  label={OVERVIEW_FIGURE_LABEL.backlog}
                   value={rate(backlogTotal)}
                   sub={contractValueNote ? `${contractValueNote} — same gap as contract value` : 'Real contracts only — sandbox excluded'}
                 />

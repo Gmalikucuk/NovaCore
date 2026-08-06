@@ -208,6 +208,73 @@ export function coverageNote(coverage: FigureCoverage, missingDataReason: string
   return `Covers ${coverage.count} of ${coverage.total} real contracts — ${parts.join(', ')}`
 }
 
+/** Canonical display order — pipeline -> active -> warranty_period -> closed_out -> archived, the expected (not enforced) path a contract's own state moves through. */
+export const CONTRACT_STATE_OPTIONS: readonly ContractState[] = ['pipeline', 'active', 'warranty_period', 'closed_out', 'archived']
+
+/** Shared with ContractStateTag (components/ui.tsx) and the state-change control's own confirmation text — one label per state, defined once so neither can drift from the other. */
+export const CONTRACT_STATE_LABEL: Record<ContractState, string> = {
+  pipeline: 'Pipeline',
+  active: 'Active',
+  warranty_period: 'Warranty Period',
+  closed_out: 'Closed out',
+  archived: 'Archived',
+}
+
+/** The exact StatCard labels Overview renders these three figures under — shared so a confirmation ("this will leave Contract value under management") can never drift from the figure it's describing. */
+export const OVERVIEW_FIGURE_LABEL: Record<OverviewFigure, string> = {
+  contractValue: 'Contract value under management',
+  earned: 'Earned to date',
+  backlog: 'Backlog remaining',
+}
+
+export interface ContractStateFigureChange {
+  figure: OverviewFigure
+  /** true: the contract starts counting toward this figure; false: it stops. */
+  gains: boolean
+  /** This contract's own current value for the figure — null renders as an absent figure, not zero, same as everywhere else these three numbers appear. */
+  amount: number | null
+}
+
+/**
+ * What changing FROM one state TO another actually does to the three
+ * company-wide figures — the plain-language content behind the
+ * confirmation the brief asks for. Diffs contractCountsToward across all
+ * three figures; a figure this contract already counted toward (or
+ * already didn't) on both sides of the move is left out entirely, since
+ * nothing about it changes. amounts carries this ONE contract's own
+ * current numbers (not a company total) so the confirmation can say a
+ * real figure, not just a rule.
+ */
+export function contractStateFigureChanges(
+  fromState: ContractState,
+  toState: ContractState,
+  amounts: { contractValue: number | null; earned: number | null; backlog: number | null },
+): ContractStateFigureChange[] {
+  const figures: OverviewFigure[] = ['contractValue', 'earned', 'backlog']
+  return figures.flatMap((figure) => {
+    const was = contractCountsToward(figure, fromState)
+    const now = contractCountsToward(figure, toState)
+    if (was === now) return []
+    return [{ figure, gains: now, amount: amounts[figure] }]
+  })
+}
+
+/**
+ * The other thing that changes with state and isn't one of the three money
+ * figures: whether Needs Attention's stalled detection runs at all (see
+ * contractNeedsStalledSuppression above). Surfaced separately rather than
+ * folded into contractStateFigureChanges because it isn't a number on a
+ * StatCard — active <-> warranty_period is the case that would otherwise
+ * report "nothing changes," when in fact the one real thing that changes
+ * for that specific move is this.
+ */
+export function contractStateStalledChange(fromState: ContractState, toState: ContractState): 'turns_on' | 'turns_off' | 'unchanged' {
+  const was = contractNeedsStalledSuppression(fromState)
+  const now = contractNeedsStalledSuppression(toState)
+  if (was === now) return 'unchanged'
+  return now ? 'turns_off' : 'turns_on'
+}
+
 export interface AttentionResult {
   overQuantity: ProblemItem[]
   problems: ProblemItem[]

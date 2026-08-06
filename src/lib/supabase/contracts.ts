@@ -202,3 +202,15 @@ export async function updateTenderPrice(contractId: string, tenderPrice: number 
   const { error } = await supabase.from('contracts').update({ tender_price: tenderPrice }).eq('id', contractId)
   if (error) throw error
 }
+
+/**
+ * A person's own judgement, not a derivation — see ContractState's own
+ * comment. No transition graph: any state to any state is a valid call.
+ * Gated by RLS (contracts_state_update_right, manage_members) — the caller
+ * only reaches this when the UI's own gate already agrees, same posture as
+ * updateTenderPrice above.
+ */
+export async function updateContractState(contractId: string, state: ContractState): Promise<void> {
+  const { error } = await supabase.from('contracts').update({ contract_state: state }).eq('id', contractId)
+  if (error) throw error
+}

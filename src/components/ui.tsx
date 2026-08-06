@@ -1,5 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TdHTMLAttributes, type TextareaHTMLAttributes, type ThHTMLAttributes } from 'react'
 import type { ContractState } from '../lib/supabase/contracts'
+import { CONTRACT_STATE_LABEL } from '../lib/calculations/overview'
 
 /**
  * NovaCore UI primitives — ported from Vektor Freight's `ui.jsx` (the
@@ -132,14 +133,6 @@ export function StatusBadge({ status, children, className = '' }: StatusBadgePro
 // case needs no badge — but included in the maps below so the component
 // stays total over ContractState rather than partial.
 // ─────────────────────────────────────────────────────────────────────────
-
-const CONTRACT_STATE_LABEL: Record<ContractState, string> = {
-  pipeline: 'Pipeline',
-  active: 'Active',
-  warranty_period: 'Warranty Period',
-  closed_out: 'Closed out',
-  archived: 'Archived',
-}
 
 const CONTRACT_STATE_TONE: Record<ContractState, StatusTone> = {
   pipeline: 'neutral',
