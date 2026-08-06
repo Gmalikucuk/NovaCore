@@ -826,6 +826,76 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "quantities: Lump Sum Item cost invisible (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# item_prices history — item_price_history + log_item_price_change() trigger.
+# viewer holds set_cost on the sandbox contract only (see above) and
+# view_rates everywhere (its whole fixture identity) — the one seat that can
+# both cause a change here and read what it logged. quantities holds neither,
+# so it's the negative control for both the write wall (trigger-only) and
+# the read wall (view_rates, mirrored from item_prices itself).
+# =============================================================================
+echo
+echo "=== item_prices history (0036) ==="
+
+# An ordinary change: old_cost_price should be the value this suite's own
+# 0023/0024 section just left it at (62000, from the update-path check
+# above), new_cost_price the fresh value.
+request PATCH "item_prices?item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN" '{"cost_price": 71000}'
+ok=0; [ "$STATUS" = "200" ] && ok=1
+check "viewer: update Lump Sum Item cost again, to generate a history row" "200" "$ok" "$STATUS $BODY_OUT"
+
+request GET "item_price_history?select=old_cost_price,new_cost_price&item_id=eq.$LUMP_SUM_ITEM_ID&order=changed_at.desc&limit=1" "$VIEWER_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  ocp=$(json_field "$BODY_OUT" 0 old_cost_price)
+  ncp=$(json_field "$BODY_OUT" 0 new_cost_price)
+  [ "$ocp" = "62000" ] && [ "$ncp" = "71000" ] && ok=1
+fi
+check "viewer: item_price_history captured old->new (view_rates)" "200, 62000->71000" "$ok" "$STATUS $BODY_OUT"
+
+# The actual failure mode this table exists for: a value replaced by null
+# must be captured, not silently lost.
+request PATCH "item_prices?item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN" '{"cost_price": null, "cost_basis": null}'
+ok=0; [ "$STATUS" = "200" ] && ok=1
+check "viewer: null out Lump Sum Item cost" "200" "$ok" "$STATUS $BODY_OUT"
+
+request GET "item_price_history?select=old_cost_price,new_cost_price&item_id=eq.$LUMP_SUM_ITEM_ID&order=changed_at.desc&limit=1" "$VIEWER_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  ocp=$(json_field "$BODY_OUT" 0 old_cost_price)
+  ncp=$(json_field "$BODY_OUT" 0 new_cost_price)
+  [ "$ocp" = "71000" ] && [ "$ncp" = "" ] && ok=1
+fi
+check "viewer: item_price_history recovers value replaced by null" "200, old=71000, new=null" "$ok" "$STATUS $BODY_OUT"
+
+# Re-saving the exact same values (both null, unchanged) must NOT log a
+# fresh row — row(...) IS DISTINCT FROM row(...) should treat this as a
+# no-op, same as it already is for item_prices' own no-op-write case.
+request GET "item_price_history?select=id&item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN"
+before_count=$(json_len "$BODY_OUT")
+request PATCH "item_prices?item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN" '{"cost_price": null, "cost_basis": null}'
+request GET "item_price_history?select=id&item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN"
+after_count=$(json_len "$BODY_OUT")
+ok=0; [ "$before_count" != "-1" ] && [ "$before_count" = "$after_count" ] && ok=1
+check "viewer: re-saving unchanged (null) values logs no new row" "row count unchanged" "$ok" "before=$before_count after=$after_count"
+
+# Restore the sandbox fixture's price so reruns of the 0023/0024 section
+# above still find it in the state those checks assume.
+request PATCH "item_prices?item_id=eq.$LUMP_SUM_ITEM_ID" "$VIEWER_TOKEN" '{"cost_price": 50000, "cost_basis": "total"}'
+
+# No view_rates -> no read, exactly like item_prices itself.
+request GET "item_price_history?select=*&item_id=eq.$LUMP_SUM_ITEM_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: item_price_history invisible (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# No insert grant to authenticated at all — only the trigger, running as
+# its owner, ever writes here. full holds every per-project right and
+# still can't reach this table directly.
+request POST "item_price_history" "$FULL_TOKEN" \
+  "{\"item_id\":\"$LUMP_SUM_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"new_cost_price\":1}"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: direct insert into item_price_history rejected (trigger-only writes)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # Admin: contract creation and member seating (0028/0029/0030/0031) — the new
 # reachable surface. readonly (owner@novacore.test) already holds BOTH
 # company-wide rights but is ALSO auto-enrolled on every contract that has
