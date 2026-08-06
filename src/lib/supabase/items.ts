@@ -18,6 +18,8 @@ export interface Item {
   unit: string
   approximateQuantity: number
   itemKind: ItemKind
+  /** Schedule 7's own Provisional Sum allowance — set only for provisional_sum Items (items_provisional_fields_only_provisional). This IS a provisional_sum Item's Ext. amount on Rates; it is never entered there, only read. */
+  provisionalSum: number | null
 }
 
 /**
@@ -40,9 +42,10 @@ interface RawItemRow {
   unit: string
   approximate_quantity: string
   item_kind: ItemKind
+  provisional_sum: string | null
 }
 
-const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity, item_kind'
+const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity, item_kind, provisional_sum'
 
 function mapItemRow(row: RawItemRow): Item {
   return {
@@ -53,6 +56,7 @@ function mapItemRow(row: RawItemRow): Item {
     unit: row.unit,
     approximateQuantity: Number(row.approximate_quantity),
     itemKind: row.item_kind,
+    provisionalSum: row.provisional_sum === null ? null : Number(row.provisional_sum),
   }
 }
 

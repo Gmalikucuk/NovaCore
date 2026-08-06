@@ -332,8 +332,12 @@ interface SandboxBannerProps {
 
 export function SandboxBanner({ contract, variant = 'reading' }: SandboxBannerProps) {
   if (!contract.isSandbox) return null
+  // A sandbox contract is fabricated data, not an error state — danger is
+  // the wrong tone for "this is deliberately not real," even though it
+  // still needs to stay unmissable (kept font-medium in 'reading' contexts
+  // for exactly that reason).
   return (
-    <NotificationBanner tone="danger" className={`mb-4 ${variant === 'reading' ? 'font-medium' : ''}`}>
+    <NotificationBanner tone="warning" className={`mb-4 ${variant === 'reading' ? 'font-medium' : ''}`}>
       This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.
     </NotificationBanner>
   )

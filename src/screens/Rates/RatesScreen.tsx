@@ -2,13 +2,17 @@ import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type ReactN
 import { useOutletContext } from 'react-router-dom'
 import { IconArrowDown, IconArrowUp, IconArrowsSort, IconCurrencyDollar } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
+import { updateTenderPrice } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
-import { margin, sumOrNull, type CostBasis } from '../../lib/calculations/margin'
+import type { CostBasis } from '../../lib/calculations/margin'
+import { aggregateFinancials, reconcileTenderPrice, rowFinancials, type RowFinancials } from '../../lib/calculations/bidSummary'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
-import { money, quantity as fmtQuantity } from '../../lib/format'
+import { percent, quantity as fmtQuantity, rate } from '../../lib/format'
 import { EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+
+const COL_COUNT = 9
 
 interface Draft {
   cost: string
@@ -37,29 +41,73 @@ function parseRate(raw: string): number | null {
   return Number.isNaN(n) ? null : n
 }
 
+// The draft itself always holds the raw, unformatted digits a person is
+// (or just was) typing — parsing and reformatting happen only at display
+// time, never written back into the draft, so a focused field can hand
+// this straight back unchanged and a blurred one can reformat every
+// render without ever fighting the caret mid-keystroke.
+function displayValue(raw: string, isFocused: boolean): string {
+  if (isFocused) return raw
+  const n = parseRate(raw)
+  return n === null ? '' : rate(n)
+}
+
 function focusCell(row: number, field: 'cost' | 'unitPrice') {
   const el = document.querySelector<HTMLInputElement>(`[data-cell="${row}-${field}"]`)
   el?.focus()
   el?.select()
 }
 
-type SortKey = 'itemNumber' | 'quantity'
+// Every money-ish cell — input, read-only text, or a bare dash for a row
+// kind the column doesn't apply to — carries the same py-2 so a row's
+// height never depends on which of those three it happens to be this
+// render. Matches Input's own vertical padding exactly (FIELD_BASE).
+function MoneyDisplay({ value, width }: { value: number | null; width: number }) {
+  return (
+    <span className="nc-numeric inline-block py-2 text-right" style={{ width }}>
+      {value === null ? '—' : rate(value)}
+    </span>
+  )
+}
+function DashCell({ width }: { width: number }) {
+  return (
+    <span className="inline-block py-2 text-right text-nc-text-muted" style={{ width }}>
+      —
+    </span>
+  )
+}
+
+const UNIT_W = 100
+const EXT_W = 140
+
+type SortKey = 'itemNumber' | 'quantity' | 'extAmount'
 
 function SortIndicator({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
   if (!active) return <IconArrowsSort size={13} stroke={1.75} className="inline-block opacity-40" />
   return dir === 'asc' ? <IconArrowUp size={13} stroke={2} className="inline-block" /> : <IconArrowDown size={13} stroke={2} className="inline-block" />
 }
 
+interface Row {
+  item: Item
+  costPrice: number | null
+  costBasis: CostBasis | null
+  unitPrice: number | null
+  financials: RowFinancials
+  priced: boolean
+}
+
+interface IndexedRow extends Row {
+  rowIndex: number
+}
+
 export function RatesScreen() {
   const contract = useOutletContext<MyContract>()
   // view_rates alone reaches this screen — a finance-only seat (view_rates
   // without set_cost/set_unit_price) needs exactly that: see the rates,
-  // change nothing. The screen isn't hidden for that seat; the inputs are
-  // read-only instead (see canEdit below). Per 0008's UI-gating rule: UI
-  // gates are a courtesy, not enforcement — the RLS policies (item_prices_
-  // insert_right / item_prices_update_right — set_unit_price required only
-  // when the Item is actually unit_price, 0023) are what actually block the
-  // write either way.
+  // change nothing. The screen isn't hidden for that seat; the inputs
+  // render as plain text instead (see canEdit below). Per 0008's UI-gating
+  // rule: UI gates are a courtesy, not enforcement — the RLS policies are
+  // what actually block the write either way.
   const canEdit = contract.setCost && contract.setUnitPrice
 
   const [items, setItems] = useState<Item[]>([])
@@ -70,11 +118,12 @@ export function RatesScreen() {
 
   // Every cell whose last write attempt failed, keyed `${itemId}:${field}` —
   // not just the most recent one. Enter never waits for a commit to resolve
-  // before moving on (a 48-row pass has to stay fast), which means a failure
-  // can land several rows behind wherever the person's focus already is by
-  // the time it's known. This has to survive past that moment, not just
-  // flash where the failure happened — cleared only when a later write for
-  // that exact cell succeeds, never on a timer, never by scrolling past it.
+  // before moving on (a 48-row pass has to stay fast), which means a
+  // failure can land several rows behind wherever the person's focus
+  // already is by the time it's known. This has to survive past that
+  // moment, not just flash where the failure happened — cleared only when
+  // a later write for that exact cell succeeds, never on a timer, never by
+  // scrolling past it.
   const [failedCells, setFailedCells] = useState<Map<string, string>>(new Map())
 
   function markFailed(itemId: string, field: 'cost' | 'unitPrice', message: string) {
@@ -93,24 +142,33 @@ export function RatesScreen() {
   // fix, not two.
   const failedItemIds = useMemo(() => new Set([...failedCells.keys()].map((k) => k.split(':')[0])), [failedCells])
 
-  // The cost-basis picker is per_unit on almost every Unit Price Item —
-  // showing it stacked under Est. cost on all 48 rows for a choice that's
-  // rarely touched is what pushed every row past single-line height. It's
-  // shown only when there's a reason to look at it: the Item is already
-  // priced as a total (so its basis differs from the silent per_unit
-  // default and needs to stay visible), or the cost cell is focused right
-  // now (so it's reachable the moment someone actually wants to change it).
-  const [focusedCostId, setFocusedCostId] = useState<string | null>(null)
+  // Which item's cost-family GROUP (the field plus its optional basis
+  // selector) currently has focus — never which single element. See the
+  // group wrapper below for why: input-focus-alone was the basis-selector
+  // bug (fixed separately), and the exact same "focus anywhere in the
+  // group" rule now also decides whether the field shows raw digits
+  // (focused) or a formatted value (not).
+  const [focusedCell, setFocusedCell] = useState<{ itemId: string; field: 'cost' | 'unitPrice' } | null>(null)
 
   // Item # ascending — Schedule 7 order, the order of the tender document
-  // being transcribed from. Sorting by Approximate Quantity mixes units of
-  // measure (354,250 Square Metre above 45,900 Tonne conveys nothing) and
-  // buried the contract's largest-value Item in fourth position; kept as an
-  // available sort (meaningful within one UOM) but no longer the default.
-  // Once Unit Prices exist, sorting by Extended Amount would be the
-  // meaningful importance ranking — not built now.
+  // being transcribed from — stays the default. Quantity and Ext. amount
+  // are both available sorts; Ext. amount descending is the margin-review
+  // view (§5), where five Items can carry half the contract's value.
   const [sortKey, setSortKey] = useState<SortKey>('itemNumber')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  // The reconciliation figure — entered once from the award document, by a
+  // person, never derived from the sum it's checked against (that would
+  // make the check tautological). Mirrored into local state so a save
+  // reflects immediately without needing the outer contract fetch (Sidebar's
+  // own) to re-run; re-synced only when the CONTRACT identity changes, not
+  // on every render, so an in-page save is never clobbered by its own effect.
+  const [tenderPrice, setTenderPrice] = useState<number | null>(contract.tenderPrice)
+  useEffect(() => setTenderPrice(contract.tenderPrice), [contract.id, contract.tenderPrice])
+  const [tenderPriceDraft, setTenderPriceDraft] = useState(contract.tenderPrice === null ? '' : contract.tenderPrice.toString())
+  const [tenderPriceFocused, setTenderPriceFocused] = useState(false)
+  const [tenderPriceSaving, setTenderPriceSaving] = useState(false)
+  const [tenderPriceError, setTenderPriceError] = useState<string | null>(null)
 
   useEffect(() => {
     setStatus('loading')
@@ -133,58 +191,78 @@ export function RatesScreen() {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
     } else {
       setSortKey(key)
-      setSortDir(key === 'quantity' ? 'desc' : 'asc')
+      setSortDir(key === 'itemNumber' ? 'asc' : 'desc')
     }
   }
 
-  const sorted = useMemo(() => {
-    const dir = sortDir === 'asc' ? 1 : -1
-    return [...items].sort((a, b) => (sortKey === 'itemNumber' ? compareItemCodes(a.itemNumber, b.itemNumber) * dir : (a.approximateQuantity - b.approximateQuantity) * dir))
-  }, [items, sortKey, sortDir])
-
-  const rows = useMemo(
+  const enrichedRows = useMemo<Row[]>(
     () =>
-      sorted.map((item) => {
-        // Unit Price and Contract margin are per-unit-only concepts —
-        // meaningless for a Lump Sum (always qty 1) or Provisional Sum
-        // (paid on value authorized, not a rate) — so those two kinds
-        // never get a Unit Price cell or a margin figure regardless of what
-        // item_prices holds. Cost is different since 0023: every kind is
-        // costable now, Lump Sum/Provisional Sum on a total basis only.
-        const unitPriced = item.itemKind === 'unit_price'
+      items.map((item) => {
         const price = prices.get(item.id)
-        const cost = price?.costPrice ?? null
+        const costPrice = price?.costPrice ?? null
         const costBasis = price?.costBasis ?? null
-        const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
-        // A total entered on a Unit Price Item is a real number about the
-        // whole Item, not a rate — this is the OTHER reading, derived for
-        // display only (never stored, never fed back into margin math),
-        // and only exists to answer "roughly what would that be per unit
-        // against the Approximate Quantity" for a human comparing it with
-        // a per-unit-priced Item next to it.
-        const derivedPerUnit = unitPriced && costBasis === 'total' && cost !== null && item.approximateQuantity > 0 ? cost / item.approximateQuantity : null
-        return {
-          item,
-          unitPriced,
-          cost,
+        const unitPrice = price?.unitPrice ?? null
+        const financials = rowFinancials({
+          itemKind: item.itemKind,
+          approximateQuantity: item.approximateQuantity,
+          provisionalSum: item.provisionalSum,
+          costPrice,
           costBasis,
           unitPrice,
-          derivedPerUnit,
-          // A Unit Price Item is "priced" once both a cost and a Unit
-          // Price are known (margin needs both). A Lump Sum/Provisional
-          // Sum Item is "priced" the moment its cost is — it has no Unit
-          // Price to wait for.
-          priced: unitPriced ? cost !== null && unitPrice !== null : cost !== null,
-          contractMargin: unitPriced ? margin(item.approximateQuantity, cost, unitPrice, costBasis) : null,
-        }
+        })
+        // A Provisional Sum Item is "priced" the moment Schedule 7's own
+        // allowance is on the Item — nothing is ever entered for it here.
+        // Every other kind is priced once both its extended figures are
+        // known (margin needs both).
+        const priced = item.itemKind === 'provisional_sum' ? item.provisionalSum !== null : financials.extCost !== null && financials.extAmount !== null
+        return { item, costPrice, costBasis, unitPrice, financials, priced }
       }),
-    [sorted, prices],
+    [items, prices],
   )
 
-  const unitPriceRows = useMemo(() => rows.filter((r) => r.unitPriced), [rows])
-  const unitPricedFullyPriced = unitPriceRows.filter((r) => r.priced).length
-  const costedCount = rows.filter((r) => r.cost !== null).length
-  const totalMargin = sumOrNull(rows.map((r) => r.contractMargin))
+  const rows = useMemo<IndexedRow[]>(() => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    const sorted = [...enrichedRows].sort((a, b) => {
+      if (sortKey === 'itemNumber') return compareItemCodes(a.item.itemNumber, b.item.itemNumber) * dir
+      if (sortKey === 'quantity') return (a.item.approximateQuantity - b.item.approximateQuantity) * dir
+      // Ext. amount descending is the default direction the moment this
+      // sort is chosen (see toggleSort) — unpriced rows (null) sort last
+      // regardless of direction, never mixed in among real figures.
+      const av = a.financials.extAmount
+      const bv = b.financials.extAmount
+      if (av === null && bv === null) return 0
+      if (av === null) return 1
+      if (bv === null) return -1
+      return (av - bv) * dir
+    })
+    return sorted.map((r, i) => ({ ...r, rowIndex: i }))
+  }, [enrichedRows, sortKey, sortDir])
+
+  const grandTotal = useMemo(() => aggregateFinancials(rows.map((r) => ({ itemKind: r.item.itemKind, financials: r.financials }))), [rows])
+  const reconciliation = useMemo(
+    () => (tenderPrice !== null && grandTotal.extAmountSum !== null ? reconcileTenderPrice(grandTotal.extAmountSum, tenderPrice) : null),
+    [tenderPrice, grandTotal.extAmountSum],
+  )
+
+  // Section headers/subtotals only mean anything when the visible order
+  // actually groups by section — true under the Item # sort (a section's
+  // Items share its leading prefix, so they're already contiguous), not
+  // under Quantity or Ext. amount, where the same header/subtotal would
+  // have to reappear every time the interleaving crossed back into a
+  // section already shown once, and a subtotal would mix Items that have
+  // nothing to do with each other under a value ranking.
+  const groupBySection = sortKey === 'itemNumber'
+  const sectionGroups = useMemo(() => {
+    if (!groupBySection) return null
+    const groups: { prefix: string; rows: IndexedRow[] }[] = []
+    for (const row of rows) {
+      const prefix = sectionPrefix(row.item.itemNumber)
+      const last = groups[groups.length - 1]
+      if (last && last.prefix === prefix) last.rows.push(row)
+      else groups.push({ prefix, rows: [row] })
+    }
+    return groups
+  }, [rows, groupBySection])
 
   function updateDraft(id: string, field: 'cost' | 'unitPrice', value: string) {
     setDrafts((prev) => {
@@ -258,14 +336,28 @@ export function RatesScreen() {
   // person reading "3 rows didn't save" is about to work top-down through
   // whatever's on screen right now, same as any other pass over this table.
   function focusFirstFailedRow() {
-    for (let i = 0; i < rows.length; i++) {
-      const id = rows[i].item.id
-      if (failedCells.has(`${id}:cost`)) return focusCell(i, 'cost')
-      if (failedCells.has(`${id}:unitPrice`)) return focusCell(i, 'unitPrice')
+    for (const row of rows) {
+      if (failedCells.has(`${row.item.id}:cost`)) return focusCell(row.rowIndex, 'cost')
+      if (failedCells.has(`${row.item.id}:unitPrice`)) return focusCell(row.rowIndex, 'unitPrice')
     }
   }
 
-  const subtitle = `${contract.name}${status === 'ready' ? ` · ${costedCount} of ${rows.length} have an Est. cost` : ''}`
+  async function commitTenderPrice() {
+    const parsed = parseRate(tenderPriceDraft)
+    if (parsed === tenderPrice) return
+    setTenderPriceSaving(true)
+    setTenderPriceError(null)
+    try {
+      await updateTenderPrice(contract.id, parsed)
+      setTenderPrice(parsed)
+    } catch (err) {
+      setTenderPriceError(errorMessage(err))
+    } finally {
+      setTenderPriceSaving(false)
+    }
+  }
+
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${grandTotal.costCoverage.count} of ${grandTotal.costCoverage.total} Items have an Est. cost` : ''}`
 
   function sortableHeader(key: SortKey, label: string, align: 'left' | 'right' = 'left'): ReactNode {
     return (
@@ -278,17 +370,240 @@ export function RatesScreen() {
     )
   }
 
+  // One row's worth of cells (everything after Item #/Description/
+  // Approx. Qty) — shared by both the grouped-by-section and flat render
+  // paths below, so the two never drift.
+  function renderDataRow(row: IndexedRow): ReactNode {
+    const { item, rowIndex: i } = row
+    const draft = drafts.get(item.id) ?? toDraft(item, undefined)
+    const costFailed = failedCells.get(`${item.id}:cost`)
+    const unitPriceFailed = failedCells.get(`${item.id}:unitPrice`)
+    const rowHasFailure = costFailed !== undefined || unitPriceFailed !== undefined
+
+    const costIsFocused = focusedCell?.itemId === item.id && focusedCell.field === 'cost'
+    const priceIsFocused = focusedCell?.itemId === item.id && focusedCell.field === 'unitPrice'
+
+    // The cost-basis picker only ever applies to a Unit Price Item (Lump
+    // Sum/Provisional Sum are always 'total', no toggle offered — 0024).
+    // Shown when there's a reason to look at it: focus anywhere in the
+    // cost GROUP right now, or already committed as a total.
+    const showBasisControl = item.itemKind === 'unit_price' && (costIsFocused || draft.costBasis === 'total')
+
+    const costCommitField = 'cost' as const
+    const priceCommitField = 'unitPrice' as const
+
+    const costInput = (
+      <Input
+        className={`nc-numeric text-right ${costFailed !== undefined ? 'border-nc-danger-text' : ''}`}
+        style={{ width: item.itemKind === 'unit_price' ? UNIT_W : EXT_W }}
+        data-cell={`${i}-cost`}
+        tabIndex={i * 2 + 1}
+        inputMode="decimal"
+        value={displayValue(draft.cost, costIsFocused)}
+        aria-label={item.itemKind === 'lump_sum' ? `${item.itemNumber} Ext. cost` : undefined}
+        onChange={(e) => updateDraft(item.id, costCommitField, e.target.value)}
+        onKeyDown={(e) => handleKeyDown(e, item, costCommitField, i)}
+        {...(item.itemKind === 'unit_price'
+          ? {}
+          : {
+              onFocus: () => setFocusedCell({ itemId: item.id, field: costCommitField }),
+              onBlur: () => {
+                setFocusedCell(null)
+                void commitRate(item, costCommitField)
+              },
+            })}
+      />
+    )
+
+    const priceInput = (
+      <Input
+        className={`nc-numeric text-right ${unitPriceFailed !== undefined ? 'border-nc-danger-text' : ''}`}
+        style={{ width: item.itemKind === 'unit_price' ? UNIT_W + 20 : EXT_W }}
+        data-cell={`${i}-unitPrice`}
+        tabIndex={rows.length * 2 + i + 1}
+        inputMode="decimal"
+        value={displayValue(draft.unitPrice, priceIsFocused)}
+        aria-label={item.itemKind === 'lump_sum' ? `${item.itemNumber} Ext. amount` : undefined}
+        onFocus={() => setFocusedCell({ itemId: item.id, field: priceCommitField })}
+        onBlur={() => {
+          setFocusedCell(null)
+          void commitRate(item, priceCommitField)
+        }}
+        onChange={(e) => updateDraft(item.id, priceCommitField, e.target.value)}
+        onKeyDown={(e) => handleKeyDown(e, item, priceCommitField, i)}
+      />
+    )
+
+    return (
+      <Fragment key={item.id}>
+        {/* A failed write outranks the plain "not priced yet" tint — same
+            neutral fact either way underneath, but one of them is a
+            problem to go fix and the other one just hasn't happened yet.
+            This has to stay after focus leaves the row, not just flash at
+            the moment of failure. */}
+        <TR className={rowHasFailure ? 'bg-nc-danger-bg/40' : !row.priced ? 'bg-nc-secondary/60' : undefined}>
+          <TD className="nc-numeric align-middle">{item.itemNumber}</TD>
+          <TD prose className="align-middle">
+            <div className="max-w-[240px] truncate" title={item.description}>
+              {item.description}
+            </div>
+          </TD>
+          <TD align="right" className="nc-numeric align-middle">
+            {item.itemKind === 'unit_price' ? (
+              <>
+                {fmtQuantity(item.approximateQuantity)} <span className="text-nc-text-muted">{item.unit}</span>
+              </>
+            ) : (
+              '—'
+            )}
+          </TD>
+
+          {/* Unit cost — editable only for a Unit Price Item; a rate has no
+              meaning for Lump Sum/Provisional Sum. */}
+          <TD align="right" dense className="align-middle">
+            {item.itemKind === 'unit_price' ? (
+              <div
+                className="flex items-center justify-end gap-1.5"
+                onFocus={() => setFocusedCell({ itemId: item.id, field: costCommitField })}
+                onBlur={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                  setFocusedCell(null)
+                  void commitRate(item, costCommitField)
+                }}
+              >
+                {canEdit ? costInput : <MoneyDisplay value={row.costPrice} width={UNIT_W} />}
+                <div style={{ width: 100 }} className="shrink-0">
+                  {showBasisControl && (
+                    <Select
+                      aria-label={`${item.itemNumber} cost basis`}
+                      style={{ width: 100 }}
+                      className="py-1 text-xs"
+                      tabIndex={i * 2 + 2}
+                      value={draft.costBasis}
+                      disabled={!canEdit}
+                      onChange={(e) => void changeBasis(item, e.target.value as CostBasis)}
+                    >
+                      <option value="per_unit">per unit</option>
+                      <option value="total">total</option>
+                    </Select>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <DashCell width={UNIT_W} />
+            )}
+          </TD>
+
+          {/* Ext. cost — derived for a Unit Price Item; IS the editable
+              cost estimate for a Lump Sum Item (cost_basis is always
+              'total' there, so the stored figure already is this column);
+              never applicable to Provisional Sum. */}
+          <TD align="right" dense className="align-middle">
+            {item.itemKind === 'lump_sum' ? (
+              canEdit ? (
+                costInput
+              ) : (
+                <MoneyDisplay value={row.financials.extCost} width={EXT_W} />
+              )
+            ) : item.itemKind === 'unit_price' ? (
+              <MoneyDisplay value={row.financials.extCost} width={EXT_W} />
+            ) : (
+              <DashCell width={EXT_W} />
+            )}
+          </TD>
+
+          {/* Unit price — same shape as Unit cost. */}
+          <TD align="right" dense className="align-middle">
+            {item.itemKind === 'unit_price' ? (
+              canEdit ? (
+                priceInput
+              ) : (
+                <MoneyDisplay value={row.unitPrice} width={UNIT_W + 20} />
+              )
+            ) : (
+              <DashCell width={UNIT_W + 20} />
+            )}
+          </TD>
+
+          {/* Ext. amount — derived for Unit Price; IS the editable lump
+              sum price for Lump Sum; sourced from Schedule 7's own
+              Provisional Sum allowance (never entered here) for
+              Provisional Sum. */}
+          <TD align="right" dense className="align-middle">
+            {item.itemKind === 'lump_sum' ? (
+              canEdit ? (
+                priceInput
+              ) : (
+                <MoneyDisplay value={row.financials.extAmount} width={EXT_W} />
+              )
+            ) : (
+              <MoneyDisplay value={row.financials.extAmount} width={EXT_W} />
+            )}
+          </TD>
+
+          {/* Margin — MARGIN, NOT MARKUP: of revenue (Ext. amount), never
+              of cost. Never computed for Provisional Sum (reimbursed, not
+              margined) — em-dash, never 0. */}
+          <TD align="right" className={`nc-numeric align-middle ${row.financials.margin !== null && row.financials.margin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+            {row.financials.margin === null ? '—' : rate(row.financials.margin)}
+          </TD>
+          <TD align="right" className={`nc-numeric align-middle ${row.financials.marginPercent !== null && row.financials.marginPercent < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+            {row.financials.marginPercent === null ? '—' : percent(row.financials.marginPercent)}
+          </TD>
+        </TR>
+        {/* Additive to the header banner and the row's own tint, not a
+            replacement — this is the detail (what actually went wrong),
+            the other two are the "something's wrong, here's how many and
+            where" signal for someone who's already scrolled past it. */}
+        {[costFailed, unitPriceFailed].filter((msg): msg is string => msg !== undefined).map((msg, msgIndex) => (
+          <TR key={msgIndex}>
+            <TD colSpan={COL_COUNT} className="text-nc-danger-text">
+              {msg}
+            </TD>
+          </TR>
+        ))}
+      </Fragment>
+    )
+  }
+
+  function renderSubtotalRow(label: string, rowsInGroup: IndexedRow[], key: string): ReactNode {
+    const agg = aggregateFinancials(rowsInGroup.map((r) => ({ itemKind: r.item.itemKind, financials: r.financials })))
+    return (
+      <TR key={key} className="bg-nc-secondary font-semibold">
+        <TD colSpan={4} className="text-data align-middle text-nc-text">
+          {label}
+        </TD>
+        <TD align="right" className="nc-numeric align-middle">
+          {agg.extCostSum === null ? '—' : rate(agg.extCostSum)}
+          {agg.costCoverage.total > 0 && (
+            <span className="ml-1.5 whitespace-nowrap text-xs font-normal text-nc-text-muted">
+              covers {agg.costCoverage.count} of {agg.costCoverage.total}
+            </span>
+          )}
+        </TD>
+        <TD />
+        <TD align="right" className="nc-numeric align-middle">
+          {agg.extAmountSum === null ? '—' : rate(agg.extAmountSum)}
+        </TD>
+        <TD align="right" className={`nc-numeric align-middle ${agg.marginSum !== null && agg.marginSum < 0 ? 'text-nc-danger-text' : ''}`}>
+          {agg.marginSum === null ? '—' : rate(agg.marginSum)}
+          {agg.marginCoverage.total > 0 && (
+            <span className="ml-1.5 whitespace-nowrap text-xs font-normal text-nc-text-muted">
+              covers {agg.marginCoverage.count} of {agg.marginCoverage.total}
+            </span>
+          )}
+        </TD>
+        <TD align="right" className={`nc-numeric align-middle ${agg.marginPercent !== null && agg.marginPercent < 0 ? 'text-nc-danger-text' : ''}`}>
+          {agg.marginPercent === null ? '—' : percent(agg.marginPercent)}
+        </TD>
+      </TR>
+    )
+  }
+
   // Section headers (Schedule 7's own "SECTION N – NAME" breaks) only mean
-  // anything when the visible order actually groups by section — true
-  // under the Item # sort (a section's items share its leading prefix, so
-  // they're already contiguous), not under the Quantity sort, where the
-  // same header would have to reappear every time the interleaving crossed
-  // back into a section already shown once. `i` here is the row's index
-  // into the single flat `rows` array regardless of a header being
-  // rendered above it — tab order and Enter's "next row" both key off this
-  // same index, so inserting a header never shifts it.
-  let lastSectionPrefix = ''
-  const groupBySection = sortKey === 'itemNumber'
+  // anything when the visible order actually groups by section (see
+  // groupBySection above).
+  const groupBySectionForHeaders = groupBySection
 
   return (
     <div>
@@ -300,16 +615,20 @@ export function RatesScreen() {
         <EmptyState title="You don't have permission to view rates on this contract." />
       ) : (
         <>
-          {/* One banner, not a stack: the bid-estimate disclosure is always
-              relevant here, so the read-only state (when it applies) is a
-              second sentence in the SAME box rather than a second box —
-              the "unpriced" caveat below moves to the table's own footer,
-              next to the total it actually qualifies, rather than sitting
-              up here as a third. */}
           <NotificationBanner tone="info" className="mb-4">
             Cost and margin below are Keywest's own bid estimate, entered on this screen — actual cost isn't recorded in NovaCore yet.
-            {!canEdit && " These are read-only for you — ask a project manager to grant rate-setting permission if you need to enter figures."}
           </NotificationBanner>
+          {/* Separate from the explainer above — that sentence is always
+              true regardless of who's looking; this one is conditional on
+              the seat, and reads oddly tacked onto a sentence that isn't
+              about permissions at all. No right identifiers, no role
+              names — NovaCore has neither, only per-seat, per-contract
+              rights. */}
+          {!canEdit && (
+            <NotificationBanner tone="info" className="mb-4">
+              These figures are read-only for you on this contract. If you need to enter them, ask whoever manages rights on this contract.
+            </NotificationBanner>
+          )}
 
           {status === 'loading' && (
             <div className="flex items-center gap-2 py-8 text-nc-text-muted">
@@ -323,224 +642,132 @@ export function RatesScreen() {
             (rows.length === 0 ? (
               <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
             ) : (
-              <>
-                {/* fullWidth=false + w-fit mx-auto: this table's columns are
-                    mostly narrow and none of them wants the leftover width,
-                    so letting it stretch to the page's full 1800px cap put
-                    ~600px of dead gutter between Description and
-                    Approximate Quantity. Sized to its own content and
-                    centered instead — see the Table component's own
-                    comment for why fullWidth needed a prop rather than an
-                    override at this call site (the shared FIELD_BASE/table
-                    classes are in the same stylesheet layer as anything
-                    passed via className, so which one wins is a stylesheet-
-                    order question, not a JSX-order one).
-
-                    maxHeight makes this table's own wrapper the scrolling
-                    region (see Table's comment for why that's load-bearing
-                    for the sticky header below, not cosmetic) — a 44-48px
-                    row height times up to 48 rows means the column
-                    headings would otherwise scroll out of view almost
-                    immediately, in the middle of a single transcription
-                    pass. The subtracted allowance is this page's own
-                    header + banner + padding above the table. */}
-                <Table fullWidth={false} maxHeight="calc(100vh - 280px)" className="mx-auto w-fit">
-                  <THead className="sticky top-0 z-10">
-                    {/* Part of the sticky header, not a page-level banner —
-                        it has to survive the exact same scrolling that
-                        buries the row it's about, and it has no dismiss
-                        control at all: it goes away when the count reaches
-                        zero, on its own, never before. */}
-                    {failedItemIds.size > 0 && (
-                      <tr>
-                        <th colSpan={6} className="bg-nc-danger-bg p-0 text-left">
-                          <button
-                            type="button"
-                            onClick={focusFirstFailedRow}
-                            className="w-full px-4 py-2 text-left text-sm font-semibold text-nc-danger-text hover:bg-nc-danger-bg/70"
-                          >
-                            {failedItemIds.size} row{failedItemIds.size === 1 ? '' : 's'} didn't save — click to go to the first one
-                          </button>
-                        </th>
-                      </tr>
-                    )}
-                    <TR>
-                      {sortableHeader('itemNumber', 'Item #')}
-                      <TH>Description</TH>
-                      {sortableHeader('quantity', 'Approximate Quantity', 'right')}
-                      <TH align="right">Est. cost</TH>
-                      <TH align="right">Unit Price</TH>
-                      <TH align="right">Est. contract margin</TH>
-                    </TR>
-                  </THead>
-                  <TBody>
-                    {rows.map((row, i) => {
-                      const draft = drafts.get(row.item.id) ?? toDraft(row.item, undefined)
-                      const prefix = groupBySection ? sectionPrefix(row.item.itemNumber) : null
-                      const showSectionHeader = prefix !== null && prefix !== lastSectionPrefix
-                      if (showSectionHeader) lastSectionPrefix = prefix
-
-                      // Shown when there's a reason to look at it: focused
-                      // right now, or already committed as a total (see the
-                      // state comment above) — never for the silent
-                      // per_unit default sitting untouched.
-                      const showBasisControl = row.unitPriced && (focusedCostId === row.item.id || draft.costBasis === 'total')
-
-                      const costFailed = failedCells.get(`${row.item.id}:cost`)
-                      const unitPriceFailed = failedCells.get(`${row.item.id}:unitPrice`)
-                      const rowHasFailure = costFailed !== undefined || unitPriceFailed !== undefined
-
-                      return (
-                        <Fragment key={row.item.id}>
-                          {showSectionHeader && (
-                            <TR>
-                              <TD colSpan={6} className={`text-xs font-semibold uppercase tracking-wide text-nc-text-muted ${i === 0 ? '' : 'border-t border-nc-border'}`}>
-                                {sectionLabel(prefix)}
-                              </TD>
-                            </TR>
-                          )}
-                          {/* A failed write outranks the plain "not priced
-                              yet" tint — same neutral fact either way
-                              underneath, but one of them is a problem to go
-                              fix and the other one just hasn't happened
-                              yet. This has to stay after focus leaves the
-                              row, not just flash at the moment of failure —
-                              it's the only thing left proving the row is
-                              still wrong once the pass has moved on. */}
-                          <TR className={rowHasFailure ? 'bg-nc-danger-bg/40' : !row.priced ? 'bg-nc-secondary/60' : undefined}>
-                            <TD className="nc-numeric align-middle">{row.item.itemNumber}</TD>
-                            <TD prose className="align-middle">
-                              <div className="max-w-[300px] truncate" title={row.item.description}>
-                                {row.item.description}
-                              </div>
-                            </TD>
-                            <TD align="right" className="nc-numeric align-middle">
-                              {row.unitPriced ? (
-                                <>
-                                  {fmtQuantity(row.item.approximateQuantity)} <span className="text-nc-text-muted">{row.item.unit}</span>
-                                </>
-                              ) : (
-                                '—'
-                              )}
-                            </TD>
-                            <TD align="right" dense className="align-middle">
-                              {/* Visibility is driven by focus anywhere in
-                                  this GROUP, not by focus on the cost input
-                                  specifically — that was the bug (713d0e2's
-                                  basis picker used input-focus alone, so
-                                  clicking the select blurred the input,
-                                  the control's visibility condition flipped
-                                  false, and it unmounted out from under the
-                                  click before it could land). blur only
-                                  counts as "left the group" when relatedTarget
-                                  isn't a child of this div — a focus move
-                                  between the input and the select never
-                                  reaches that branch. The basis-control slot
-                                  is a fixed width always, rendered or not, so
-                                  this row's own Est. cost column never
-                                  changes its natural width as focus comes
-                                  and goes — that width feeds the whole
-                                  column's auto-layout, and letting it change
-                                  was what pushed Unit Price out of alignment
-                                  on whichever row currently had focus. */}
-                              <div
-                                className="flex items-center justify-end gap-1.5"
-                                onFocus={() => setFocusedCostId(row.item.id)}
-                                onBlur={(e) => {
-                                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
-                                  setFocusedCostId(null)
-                                  void commitRate(row.item, 'cost')
-                                }}
-                              >
-                                <Input
-                                  className={`nc-numeric text-right ${costFailed !== undefined ? 'border-nc-danger-text' : ''}`}
-                                  style={{ width: 110 }}
-                                  data-cell={`${i}-cost`}
-                                  tabIndex={i * 2 + 1}
-                                  inputMode="decimal"
-                                  value={draft.cost}
-                                  readOnly={!canEdit}
-                                  onChange={(e) => updateDraft(row.item.id, 'cost', e.target.value)}
-                                  onKeyDown={(e) => handleKeyDown(e, row.item, 'cost', i)}
-                                />
-                                <div style={{ width: 100 }} className="shrink-0">
-                                  {row.unitPriced ? (
-                                    showBasisControl && (
-                                      <Select
-                                        aria-label={`${row.item.itemNumber} cost basis`}
-                                        style={{ width: 100 }}
-                                        className="py-1 text-xs"
-                                        tabIndex={i * 2 + 2}
-                                        value={draft.costBasis}
-                                        disabled={!canEdit}
-                                        onChange={(e) => void changeBasis(row.item, e.target.value as CostBasis)}
-                                      >
-                                        <option value="per_unit">per unit</option>
-                                        <option value="total">total</option>
-                                      </Select>
-                                    )
-                                  ) : (
-                                    <span className="text-xs text-nc-text-muted">total</span>
-                                  )}
-                                </div>
-                                {row.derivedPerUnit !== null && (
-                                  <span className="nc-numeric whitespace-nowrap text-xs text-nc-text-muted">≈ {money(row.derivedPerUnit)}/unit</span>
-                                )}
-                              </div>
-                            </TD>
-                            <TD align="right" dense={row.unitPriced} className="align-middle">
-                              {row.unitPriced ? (
-                                <Input
-                                  className={`nc-numeric text-right ${unitPriceFailed !== undefined ? 'border-nc-danger-text' : ''}`}
-                                  style={{ width: 130 }}
-                                  data-cell={`${i}-unitPrice`}
-                                  tabIndex={rows.length * 2 + i + 1}
-                                  inputMode="decimal"
-                                  value={draft.unitPrice}
-                                  readOnly={!canEdit}
-                                  onChange={(e) => updateDraft(row.item.id, 'unitPrice', e.target.value)}
-                                  onBlur={() => void commitRate(row.item, 'unitPrice')}
-                                  onKeyDown={(e) => handleKeyDown(e, row.item, 'unitPrice', i)}
-                                />
-                              ) : (
-                                <span className="text-nc-text-muted">—</span>
-                              )}
-                            </TD>
-                            <TD align="right" className={`nc-numeric align-middle ${row.contractMargin !== null && row.contractMargin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                              {row.contractMargin === null ? '—' : money(row.contractMargin)}
+              <Table fullWidth={false} maxHeight="calc(100vh - 280px)" className="w-fit">
+                <THead className="sticky top-0 z-10">
+                  {failedItemIds.size > 0 && (
+                    <tr>
+                      <th colSpan={COL_COUNT} className="bg-nc-danger-bg p-0 text-left">
+                        <button
+                          type="button"
+                          onClick={focusFirstFailedRow}
+                          className="w-full px-4 py-2 text-left text-sm font-semibold text-nc-danger-text hover:bg-nc-danger-bg/70"
+                        >
+                          {failedItemIds.size} row{failedItemIds.size === 1 ? '' : 's'} didn't save — click to go to the first one
+                        </button>
+                      </th>
+                    </tr>
+                  )}
+                  <TR>
+                    {sortableHeader('itemNumber', 'Item #')}
+                    <TH>Description</TH>
+                    {sortableHeader('quantity', 'Approx. Qty', 'right')}
+                    <TH align="right">Unit cost</TH>
+                    <TH align="right">Ext. cost</TH>
+                    <TH align="right">Unit price</TH>
+                    {sortableHeader('extAmount', 'Ext. amount', 'right')}
+                    <TH align="right">Margin</TH>
+                    <TH align="right">Margin %</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {groupBySectionForHeaders && sectionGroups
+                    ? sectionGroups.map((group) => (
+                        <Fragment key={group.prefix}>
+                          <TR>
+                            <TD colSpan={COL_COUNT} className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted border-t border-nc-border first:border-t-0">
+                              {sectionLabel(group.prefix)}
                             </TD>
                           </TR>
-                          {/* Additive to the header banner and the row's
-                              own tint, not a replacement — this is the
-                              detail (what actually went wrong), the other
-                              two are the "something's wrong, here's how
-                              many and where" signal for someone who's
-                              already scrolled past it. Cost and Unit Price
-                              can each be mid-failure independently. */}
-                          {[costFailed, unitPriceFailed].filter((msg): msg is string => msg !== undefined).map((msg, msgIndex) => (
-                            <TR key={msgIndex}>
-                              <TD colSpan={6} className="text-nc-danger-text">
-                                {msg}
-                              </TD>
-                            </TR>
-                          ))}
+                          {group.rows.map((row) => renderDataRow(row))}
+                          {renderSubtotalRow(`${sectionLabel(group.prefix)} subtotal`, group.rows, group.prefix)}
                         </Fragment>
-                      )
-                    })}
-                  </TBody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan={5} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                        Est. contract margin — {unitPricedFullyPriced} of {unitPriceRows.length} unit-price items priced
-                        {/* The caveat that used to be its own banner at the top of the
-                            page, moved to sit next to the number it actually qualifies. */}
-                        {unitPricedFullyPriced < unitPriceRows.length && <span className="font-normal text-nc-text-muted"> (unpriced items excluded from the total)</span>}
-                      </td>
-                      <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{money(totalMargin)}</td>
-                    </tr>
-                  </tfoot>
-                </Table>
-              </>
+                      ))
+                    : rows.map((row) => renderDataRow(row))}
+                </TBody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4} className="text-data border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                      Grand total
+                    </td>
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                      {grandTotal.extCostSum === null ? '—' : rate(grandTotal.extCostSum)}
+                      {grandTotal.costCoverage.total > 0 && (
+                        <span className="ml-1.5 block whitespace-nowrap text-xs font-normal opacity-80">
+                          covers {grandTotal.costCoverage.count} of {grandTotal.costCoverage.total} items
+                        </span>
+                      )}
+                    </td>
+                    <td className="border-t border-nc-border bg-nc-navy" />
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                      {grandTotal.extAmountSum === null ? '—' : rate(grandTotal.extAmountSum)}
+                    </td>
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                      {grandTotal.marginSum === null ? '—' : rate(grandTotal.marginSum)}
+                      {grandTotal.marginCoverage.total > 0 && (
+                        <span className="ml-1.5 block whitespace-nowrap text-xs font-normal opacity-80">
+                          covers {grandTotal.marginCoverage.count} of {grandTotal.marginCoverage.total} items
+                        </span>
+                      )}
+                    </td>
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                      {grandTotal.marginPercent === null ? '—' : percent(grandTotal.marginPercent)}
+                    </td>
+                  </tr>
+                  {/* Tender price reconciliation — verifies every transcribed
+                      price at once against the one figure a person read off
+                      the award document. The statement (or its absence) is
+                      always shown; a canEdit seat also always gets the
+                      entry field, pre-filled once a price is on file, so a
+                      typo or a revised award figure can be corrected here
+                      too — not just entered once and then locked. */}
+                  <tr>
+                    <td colSpan={COL_COUNT} className="border-t border-nc-border bg-nc-secondary px-4 py-3 text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {tenderPrice !== null && reconciliation ? (
+                          reconciliation.matches ? (
+                            <span className="text-nc-success-text">
+                              Ext. amount totals {grandTotal.extAmountSum === null ? '—' : rate(grandTotal.extAmountSum)} — matches the tendered price of {rate(tenderPrice)}.
+                            </span>
+                          ) : (
+                            <span className="text-nc-danger-text">
+                              Ext. amount totals {grandTotal.extAmountSum === null ? '—' : rate(grandTotal.extAmountSum)},{' '}
+                              {rate(Math.abs(reconciliation.differenceCents) / 100)} {reconciliation.differenceCents > 0 ? 'over' : 'under'} the tendered price of{' '}
+                              {rate(tenderPrice)}.
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-nc-text-muted">No tender price on file to verify against.</span>
+                        )}
+                        {canEdit && (
+                          <>
+                            <Input
+                              className="nc-numeric text-right"
+                              style={{ width: 160 }}
+                              inputMode="decimal"
+                              placeholder="Tender price"
+                              aria-label="Tender price"
+                              value={tenderPriceFocused ? tenderPriceDraft : displayValue(tenderPriceDraft, false)}
+                              onFocus={() => setTenderPriceFocused(true)}
+                              onChange={(e) => setTenderPriceDraft(e.target.value)}
+                              onBlur={() => {
+                                setTenderPriceFocused(false)
+                                void commitTenderPrice()
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key !== 'Enter') return
+                                e.preventDefault()
+                                e.currentTarget.blur()
+                              }}
+                            />
+                            {tenderPriceSaving && <Spinner />}
+                            {tenderPriceError && <span className="text-nc-danger-text">{tenderPriceError}</span>}
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                </tfoot>
+              </Table>
             ))}
         </>
       )}

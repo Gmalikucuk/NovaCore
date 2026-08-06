@@ -1351,6 +1351,46 @@ ok=0; [ "$STATUS" = "403" ] && ok=1
 check "full: insert project rejected (no create_projects)" "403" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# tender_price (0035) — gated the same as Rates' own edit surface (set_cost
+# AND set_unit_price both), not a new right. Readable by any member
+# regardless of rights (same posture as contract_no/contract_name); only the
+# WRITE is rights-gated here.
+# =============================================================================
+echo
+echo "=== tender_price (0035) ==="
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"tender_price":15739126.37}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
+check "full: set tender_price (set_cost + set_unit_price)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# quantities holds neither set_cost nor set_unit_price on this project —
+# USING passes on some other permissive policy for this row (is_member
+# alone), so this is the same "matches 0 rows, not 403" shape as every other
+# split-right column-grant check in this file, not an error.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"tender_price":1}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: set tender_price rejected (no set_cost/set_unit_price)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# view_rates alone (viewer) isn't enough either — reading Rates and pricing
+# the contract are different permissions, same split canEdit already draws
+# in RatesScreen itself.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$VIEWER_TOKEN" '{"tender_price":1}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "viewer: set tender_price rejected (view_rates alone is not enough)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# Any member can still READ it regardless of rights — the column-grant
+# above only restricts UPDATE, and there's no column-scoped SELECT grant to
+# narrow this any further than the row-level policy already does.
+request GET "contracts?id=eq.$PROJECT_ID&select=tender_price" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 tender_price)" = "15739126.37" ] && ok=1
+check "quantities: read tender_price (view alone needs no rights)" "200, 15739126.37" "$ok" "$STATUS $BODY_OUT"
+
+# Revert — this project is a shared fixture across the whole suite, and
+# tender_price isn't part of its baseline seed.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"tender_price":null}'
+check "cleanup: tender_price reverted to null" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # Privileged-path checks — a different layer, tested separately on purpose.
 # Unaffected by the rights rewrite: these exercise guard_entry_transitions()
 # directly at the postgres role, below PostgREST's grant system entirely.

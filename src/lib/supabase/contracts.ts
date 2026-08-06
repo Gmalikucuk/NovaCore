@@ -17,6 +17,8 @@ export interface MyContract extends ContractRights {
   contractNo: string | null
   /** Fabricated data for exercising every screen state (0005/0006) — the Overview's unmissable, non-dismissable sandbox banner gates on this. */
   isSandbox: boolean
+  /** The tendered total off the award document (0035) — null until someone enters it. Never derived from the sum of Ext. amount; see Rates' own reconciliation line. */
+  tenderPrice: number | null
 }
 
 /**
@@ -41,7 +43,7 @@ interface RawMembershipRow {
   confirm_quantity: boolean
   view_rates: boolean
   extract_report: boolean
-  contracts: { id: string; contract_name: string; contract_no: string | null; is_sandbox: boolean }
+  contracts: { id: string; contract_name: string; contract_no: string | null; is_sandbox: boolean; tender_price: string | null }
 }
 
 /**
@@ -64,7 +66,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   const { data, error } = await supabase
     .from('contract_members')
     .select(
-      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox )',
+      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price )',
     )
     .eq('user_id', user.id)
   if (error) throw error
@@ -76,6 +78,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       name: r.contracts.contract_name,
       contractNo: r.contracts.contract_no,
       isSandbox: r.contracts.is_sandbox,
+      tenderPrice: r.contracts.tender_price === null ? null : Number(r.contracts.tender_price),
       createItems: r.create_items,
       setCost: r.set_cost,
       setUnitPrice: r.set_unit_price,
@@ -135,6 +138,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
     name: data.contract_name,
     contractNo: data.contract_no,
     isSandbox: data.is_sandbox,
+    tenderPrice: null,
     // The creator's own rights on their brand-new contract — create_items
     // only (see above), everything else false until seated separately.
     createItems: true,
@@ -159,4 +163,17 @@ export async function fetchMyCompanyRights(): Promise<CompanyRights> {
   if (error) throw error
 
   return { createProjects: data.create_projects, manageMembers: data.manage_members }
+}
+
+/**
+ * The one figure Rates' reconciliation line checks the sum of Ext. amount
+ * against — entered once by a person reading it off the award document
+ * (0035), never derived from that sum itself. Gated the same as Rates' own
+ * edit surface (set_cost + set_unit_price both, contracts_tender_price_
+ * update_right) — RLS is what actually enforces this; the caller only
+ * reaches this button when RatesScreen's own canEdit already agrees.
+ */
+export async function updateTenderPrice(contractId: string, tenderPrice: number | null): Promise<void> {
+  const { error } = await supabase.from('contracts').update({ tender_price: tenderPrice }).eq('id', contractId)
+  if (error) throw error
 }
