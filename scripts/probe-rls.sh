@@ -282,8 +282,16 @@ echo "=== Discovering a line item on the sandbox project ==="
 # Filtered on contracts.is_sandbox = true (see 0005/0006), not just "whatever
 # the quantities seat sees first" — this suite writes confirmed quantity_records
 # as part of its own checks, and those rows must never land on a real,
-# non-sandbox project.
-request GET "items?select=id,contract_id,contracts!inner(is_sandbox)&contracts.is_sandbox=eq.true&limit=1" "$QUANTITIES_TOKEN"
+# non-sandbox project. order=created_at.asc makes this deterministic: more
+# than one is_sandbox=true contract now has Items (PROBE-ADMIN's
+# items_earned_fields_guard fixtures, further down, are also is_sandbox=true
+# — items has no DELETE grant for authenticated, so they persist across
+# runs), and an unordered limit=1 previously picked whichever row Postgres
+# happened to return first, silently redirecting PROJECT_ID onto
+# PROBE-ADMIN on some runs and breaking every downstream section that
+# expects the original seeded sandbox project (Jobs' 'PROBE Job' etc.).
+# Oldest-first is stable regardless of what gets added later.
+request GET "items?select=id,contract_id,contracts!inner(is_sandbox)&contracts.is_sandbox=eq.true&order=created_at.asc&limit=1" "$QUANTITIES_TOKEN"
 PROJECT_ID=$(json_field "$BODY_OUT" 0 contract_id)
 LINE_ITEM_ID=$(json_field "$BODY_OUT" 0 id)
 if [ -z "$PROJECT_ID" ] || [ -z "$LINE_ITEM_ID" ]; then
@@ -834,6 +842,13 @@ check "quantities: Lump Sum Item cost invisible (no view_rates)" "200, []" "$ok"
 # items_provisional_fields_only_provisional) are untouched by this
 # migration; the third check proves the new grant doesn't loosen them —
 # a fully-rights seat still can't put authorized_value on a Lump Sum Item.
+#
+# The "quantities: rejected" check below only proves rejection when
+# quantities holds no relevant right at all. It does NOT prove the
+# set_cost/set_unit_price gate specifically — see the "items_earned_fields_
+# guard trigger (0037)" section further down (PROBE-ADMIN contract) for the
+# isolated version of that claim, and why this block alone let a real gap
+# ship unnoticed for two migrations.
 # =============================================================================
 echo
 echo "=== items earned fields (percent_complete / authorized_value) ==="
@@ -1022,6 +1037,55 @@ print('1' if len(d) == 1 and d[0] == expected else '0')
   [ "$exact" = "1" ] && ok=1
 fi
 check "quantities: creator auto-granted create_items ONLY, not every right" "exact match" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
+# items_earned_fields_guard trigger (0037) — the gap a live PATCH proved:
+# items_update_right (create_items) is a PERMISSIVE policy with no column
+# granularity, so a create_items-only seat could already write
+# percent_complete/authorized_value straight through it —
+# items_earned_fields_update_right (0036) added no real restriction, since
+# permissive policies on the same table OR together. The check above
+# ("quantities: set percent_complete rejected") never isolated this:
+# on that fixture quantities holds NEITHER create_items NOR
+# set_cost/set_unit_price, so the rejection came from items_update_right's
+# own row check failing — "no rights at all", not "create_items without
+# set_cost/set_unit_price". quantities on PROBE-ADMIN, confirmed just above
+# (create_items=true, set_cost=false, set_unit_price=false), is the one
+# seat shape that actually exercises the claim, on both INSERT and UPDATE.
+# =============================================================================
+GUARD_LUMP_SUM_ID="deadbeef-0000-0000-0000-0000000000a1"
+GUARD_PROVISIONAL_ID="deadbeef-0000-0000-0000-0000000000a2"
+
+request POST "items" "$QUANTITIES_TOKEN" \
+  "{\"id\":\"$GUARD_LUMP_SUM_ID\",\"contract_id\":\"$ADMIN_CONTRACT_ID\",\"item_number\":\"GUARD.01\",\"description\":\"earned-fields guard probe (lump sum)\",\"unit\":\"Lump Sum\",\"approximate_quantity\":1,\"item_kind\":\"lump_sum\"}"
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "409" ]; } && ok=1
+check "quantities: create guard-probe Lump Sum Item on PROBE-ADMIN (create_items)" "201 (or 409 on rerun)" "$ok" "$STATUS $BODY_OUT"
+
+request POST "items" "$QUANTITIES_TOKEN" \
+  "{\"id\":\"$GUARD_PROVISIONAL_ID\",\"contract_id\":\"$ADMIN_CONTRACT_ID\",\"item_number\":\"GUARD.02\",\"description\":\"earned-fields guard probe (provisional sum)\",\"unit\":\"Provisional Sum\",\"approximate_quantity\":1,\"item_kind\":\"provisional_sum\"}"
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "409" ]; } && ok=1
+check "quantities: create guard-probe Provisional Sum Item on PROBE-ADMIN (create_items)" "201 (or 409 on rerun)" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "items?id=eq.$GUARD_LUMP_SUM_ID" "$QUANTITIES_TOKEN" '{"percent_complete": 77}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "quantities: percent_complete UPDATE rejected at the database (create_items alone, no set_cost/set_unit_price)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "items?id=eq.$GUARD_PROVISIONAL_ID" "$QUANTITIES_TOKEN" '{"authorized_value": 500}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "quantities: authorized_value UPDATE rejected at the database (create_items alone)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request POST "items" "$QUANTITIES_TOKEN" \
+  "{\"contract_id\":\"$ADMIN_CONTRACT_ID\",\"item_number\":\"GUARD.03\",\"description\":\"earned-fields guard probe (insert-time)\",\"unit\":\"Lump Sum\",\"approximate_quantity\":1,\"item_kind\":\"lump_sum\",\"percent_complete\":88}"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "quantities: percent_complete INSERT rejected at the database (create_items alone)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# A plain, non-finance edit (create_items alone, finance fields untouched)
+# must still succeed — the trigger only fires when percent_complete/
+# authorized_value actually change, so it must not regress ordinary Item
+# edits (or the area_basis column landing in 0038 right after this).
+request PATCH "items?id=eq.$GUARD_LUMP_SUM_ID" "$QUANTITIES_TOKEN" '{"description": "earned-fields guard probe (lump sum, edited)"}'
+ok=0; [ "$STATUS" = "200" ] && ok=1
+check "quantities: ordinary field edit still succeeds (create_items, finance fields untouched)" "200" "$ok" "$STATUS $BODY_OUT"
 
 # correct_only holds manage_members but has never been added to this
 # contract by anyone — seeing it at all is the widened contracts_select_
