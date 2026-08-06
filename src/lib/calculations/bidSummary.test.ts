@@ -146,41 +146,64 @@ describe('aggregateFinancials', () => {
 })
 
 describe('marginBands', () => {
+  // 10 rows, 0.05 to 0.50 spread — clears both the count floor and the
+  // spread floor, so this is the baseline "banding is warranted" case.
+  const wideSpreadRows = [
+    { rowId: 'a', marginPercent: 0.05 },
+    { rowId: 'b', marginPercent: 0.1 },
+    { rowId: 'c', marginPercent: 0.15 },
+    { rowId: 'd', marginPercent: 0.2 },
+    { rowId: 'e', marginPercent: 0.25 },
+    { rowId: 'f', marginPercent: 0.3 },
+    { rowId: 'g', marginPercent: 0.35 },
+    { rowId: 'h', marginPercent: 0.4 },
+    { rowId: 'i', marginPercent: 0.45 },
+    { rowId: 'j', marginPercent: 0.5 },
+  ]
+
   it('splits priced rows into bottom/middle/top third by marginPercent', () => {
-    const rows = [
-      { rowId: 'a', marginPercent: 0.05 },
-      { rowId: 'b', marginPercent: 0.1 },
-      { rowId: 'c', marginPercent: 0.2 },
-      { rowId: 'd', marginPercent: 0.3 },
-      { rowId: 'e', marginPercent: 0.4 },
-      { rowId: 'f', marginPercent: 0.5 },
-    ]
-    const bands = marginBands(rows)
+    // n=10, third = 3.33 — i < 3.33 is below (indices 0-3, four rows), i <
+    // 6.67 is neutral (indices 4-6, three rows), the rest above (indices
+    // 7-9, three rows). Not an even 3/3/3+1 split — just where the math lands.
+    const bands = marginBands(wideSpreadRows)
     expect(bands.get('a')).toBe('below')
     expect(bands.get('b')).toBe('below')
-    expect(bands.get('c')).toBe('neutral')
-    expect(bands.get('d')).toBe('neutral')
-    expect(bands.get('e')).toBe('above')
-    expect(bands.get('f')).toBe('above')
+    expect(bands.get('c')).toBe('below')
+    expect(bands.get('d')).toBe('below')
+    expect(bands.get('e')).toBe('neutral')
+    expect(bands.get('f')).toBe('neutral')
+    expect(bands.get('g')).toBe('neutral')
+    expect(bands.get('h')).toBe('above')
+    expect(bands.get('i')).toBe('above')
+    expect(bands.get('j')).toBe('above')
   })
 
   it('leaves unpriced rows out of the map entirely — absent, not a band', () => {
-    const bands = marginBands([
-      { rowId: 'a', marginPercent: 0.1 },
-      { rowId: 'b', marginPercent: null },
-      { rowId: 'c', marginPercent: 0.2 },
-      { rowId: 'd', marginPercent: 0.3 },
-    ])
-    expect(bands.has('b')).toBe(false)
-    expect(bands.size).toBe(3)
+    const bands = marginBands([...wideSpreadRows, { rowId: 'k', marginPercent: null }])
+    expect(bands.has('k')).toBe(false)
+    expect(bands.size).toBe(wideSpreadRows.length)
   })
 
-  it('bands nothing when fewer than 3 rows are priced — no meaningful thirds', () => {
+  it('bands nothing when fewer than 10 rows are priced — Hwy 5\'s own 4-Item case, no meaningful thirds', () => {
     const bands = marginBands([
-      { rowId: 'a', marginPercent: 0.1 },
-      { rowId: 'b', marginPercent: 0.2 },
+      { rowId: 'a', marginPercent: 0.457 },
+      { rowId: 'b', marginPercent: 0.478 },
+      { rowId: 'c', marginPercent: 0.493 },
+      { rowId: 'd', marginPercent: 0.493 },
     ])
     expect(bands.size).toBe(0)
+  })
+
+  it('bands nothing when 10+ rows are priced but the spread is too tight to mean anything', () => {
+    const tightSpreadRows = Array.from({ length: 12 }, (_, i) => ({ rowId: `r${i}`, marginPercent: 0.45 + i * 0.002 }))
+    // spread here is 0.022 (2.2 points) — under the 5-point floor
+    const bands = marginBands(tightSpreadRows)
+    expect(bands.size).toBe(0)
+  })
+
+  it('bands once the spread crosses the floor, even at exactly 10 rows', () => {
+    const bands = marginBands(wideSpreadRows)
+    expect(bands.size).toBe(10)
   })
 })
 

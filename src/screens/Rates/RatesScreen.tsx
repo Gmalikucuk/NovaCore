@@ -81,14 +81,19 @@ function DashCell({ width, title }: { width: number; title?: string }) {
 // on the contract, the figure layered on top so it stays the primary,
 // readable element (the brief's own requirement). Deliberately NOT used for
 // Ext. cost — cost coverage is partial and permanent, so a bar chart there
-// would imply a comparability the data doesn't have. A small width floor
-// keeps a genuinely small-but-real figure visible as a sliver rather than
-// vanishing at true-to-scale width.
+// would imply a comparability the data doesn't have. Anchored to the RIGHT,
+// growing leftward, so it always sits directly behind the right-aligned
+// figure it describes — anchored left, a small bar's visible edge lands at
+// the cell's far side, next to the PREVIOUS column, and reads as belonging
+// there instead. No width floor: a true-to-scale sliver for a small-but-real
+// figure is the honest signal; a floor made every under-~3% row draw the
+// identical width regardless of actual size, which is what turned into the
+// stray vertical "column rule" down the table.
 function ExtAmountCell({ value, width, maxValue }: { value: number | null; width: number; maxValue: number }) {
-  const pct = value !== null && maxValue > 0 && value > 0 ? Math.max((value / maxValue) * 100, 2) : 0
+  const pct = value !== null && maxValue > 0 && value > 0 ? (value / maxValue) * 100 : 0
   return (
     <span className="relative inline-block py-2" style={{ width }}>
-      {pct > 0 && <span className="absolute inset-y-0 left-0 rounded-sm bg-nc-accent/15" style={{ width: `${pct}%` }} aria-hidden="true" />}
+      {pct > 0 && <span className="absolute inset-y-0 right-0 rounded-sm bg-nc-accent/15" style={{ width: `${pct}%` }} aria-hidden="true" />}
       <span className="nc-numeric relative block text-right">{value === null ? '—' : rate(value)}</span>
     </span>
   )
@@ -439,6 +444,10 @@ export function RatesScreen() {
         tabIndex={i * 2 + 1}
         inputMode="decimal"
         value={displayValue(draft.cost, costIsFocused)}
+        // An empty box with no cue reads as broken next to a genuine em-dash
+        // in the same row (Approx. Qty, Unit cost for a Lump Sum Item) —
+        // the placeholder is what says "enterable, just not entered yet."
+        placeholder={item.itemKind === 'unit_price' ? 'Unit cost' : 'Ext. cost'}
         aria-label={item.itemKind === 'lump_sum' ? `${item.itemNumber} Ext. cost` : undefined}
         onChange={(e) => updateDraft(item.id, costCommitField, e.target.value)}
         onKeyDown={(e) => handleKeyDown(e, item, costCommitField, i)}
@@ -462,6 +471,7 @@ export function RatesScreen() {
         tabIndex={rows.length * 2 + i + 1}
         inputMode="decimal"
         value={displayValue(draft.unitPrice, priceIsFocused)}
+        placeholder={item.itemKind === 'unit_price' ? 'Unit price' : 'Ext. amount'}
         aria-label={item.itemKind === 'lump_sum' ? `${item.itemNumber} Ext. amount` : undefined}
         onFocus={() => setFocusedCell({ itemId: item.id, field: priceCommitField })}
         onBlur={() => {

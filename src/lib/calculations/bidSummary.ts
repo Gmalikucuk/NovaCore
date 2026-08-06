@@ -87,19 +87,37 @@ export function aggregateFinancials(rows: readonly { itemKind: ItemKind; financi
 
 export type MarginBand = 'below' | 'neutral' | 'above'
 
+/** Below this many priced rows, terciles put roughly one Item per band — a
+ * single Item's own figure rendered as "the worst third" rather than a real
+ * relative position. 10 is the point a tercile split starts meaning
+ * something (3-4 Items per band, not 1); fewer than that, every row is left
+ * unbanded rather than forcing a split with nothing to say. */
+const MIN_PRICED_ROWS_FOR_BANDS = 10
+
+/** Below this many points of spread between the highest and lowest priced
+ * margin, a tercile split has nothing real to divide — every Item is
+ * quoting within a couple of points of every other, and coloring one end
+ * red and the other green would be presenting rounding-level noise as a
+ * best/worst signal. Independent of MIN_PRICED_ROWS_FOR_BANDS: a contract
+ * can have 50 priced Items and still have no meaningful spread. */
+const MIN_MARGIN_SPREAD_FOR_BANDS = 0.05
+
 /**
  * Bands marginPercent into bottom/middle/top third of this SAME contract's
  * own priced rows — never a fixed threshold (NovaCore has no basis to judge
  * "15% is bad" on someone else's contract). Rows with no cost simply never
- * get an entry in the returned map — absent is not low margin. Needs at
- * least 3 priced rows to say anything about relative position at all; fewer
- * than that, every row is left unbanded rather than forcing a meaningless
- * split.
+ * get an entry in the returned map — absent is not low margin. Two separate
+ * gates before a split is drawn at all: enough priced rows for a tercile to
+ * mean something, and enough spread between them for "worst third" to be a
+ * real distinction rather than noise (see the two constants above).
  */
 export function marginBands(rows: readonly { rowId: string; marginPercent: number | null }[]): Map<string, MarginBand> {
   const priced = rows.filter((r): r is { rowId: string; marginPercent: number } => r.marginPercent !== null)
   const bands = new Map<string, MarginBand>()
-  if (priced.length < 3) return bands
+  if (priced.length < MIN_PRICED_ROWS_FOR_BANDS) return bands
+  const values = priced.map((r) => r.marginPercent)
+  const spread = Math.max(...values) - Math.min(...values)
+  if (spread < MIN_MARGIN_SPREAD_FOR_BANDS) return bands
   const sorted = [...priced].sort((a, b) => a.marginPercent - b.marginPercent)
   const third = sorted.length / 3
   sorted.forEach((r, i) => {

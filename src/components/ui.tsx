@@ -174,7 +174,16 @@ export function THead({ ...props }: React.HTMLAttributes<HTMLTableSectionElement
 }
 
 export function TBody({ className = '', ...props }: React.HTMLAttributes<HTMLTableSectionElement>) {
-  return <tbody className={`divide-y divide-nc-border ${className}`} {...props} />
+  // divide-y targets a border on the <tr> itself, which every Table's own
+  // border-collapse: collapse silently drops — only td/th borders
+  // participate in the collapsed model, per spec. The line between rows was
+  // never actually rendering; invisible for two plain white rows, but the
+  // moment two adjacent rows carry the SAME solid background (a margin
+  // band, a failed-write tint), there's no seam between them at all and
+  // they read as one taller block. Targeting the cells directly via this
+  // child-combinator selector is what actually paints a line, on every row
+  // boundary but the very first (no line above the header).
+  return <tbody className={`[&>tr+tr>td]:border-t [&>tr+tr>td]:border-nc-border ${className}`} {...props} />
 }
 
 export function TR({ className = '', ...props }: React.HTMLAttributes<HTMLTableRowElement>) {
