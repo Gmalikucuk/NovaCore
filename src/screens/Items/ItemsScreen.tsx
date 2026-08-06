@@ -2,14 +2,42 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import { useOutletContext } from 'react-router-dom'
 import { IconClipboardList } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
-import { createItem, fetchItems, updateItem, type Item, type ItemInput } from '../../lib/supabase/items'
+import { createItem, fetchItems, updateItem, type AreaBasis, type Item, type ItemInput } from '../../lib/supabase/items'
 import { UNITS } from '../../lib/itemUnits'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { quantity as fmtQuantity } from '../../lib/format'
 import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
-const BLANK_FORM: ItemInput = { itemNumber: '', description: '', unit: UNITS[0], approximateQuantity: 0 }
+const BLANK_FORM: ItemInput = { itemNumber: '', description: '', unit: UNITS[0], approximateQuantity: 0, areaBasis: null }
+
+/**
+ * Whether quantity is itself an area, or area is a separate measured fact,
+ * or area has no meaning for this Item — set from the contract documents,
+ * never inferred (items.ts's isAreaUnit/isApplicationRateItem). The empty
+ * string is this Select's own "Unclassified" option, mapped to null on
+ * save — never a fourth real area_basis value, never a default.
+ */
+const AREA_BASIS_OPTIONS: { value: AreaBasis | ''; label: string }[] = [
+  { value: '', label: 'Unclassified' },
+  { value: 'quantity_is_area', label: 'Quantity is area' },
+  { value: 'separately_measured', label: 'Separately measured' },
+  { value: 'not_applicable', label: 'Not applicable' },
+]
+
+const AREA_BASIS_LABEL: Record<AreaBasis, string> = {
+  quantity_is_area: 'Quantity is area',
+  separately_measured: 'Separately measured',
+  not_applicable: 'Not applicable',
+}
+
+function areaBasisSelectValue(areaBasis: AreaBasis | null): AreaBasis | '' {
+  return areaBasis ?? ''
+}
+
+function parseAreaBasisSelectValue(raw: string): AreaBasis | null {
+  return raw === '' ? null : (raw as AreaBasis)
+}
 
 function parseQuantity(raw: string): number {
   const n = Number(raw)
@@ -77,11 +105,14 @@ export function ItemsScreen() {
         description: form.description.trim(),
         unit: form.unit,
         approximateQuantity: form.approximateQuantity,
+        areaBasis: form.areaBasis,
       })
       setItems((prev) => [...prev, created])
       // Keep the unit selection (a PM entering 48 items is usually entering
       // a run of the same activity) — reset everything else, and return
       // focus to Code so typing continues without reaching for the mouse.
+      // area_basis is NOT carried forward with it: it's a documents-driven
+      // classification specific to each Item, never a default to reuse.
       setForm({ ...BLANK_FORM, unit: form.unit })
       codeInputRef.current?.focus()
     } catch (err) {
@@ -104,7 +135,7 @@ export function ItemsScreen() {
 
   function startEdit(item: Item) {
     setEditingId(item.id)
-    setEditForm({ itemNumber: item.itemNumber, description: item.description, unit: item.unit, approximateQuantity: item.approximateQuantity })
+    setEditForm({ itemNumber: item.itemNumber, description: item.description, unit: item.unit, approximateQuantity: item.approximateQuantity, areaBasis: item.areaBasis })
     setEditError(null)
   }
 
@@ -123,6 +154,7 @@ export function ItemsScreen() {
         description: editForm.description.trim(),
         unit: editForm.unit,
         approximateQuantity: editForm.approximateQuantity,
+        areaBasis: editForm.areaBasis,
       })
       setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))
       setEditingId(null)
@@ -191,6 +223,23 @@ export function ItemsScreen() {
                   ))}
                 </Select>
               </div>
+              <div className="w-44">
+                <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="li-add-area-basis">
+                  Area basis
+                </label>
+                <Select
+                  id="li-add-area-basis"
+                  value={areaBasisSelectValue(form.areaBasis ?? null)}
+                  onChange={(e) => setForm({ ...form, areaBasis: parseAreaBasisSelectValue(e.target.value) })}
+                  onKeyDown={handleAddKeyDown}
+                >
+                  {AREA_BASIS_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
               <div className="w-36">
                 <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="li-add-quantity">
                   Approximate Quantity
@@ -235,6 +284,7 @@ export function ItemsScreen() {
                     <TH>Item #</TH>
                     <TH>Description</TH>
                     <TH>Unit of Measure</TH>
+                    <TH>Area basis</TH>
                     <TH align="right">Approximate Quantity</TH>
                     <TH />
                   </TR>
@@ -243,7 +293,7 @@ export function ItemsScreen() {
                   {sorted.map((item) =>
                     editingId === item.id ? (
                       <TR key={item.id}>
-                        <TD colSpan={5} dense>
+                        <TD colSpan={6} dense>
                           <form onSubmit={handleSaveEdit} className="flex flex-wrap items-center gap-2">
                             <Input
                               className="nc-numeric w-32"
@@ -261,6 +311,18 @@ export function ItemsScreen() {
                               {UNITS.map((u) => (
                                 <option key={u} value={u}>
                                   {u}
+                                </option>
+                              ))}
+                            </Select>
+                            <Select
+                              className="w-auto"
+                              value={areaBasisSelectValue(editForm.areaBasis ?? null)}
+                              onChange={(e) => setEditForm({ ...editForm, areaBasis: parseAreaBasisSelectValue(e.target.value) })}
+                              aria-label="Area basis"
+                            >
+                              {AREA_BASIS_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {o.label}
                                 </option>
                               ))}
                             </Select>
@@ -288,6 +350,13 @@ export function ItemsScreen() {
                         <TD className="nc-numeric">{item.itemNumber}</TD>
                         <TD prose>{item.description}</TD>
                         <TD>{item.unit}</TD>
+                        <TD>
+                          {item.areaBasis === null ? (
+                            <span className="italic text-nc-text-subtle">Unclassified</span>
+                          ) : (
+                            AREA_BASIS_LABEL[item.areaBasis]
+                          )}
+                        </TD>
                         <TD align="right" className="nc-numeric">
                           {displayQuantity(item)}
                         </TD>

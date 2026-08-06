@@ -874,6 +874,39 @@ request PATCH "items?id=eq.$LUMP_SUM_ITEM_ID" "$FULL_TOKEN" '{"percent_complete"
 check "cleanup: percent_complete reverted to null" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# items.area_basis (0038) — no new grant or policy: items_update_right
+# already gates every column of items on create_items unconditionally, and
+# that's exactly the right this is meant to be gated on (whoever creates a
+# contract's Items sets this from the contract documents). full holds
+# create_items on the sandbox project (UNIT_PRICE_ITEM_ID's contract),
+# quantities does not. UNIT_PRICE_ITEM_ID starts null (Litre — the
+# backfill's own deliberate carve-out), so this probe also doubles as a
+# check that "Unclassified" round-trips as null, not a default.
+# =============================================================================
+echo
+echo "=== items.area_basis (0038) ==="
+
+request PATCH "items?id=eq.$UNIT_PRICE_ITEM_ID" "$FULL_TOKEN" '{"area_basis": "not_applicable"}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  ab=$(json_field "$BODY_OUT" 0 area_basis)
+  [ "$ab" = "not_applicable" ] && ok=1
+fi
+check "full: set area_basis (create_items)" "200, area_basis=not_applicable" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "items?id=eq.$UNIT_PRICE_ITEM_ID" "$QUANTITIES_TOKEN" '{"area_basis": "quantity_is_area"}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: set area_basis rejected (no create_items)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "items?id=eq.$UNIT_PRICE_ITEM_ID" "$FULL_TOKEN" '{"area_basis": "not_a_real_value"}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: invalid area_basis value rejected (check constraint)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# Cleanup — restore the pre-probe state (null, "Unclassified").
+request PATCH "items?id=eq.$UNIT_PRICE_ITEM_ID" "$FULL_TOKEN" '{"area_basis": null}'
+check "cleanup: area_basis reverted to null" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # item_prices history — item_price_history + log_item_price_change() trigger.
 # viewer holds set_cost on the sandbox contract only (see above) and
 # view_rates everywhere (its whole fixture identity) — the one seat that can

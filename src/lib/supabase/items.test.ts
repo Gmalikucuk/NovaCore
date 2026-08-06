@@ -2,32 +2,28 @@ import { describe, expect, it } from 'vitest'
 import { isApplicationRateItem, isAreaUnit } from './items'
 
 describe('isAreaUnit', () => {
-  it('is true only for Square Metre', () => {
-    expect(isAreaUnit('Square Metre')).toBe(true)
-    expect(isAreaUnit('Tonne')).toBe(false)
-    expect(isAreaUnit('Metre')).toBe(false)
-    expect(isAreaUnit('Each')).toBe(false)
+  it('is true only when area_basis is quantity_is_area', () => {
+    expect(isAreaUnit({ areaBasis: 'quantity_is_area' })).toBe(true)
+    expect(isAreaUnit({ areaBasis: 'separately_measured' })).toBe(false)
+    expect(isAreaUnit({ areaBasis: 'not_applicable' })).toBe(false)
+  })
+
+  it('is false for an unclassified Item — never inferred, never assumed', () => {
+    expect(isAreaUnit({ areaBasis: null })).toBe(false)
   })
 })
 
 describe('isApplicationRateItem', () => {
-  it('is true for a Tonne Item applied over a stretch, outside the supply-stockpile section', () => {
-    expect(isApplicationRateItem({ unit: 'Tonne', itemNumber: '05.03.03' })).toBe(true) // Top Lift
-    expect(isApplicationRateItem({ unit: 'Tonne', itemNumber: '05.03.01' })).toBe(true) // Level Course
-    expect(isApplicationRateItem({ unit: 'Tonne', itemNumber: '04.05.04' })).toBe(true) // Shouldering
+  it('is true only when area_basis is separately_measured', () => {
+    expect(isApplicationRateItem({ areaBasis: 'separately_measured' })).toBe(true) // e.g. Top Lift, Level Course, Shouldering
   })
 
-  it('is false for a Tonne Item in the supply-stockpile section, even with a near-identical name', () => {
-    // "Shoulder Aggregate" (03.xx, supply) vs "Shouldering" (04.xx, applied) —
-    // the exact pair the brief warned a keyword match would get wrong.
-    expect(isApplicationRateItem({ unit: 'Tonne', itemNumber: '03.01.04' })).toBe(false) // Shoulder Aggregate
-    expect(isApplicationRateItem({ unit: 'Tonne', itemNumber: '03.01.01' })).toBe(false) // Asphalt Medium Mix Aggregate
+  it('is false for quantity_is_area and not_applicable', () => {
+    expect(isApplicationRateItem({ areaBasis: 'quantity_is_area' })).toBe(false)
+    expect(isApplicationRateItem({ areaBasis: 'not_applicable' })).toBe(false) // e.g. Shoulder Aggregate (03.xx, supply — not applied, despite the near-identical name)
   })
 
-  it('is false for any non-Tonne unit regardless of section', () => {
-    expect(isApplicationRateItem({ unit: 'Square Metre', itemNumber: '05.03.03' })).toBe(false)
-    expect(isApplicationRateItem({ unit: 'Each', itemNumber: '04.05.04' })).toBe(false)
-    expect(isApplicationRateItem({ unit: 'Metre', itemNumber: '04.06.01' })).toBe(false)
-    expect(isApplicationRateItem({ unit: 'Cubic Metre', itemNumber: '04.05.01' })).toBe(false)
+  it('is false for an unclassified Item — never inferred, never assumed', () => {
+    expect(isApplicationRateItem({ areaBasis: null })).toBe(false)
   })
 })

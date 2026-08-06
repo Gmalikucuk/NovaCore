@@ -10,6 +10,18 @@ import { supabase } from './client'
  */
 export type ItemKind = 'unit_price' | 'lump_sum' | 'provisional_sum'
 
+/**
+ * Whether area applies to this Item's quantity, and how — set from the
+ * contract documents, never inferred. quantity_is_area: the recorded
+ * quantity IS the area (milling, pulverize). separately_measured: area is
+ * a separate measured fact alongside quantity, driving an application
+ * rate (paving lifts, shouldering). not_applicable: area has no meaning
+ * here (Lump Sum, Provisional Sum, Each/Metre/Cubic Metre, stockpile
+ * supply). null is a fourth, distinct state — genuinely unclassified, not
+ * the same as a checked "no area" — see items_area_basis (0038).
+ */
+export type AreaBasis = 'quantity_is_area' | 'separately_measured' | 'not_applicable'
+
 export interface Item {
   id: string
   contractId: string
@@ -24,6 +36,7 @@ export interface Item {
   percentComplete: number | null
   /** GC 32.01/47.01 — value the Ministry has authorized in advance, provisional_sum Items only (items_provisional_fields_only_provisional). Never derived; this figure IS the Item's earned value once entered. */
   authorizedValue: number | null
+  areaBasis: AreaBasis | null
 }
 
 /**
@@ -40,46 +53,40 @@ export function isUnitPriceItem(item: Pick<Item, 'itemKind'>): boolean {
 
 /**
  * A Square-Metre Item's own quantity IS its area (Cold Mill, milling,
- * pulverize — confirmed against the Hwy 5/Venables seed data) — a second,
- * independently-entered area figure for these would duplicate quantity, not
- * add information. Daily Entry uses this to route the width-derived-area
- * convenience-fill and disagreement check at the QUANTITY field itself for
- * these Items, rather than showing a separate area input that could never
- * mean anything different from quantity.
+ * pulverize) — a second, independently-entered area figure for these
+ * would duplicate quantity, not add information. Daily Entry uses this to
+ * route the width-derived-area convenience-fill and disagreement check at
+ * the QUANTITY field itself for these Items, rather than showing a
+ * separate area input that could never mean anything different from
+ * quantity.
  *
- * A soft spot, by necessity: `unit` is free text (0001), not an enum, so
- * this is a string match, not a stored classification. It holds only
- * because units were normalised on import — a future Item entered with
- * different wording for the same physical unit would silently fall through
- * this check. There is no `unit_kind` column to build on instead today.
+ * Reads the stored classification (items.area_basis, 0038) — no longer a
+ * string match against unit. An unclassified Item (areaBasis === null)
+ * reads as false here, the same as not_applicable: never inferred, never
+ * assumed to be the common case.
  */
-export function isAreaUnit(unit: string): boolean {
-  return unit === 'Square Metre'
+export function isAreaUnit(item: Pick<Item, 'areaBasis'>): boolean {
+  return item.areaBasis === 'quantity_is_area'
 }
 
 /**
- * Tonne Items where an application rate is a real, measured fact — asphalt
- * or aggregate spread over a stretch (Level Course, Bottom/Intermediate
+ * Items where an application rate is a real, measured fact — asphalt or
+ * aggregate spread over a stretch (Level Course, Bottom/Intermediate
  * Lifts, Top Lift, Shouldering, Construct Base Course), as opposed to
- * material simply supplied and stockpiled (Schedule 7's own "Supply
- * Aggregate in Stockpile" section, item numbers prefixed "03." on both Hwy
- * 5 and Venables — Asphalt Medium Mix Aggregate, Well Graded Base Course
- * Aggregate, Shoulder Aggregate). Only these get the average-width/entered-
- * area inputs; a stockpile delivery has no stretch to have a width or an
- * area over.
+ * material simply supplied and stockpiled. Only these get the
+ * average-width/entered-area inputs; a stockpile delivery has no stretch
+ * to have a width or an area over.
  *
- * Deliberately NOT decided by description text alone — "Shoulder
- * Aggregate" (03.xx, supply, no area) and "Shouldering" (04.xx/05.xx,
- * applied, has area) are two different Items with near-identical wording
- * on both real contracts, which is exactly the case a keyword match would
- * get wrong. Item-number section prefix is the more reliable signal
- * available today, but it is still a convention this contract's own
- * numbering happens to follow, not a stored flag — there is no item-level
- * column distinguishing "applied over an area" from "supplied," and a
- * future contract numbered differently would need this revisited.
+ * Reads the stored classification (items.area_basis, 0038) — no longer a
+ * unit-plus-item-number-prefix heuristic. That heuristic is exactly what
+ * got "Shoulder Aggregate" (03.xx, supply, no area) and "Shouldering"
+ * (04.xx/05.xx, applied, has area) right by convention, not by anything
+ * stored; area_basis is what Finance/the PM actually entered from the
+ * contract documents. An unclassified Item (areaBasis === null) reads as
+ * false here, the same as not_applicable.
  */
-export function isApplicationRateItem(item: Pick<Item, 'unit' | 'itemNumber'>): boolean {
-  return item.unit === 'Tonne' && !item.itemNumber.startsWith('03.')
+export function isApplicationRateItem(item: Pick<Item, 'areaBasis'>): boolean {
+  return item.areaBasis === 'separately_measured'
 }
 
 interface RawItemRow {
@@ -93,9 +100,10 @@ interface RawItemRow {
   provisional_sum: string | null
   percent_complete: string | null
   authorized_value: string | null
+  area_basis: AreaBasis | null
 }
 
-const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity, item_kind, provisional_sum, percent_complete, authorized_value'
+const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity, item_kind, provisional_sum, percent_complete, authorized_value, area_basis'
 
 function mapItemRow(row: RawItemRow): Item {
   return {
@@ -109,6 +117,7 @@ function mapItemRow(row: RawItemRow): Item {
     provisionalSum: row.provisional_sum === null ? null : Number(row.provisional_sum),
     percentComplete: row.percent_complete === null ? null : Number(row.percent_complete),
     authorizedValue: row.authorized_value === null ? null : Number(row.authorized_value),
+    areaBasis: row.area_basis,
   }
 }
 
@@ -136,6 +145,8 @@ export interface ItemInput {
   description: string
   unit: string
   approximateQuantity: number
+  /** Set from the contract documents by whoever is entering this Item — never inferred, never defaulted. Omitted (or explicit null) leaves the Item unclassified, which is the correct starting state, not an oversight. */
+  areaBasis?: AreaBasis | null
 }
 
 /** project_manager only, per RLS (items_insert_right). */
@@ -148,6 +159,7 @@ export async function createItem(contractId: string, input: ItemInput): Promise<
       description: input.description,
       unit: input.unit,
       approximate_quantity: input.approximateQuantity,
+      area_basis: input.areaBasis ?? null,
     })
     .select(ITEM_SELECT)
     .single()
@@ -200,6 +212,7 @@ export async function updateItem(id: string, input: ItemInput): Promise<Item> {
       description: input.description,
       unit: input.unit,
       approximate_quantity: input.approximateQuantity,
+      area_basis: input.areaBasis ?? null,
     })
     .eq('id', id)
     .select(ITEM_SELECT)

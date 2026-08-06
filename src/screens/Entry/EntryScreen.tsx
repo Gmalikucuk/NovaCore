@@ -122,16 +122,15 @@ export function EntryScreen() {
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items])
   const selectedItem = itemById.get(itemId)
 
-  // A Square-Metre Item's own quantity IS its area — the width-derived-area
-  // convenience-fill and disagreement check apply to QUANTITY directly for
-  // these, never a second, separately-stored area figure (items.ts's own
-  // isAreaUnit doc comment). isApplicationRateItem is the narrower set of
-  // Tonne Items actually applied over a stretch (paving lifts, shouldering,
-  // constructed base) as opposed to aggregate simply supplied/stockpiled —
-  // only these get their own area input. Neither applies to Each/Metre/
-  // Cubic Metre Items (manholes, pipe outfall, barrier, excavation) — no
-  // width/area input renders for those at all.
-  const areaUnit = selectedItem ? isAreaUnit(selectedItem.unit) : false
+  // Driven by items.area_basis (0038), not unit/item-number string matching
+  // — see items.ts's own isAreaUnit/isApplicationRateItem doc comments. A
+  // quantity_is_area Item's own quantity IS its area — the width-derived-
+  // area convenience-fill and disagreement check apply to QUANTITY directly
+  // for these, never a second, separately-stored area figure.
+  // separately_measured Items (paving lifts, shouldering, constructed base)
+  // get their own area input instead. not_applicable and unclassified
+  // (areaBasis === null) Items get neither — no width/area input renders.
+  const areaUnit = selectedItem ? isAreaUnit(selectedItem) : false
   const applicationRate = selectedItem ? isApplicationRateItem(selectedItem) : false
   const showStretchFields = areaUnit || applicationRate
 

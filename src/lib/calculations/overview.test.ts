@@ -394,6 +394,7 @@ describe('moneyMakerRow', () => {
       provisionalSum: null,
       percentComplete: null,
       authorizedValue: null,
+      areaBasis: null,
       ...overrides,
     }
   }

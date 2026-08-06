@@ -224,11 +224,10 @@ export function QuantityRecordsScreen() {
     return to - from
   }, [fields.stationFrom, fields.stationTo])
 
-  // See EntryScreen's own copy of this same logic for the full reasoning —
-  // a Square-Metre Item's quantity IS its area (no separate area field);
-  // isApplicationRateItem is the narrower Tonne subset actually applied
-  // over a stretch, as opposed to aggregate simply supplied/stockpiled.
-  const areaUnit = formItem ? isAreaUnit(formItem.unit) : false
+  // Driven by items.area_basis (0038) — see EntryScreen's own copy of this
+  // logic, and items.ts's isAreaUnit/isApplicationRateItem doc comments,
+  // for the full reasoning.
+  const areaUnit = formItem ? isAreaUnit(formItem) : false
   const applicationRate = formItem ? isApplicationRateItem(formItem) : false
   const showStretchFields = areaUnit || applicationRate
 
