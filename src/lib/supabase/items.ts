@@ -20,6 +20,10 @@ export interface Item {
   itemKind: ItemKind
   /** Schedule 7's own Provisional Sum allowance — set only for provisional_sum Items (items_provisional_fields_only_provisional). This IS a provisional_sum Item's Ext. amount on Rates; it is never entered there, only read. */
   provisionalSum: number | null
+  /** GC 52.03(b) — Finance's own estimate of percent complete, lump_sum Items only (items_percent_only_lump_sum). Never inferred from dates, contract state, or any other Item's progress; null until Finance enters it, and null means absent, not zero. Earned value for the Item is percentComplete/100 * its own Ext. amount. */
+  percentComplete: number | null
+  /** GC 32.01/47.01 — value the Ministry has authorized in advance, provisional_sum Items only (items_provisional_fields_only_provisional). Never derived; this figure IS the Item's earned value once entered. */
+  authorizedValue: number | null
 }
 
 /**
@@ -87,9 +91,11 @@ interface RawItemRow {
   approximate_quantity: string
   item_kind: ItemKind
   provisional_sum: string | null
+  percent_complete: string | null
+  authorized_value: string | null
 }
 
-const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity, item_kind, provisional_sum'
+const ITEM_SELECT = 'id, contract_id, item_number, description, unit, approximate_quantity, item_kind, provisional_sum, percent_complete, authorized_value'
 
 function mapItemRow(row: RawItemRow): Item {
   return {
@@ -101,6 +107,8 @@ function mapItemRow(row: RawItemRow): Item {
     approximateQuantity: Number(row.approximate_quantity),
     itemKind: row.item_kind,
     provisionalSum: row.provisional_sum === null ? null : Number(row.provisional_sum),
+    percentComplete: row.percent_complete === null ? null : Number(row.percent_complete),
+    authorizedValue: row.authorized_value === null ? null : Number(row.authorized_value),
   }
 }
 
@@ -198,4 +206,28 @@ export async function updateItem(id: string, input: ItemInput): Promise<Item> {
     .single()
   if (error) throw readableItemError(error, input.itemNumber)
   return mapItemRow(data as unknown as RawItemRow)
+}
+
+/**
+ * Finance's own estimate — never inferred, never defaulted. Gated the same
+ * as setting a price (set_cost AND set_unit_price, items_earned_fields_
+ * update_right), not create_items — this isn't a description edit, it's
+ * the figure that determines a Lump Sum Item's earned value. The database
+ * constraint (items_percent_only_lump_sum) is what actually stops this
+ * being set on a non-lump_sum Item; this function doesn't re-check the
+ * kind client-side beyond what the caller's own UI already restricts.
+ */
+export async function updateItemPercentComplete(id: string, percentComplete: number | null): Promise<void> {
+  const { error } = await supabase.from('items').update({ percent_complete: percentComplete }).eq('id', id)
+  if (error) throw error
+}
+
+/**
+ * The Ministry's own authorization — same gating and the same "never
+ * inferred" rule as percentComplete above. items_provisional_fields_only_
+ * provisional is the database-level guard for kind.
+ */
+export async function updateItemAuthorizedValue(id: string, authorizedValue: number | null): Promise<void> {
+  const { error } = await supabase.from('items').update({ authorized_value: authorizedValue }).eq('id', id)
+  if (error) throw error
 }

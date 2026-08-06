@@ -826,6 +826,39 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "quantities: Lump Sum Item cost invisible (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# items.percent_complete / items.authorized_value — write access
+# (items_earned_fields_update_right, projected-versus-actual). Same gate as
+# setting a price — set_cost AND set_unit_price — not create_items: full
+# holds every per-project right including both, quantities holds neither.
+# The pre-existing kind constraints (items_percent_only_lump_sum /
+# items_provisional_fields_only_provisional) are untouched by this
+# migration; the third check proves the new grant doesn't loosen them —
+# a fully-rights seat still can't put authorized_value on a Lump Sum Item.
+# =============================================================================
+echo
+echo "=== items earned fields (percent_complete / authorized_value) ==="
+
+request PATCH "items?id=eq.$LUMP_SUM_ITEM_ID" "$FULL_TOKEN" '{"percent_complete": 45}'
+ok=0
+if [ "$STATUS" = "200" ]; then
+  pc=$(json_field "$BODY_OUT" 0 percent_complete)
+  [ "$pc" = "45" ] && ok=1
+fi
+check "full: set percent_complete on a Lump Sum Item (set_cost + set_unit_price)" "200, percent_complete=45" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "items?id=eq.$LUMP_SUM_ITEM_ID" "$QUANTITIES_TOKEN" '{"percent_complete": 10}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: set percent_complete rejected (no set_cost/set_unit_price)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "items?id=eq.$LUMP_SUM_ITEM_ID" "$FULL_TOKEN" '{"authorized_value": 1000}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: authorized_value on a Lump Sum Item still rejected (kind constraint, unrelated to this grant)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# Cleanup — shared fixture across the whole suite.
+request PATCH "items?id=eq.$LUMP_SUM_ITEM_ID" "$FULL_TOKEN" '{"percent_complete": null}'
+check "cleanup: percent_complete reverted to null" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # item_prices history — item_price_history + log_item_price_change() trigger.
 # viewer holds set_cost on the sandbox contract only (see above) and
 # view_rates everywhere (its whole fixture identity) — the one seat that can

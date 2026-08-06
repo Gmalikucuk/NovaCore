@@ -3,21 +3,28 @@ import { useOutletContext } from 'react-router-dom'
 import { IconArrowDown, IconArrowUp, IconArrowsSort, IconCurrencyDollar } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { updateTenderPrice } from '../../lib/supabase/contracts'
-import { fetchItems, type Item } from '../../lib/supabase/items'
+import { fetchItems, updateItemAuthorizedValue, updateItemPercentComplete, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
+import { fetchItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import type { CostBasis } from '../../lib/calculations/margin'
 import { aggregateFinancials, marginBands, reconcileTenderPrice, rowFinancials, type MarginBand, type RowFinancials } from '../../lib/calculations/bidSummary'
+import { measuredRollup, unmeasuredRollup } from '../../lib/calculations/projectedActual'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { percent, quantity as fmtQuantity, rate } from '../../lib/format'
 import { EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
-const COL_COUNT = 9
+const COL_COUNT = 11
+
+/** Every field this screen can commit — the original two (cost/unitPrice, upserted to item_prices together) plus the two "earned" fields added for projected-versus-actual (percentComplete/authorizedValue, written directly to items, one at a time, independently of each other and of cost/unitPrice). */
+type EditableField = 'cost' | 'unitPrice' | 'percentComplete' | 'authorizedValue'
 
 interface Draft {
   cost: string
   costBasis: CostBasis
   unitPrice: string
+  percentComplete: string
+  authorizedValue: string
 }
 
 function defaultBasis(item: Item): CostBasis {
@@ -31,6 +38,8 @@ function toDraft(item: Item, price: ItemPrice | undefined): Draft {
     cost: price?.costPrice?.toString() ?? '',
     costBasis: price?.costBasis ?? defaultBasis(item),
     unitPrice: price?.unitPrice?.toString() ?? '',
+    percentComplete: item.percentComplete?.toString() ?? '',
+    authorizedValue: item.authorizedValue?.toString() ?? '',
   }
 }
 
@@ -52,7 +61,16 @@ function displayValue(raw: string, isFocused: boolean): string {
   return n === null ? '' : rate(n)
 }
 
-function focusCell(row: number, field: 'cost' | 'unitPrice') {
+// Same discipline as displayValue, but percent_complete is stored 0-100
+// (not the 0-1 ratio format.ts's own percent() expects) — a plain
+// toFixed avoids reaching for that formatter under a different contract.
+function displayPercentValue(raw: string, isFocused: boolean): string {
+  if (isFocused) return raw
+  const n = parseRate(raw)
+  return n === null ? '' : `${n.toFixed(1)}%`
+}
+
+function focusCell(row: number, field: EditableField) {
   const el = document.querySelector<HTMLInputElement>(`[data-cell="${row}-${field}"]`)
   el?.focus()
   el?.select()
@@ -73,6 +91,16 @@ function DashCell({ width, title }: { width: number; title?: string }) {
   return (
     <span className="inline-block py-2 text-right text-nc-text-muted" style={{ width }} title={title}>
       —
+    </span>
+  )
+}
+// percent_complete's own read-only display — one decimal, stored 0-100 (not
+// format.ts's percent(), which expects a 0-1 ratio and would misread this
+// value by a factor of 100).
+function PercentDisplay({ value, width }: { value: number | null; width: number }) {
+  return (
+    <span className="nc-numeric inline-block py-2 text-right" style={{ width }}>
+      {value === null ? '—' : `${value.toFixed(1)}%`}
     </span>
   )
 }
@@ -120,6 +148,8 @@ interface Row {
   costPrice: number | null
   costBasis: CostBasis | null
   unitPrice: number | null
+  /** Recorded quantity to date — unit_price Items only (fetchItemProgressRate's own scope); 0, not absent, for every other kind and for a unit_price Item nothing has been recorded against yet. Feeds measuredRollup's "earned" side. */
+  quantityToDate: number
   financials: RowFinancials
   priced: boolean
 }
@@ -140,6 +170,7 @@ export function RatesScreen() {
 
   const [items, setItems] = useState<Item[]>([])
   const [prices, setPrices] = useState<Map<string, ItemPrice>>(new Map())
+  const [quantityByItem, setQuantityByItem] = useState<Map<string, number>>(new Map())
   const [drafts, setDrafts] = useState<Map<string, Draft>>(new Map())
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -154,10 +185,10 @@ export function RatesScreen() {
   // scrolling past it.
   const [failedCells, setFailedCells] = useState<Map<string, string>>(new Map())
 
-  function markFailed(itemId: string, field: 'cost' | 'unitPrice', message: string) {
+  function markFailed(itemId: string, field: EditableField, message: string) {
     setFailedCells((prev) => new Map(prev).set(`${itemId}:${field}`, message))
   }
-  function clearFailed(itemId: string, field: 'cost' | 'unitPrice') {
+  function clearFailed(itemId: string, field: EditableField) {
     setFailedCells((prev) => {
       const key = `${itemId}:${field}`
       if (!prev.has(key)) return prev
@@ -176,7 +207,7 @@ export function RatesScreen() {
   // bug (fixed separately), and the exact same "focus anywhere in the
   // group" rule now also decides whether the field shows raw digits
   // (focused) or a formatted value (not).
-  const [focusedCell, setFocusedCell] = useState<{ itemId: string; field: 'cost' | 'unitPrice' } | null>(null)
+  const [focusedCell, setFocusedCell] = useState<{ itemId: string; field: EditableField } | null>(null)
 
   // Item # ascending — Schedule 7 order, the order of the tender document
   // being transcribed from — stays the default. Quantity and Ext. amount
@@ -200,11 +231,16 @@ export function RatesScreen() {
 
   useEffect(() => {
     setStatus('loading')
-    Promise.all([fetchItems(contract.id), fetchItemPrices(contract.id)])
-      .then(([itemRows, priceRows]) => {
+    // fetchItemProgressRate is scoped to unit_price Items only (v_item_
+    // progress_rate's own WHERE clause) and carries no money — no
+    // view_rates gate needed for this leg of the fetch, same posture as
+    // the Tracker screens already reading it.
+    Promise.all([fetchItems(contract.id), fetchItemPrices(contract.id), fetchItemProgressRate(contract.id)])
+      .then(([itemRows, priceRows, progressRows]) => {
         setItems(itemRows)
         const priceMap = new Map(priceRows.map((p) => [p.itemId, p]))
         setPrices(priceMap)
+        setQuantityByItem(new Map(progressRows.map((p) => [p.itemId, p.quantityToDate])))
         setDrafts(new Map(itemRows.map((item) => [item.id, toDraft(item, priceMap.get(item.id))])))
         setStatus('ready')
       })
@@ -243,9 +279,9 @@ export function RatesScreen() {
         // Every other kind is priced once both its extended figures are
         // known (margin needs both).
         const priced = item.itemKind === 'provisional_sum' ? item.provisionalSum !== null : financials.extCost !== null && financials.extAmount !== null
-        return { item, costPrice, costBasis, unitPrice, financials, priced }
+        return { item, costPrice, costBasis, unitPrice, quantityToDate: quantityByItem.get(item.id) ?? 0, financials, priced }
       }),
-    [items, prices],
+    [items, prices, quantityByItem],
   )
 
   const rows = useMemo<IndexedRow[]>(() => {
@@ -270,6 +306,28 @@ export function RatesScreen() {
   const reconciliation = useMemo(
     () => (tenderPrice !== null && grandTotal.extAmountSum !== null ? reconcileTenderPrice(grandTotal.extAmountSum, tenderPrice) : null),
     [tenderPrice, grandTotal.extAmountSum],
+  )
+
+  // Projected versus actual — kept as two separate rollups, never blended
+  // into one figure (see projectedActual.ts's own header for why). measured
+  // is unit_price only, where Approximate Quantity x Unit Price and
+  // recorded quantity x Unit Price are both real; unmeasured is lump_sum +
+  // provisional_sum, where there is no quantity to compare against at all.
+  const measured = useMemo(
+    () =>
+      measuredRollup(
+        rows.filter((r) => r.item.itemKind === 'unit_price').map((r) => ({ approximateQuantity: r.item.approximateQuantity, quantityToDate: r.quantityToDate, unitPrice: r.unitPrice })),
+      ),
+    [rows],
+  )
+  const unmeasured = useMemo(
+    () =>
+      unmeasuredRollup(
+        rows
+          .filter((r) => r.item.itemKind !== 'unit_price')
+          .map((r) => ({ itemKind: r.item.itemKind, tendered: r.financials.extAmount, percentComplete: r.item.percentComplete, authorizedValue: r.item.authorizedValue })),
+      ),
+    [rows],
   )
 
   // Scaled against every row on the contract, not just the currently sorted
@@ -302,7 +360,7 @@ export function RatesScreen() {
     return groups
   }, [rows, groupBySection])
 
-  function updateDraft(id: string, field: 'cost' | 'unitPrice', value: string) {
+  function updateDraft(id: string, field: EditableField, value: string) {
     setDrafts((prev) => {
       const next = new Map(prev)
       const current = next.get(id)
@@ -345,7 +403,7 @@ export function RatesScreen() {
   // forcing a deliberate re-entry under the newly chosen basis.
   async function changeBasis(item: Item, newBasis: CostBasis) {
     const existing = prices.get(item.id)
-    setDrafts((prev) => new Map(prev).set(item.id, { cost: '', costBasis: newBasis, unitPrice: prev.get(item.id)?.unitPrice ?? '' }))
+    setDrafts((prev) => new Map(prev).set(item.id, { ...(prev.get(item.id) ?? toDraft(item, existing)), cost: '', costBasis: newBasis }))
     if (existing?.costPrice == null) return
     try {
       const saved = await upsertItemPrice({
@@ -362,10 +420,31 @@ export function RatesScreen() {
     }
   }
 
-  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>, item: Item, field: 'cost' | 'unitPrice', rowIndex: number) {
+  // Separate from commitRate — a different table (items, not item_prices),
+  // a different write per field (percentComplete and authorizedValue are
+  // independent, never read back together the way cost/unitPrice/basis
+  // are). Shares the same Draft/drafts/failedCells machinery as commitRate
+  // rather than duplicating it under a second Map.
+  async function commitEarnedField(item: Item, field: 'percentComplete' | 'authorizedValue') {
+    const draft = drafts.get(item.id) ?? toDraft(item, undefined)
+    const parsed = field === 'percentComplete' ? parseRate(draft.percentComplete) : parseRate(draft.authorizedValue)
+    const existing = field === 'percentComplete' ? item.percentComplete : item.authorizedValue
+    if (parsed === existing) return
+    try {
+      if (field === 'percentComplete') await updateItemPercentComplete(item.id, parsed)
+      else await updateItemAuthorizedValue(item.id, parsed)
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, [field]: parsed } : i)))
+      clearFailed(item.id, field)
+    } catch (err) {
+      markFailed(item.id, field, errorMessage(err))
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>, item: Item, field: EditableField, rowIndex: number) {
     if (e.key !== 'Enter') return
     e.preventDefault()
-    void commitRate(item, field).then(() => {
+    const commit = field === 'cost' || field === 'unitPrice' ? commitRate(item, field) : commitEarnedField(item, field)
+    void commit.then(() => {
       if (rowIndex + 1 < rows.length) focusCell(rowIndex + 1, field)
     })
   }
@@ -377,6 +456,8 @@ export function RatesScreen() {
     for (const row of rows) {
       if (failedCells.has(`${row.item.id}:cost`)) return focusCell(row.rowIndex, 'cost')
       if (failedCells.has(`${row.item.id}:unitPrice`)) return focusCell(row.rowIndex, 'unitPrice')
+      if (failedCells.has(`${row.item.id}:percentComplete`)) return focusCell(row.rowIndex, 'percentComplete')
+      if (failedCells.has(`${row.item.id}:authorizedValue`)) return focusCell(row.rowIndex, 'authorizedValue')
     }
   }
 
@@ -422,7 +503,12 @@ export function RatesScreen() {
     const draft = drafts.get(item.id) ?? toDraft(item, undefined)
     const costFailed = failedCells.get(`${item.id}:cost`)
     const unitPriceFailed = failedCells.get(`${item.id}:unitPrice`)
-    const rowHasFailure = costFailed !== undefined || unitPriceFailed !== undefined
+    const percentCompleteFailed = failedCells.get(`${item.id}:percentComplete`)
+    const authorizedValueFailed = failedCells.get(`${item.id}:authorizedValue`)
+    const rowHasFailure = costFailed !== undefined || unitPriceFailed !== undefined || percentCompleteFailed !== undefined || authorizedValueFailed !== undefined
+
+    const percentCompleteIsFocused = focusedCell?.itemId === item.id && focusedCell.field === 'percentComplete'
+    const authorizedValueIsFocused = focusedCell?.itemId === item.id && focusedCell.field === 'authorizedValue'
 
     const costIsFocused = focusedCell?.itemId === item.id && focusedCell.field === 'cost'
     const priceIsFocused = focusedCell?.itemId === item.id && focusedCell.field === 'unitPrice'
@@ -480,6 +566,50 @@ export function RatesScreen() {
         }}
         onChange={(e) => updateDraft(item.id, priceCommitField, e.target.value)}
         onKeyDown={(e) => handleKeyDown(e, item, priceCommitField, i)}
+      />
+    )
+
+    // Column-major tab order, same convention cost/unitPrice already use
+    // (fast down-the-column transcription, not left-to-right row order) —
+    // these two ranges start after cost's and unitPrice's own ranges end
+    // (rows.length*2 for cost+basis, rows.length for unitPrice).
+    const percentCompleteInput = (
+      <Input
+        className={`nc-numeric text-right ${percentCompleteFailed !== undefined ? 'border-nc-danger-text' : ''}`}
+        style={{ width: UNIT_W }}
+        data-cell={`${i}-percentComplete`}
+        tabIndex={rows.length * 3 + i + 1}
+        inputMode="decimal"
+        value={displayPercentValue(draft.percentComplete, percentCompleteIsFocused)}
+        placeholder="% complete"
+        aria-label={`${item.itemNumber} percent complete`}
+        onFocus={() => setFocusedCell({ itemId: item.id, field: 'percentComplete' })}
+        onBlur={() => {
+          setFocusedCell(null)
+          void commitEarnedField(item, 'percentComplete')
+        }}
+        onChange={(e) => updateDraft(item.id, 'percentComplete', e.target.value)}
+        onKeyDown={(e) => handleKeyDown(e, item, 'percentComplete', i)}
+      />
+    )
+
+    const authorizedValueInput = (
+      <Input
+        className={`nc-numeric text-right ${authorizedValueFailed !== undefined ? 'border-nc-danger-text' : ''}`}
+        style={{ width: EXT_W }}
+        data-cell={`${i}-authorizedValue`}
+        tabIndex={rows.length * 4 + i + 1}
+        inputMode="decimal"
+        value={displayValue(draft.authorizedValue, authorizedValueIsFocused)}
+        placeholder="Authorized value"
+        aria-label={`${item.itemNumber} authorized value`}
+        onFocus={() => setFocusedCell({ itemId: item.id, field: 'authorizedValue' })}
+        onBlur={() => {
+          setFocusedCell(null)
+          void commitEarnedField(item, 'authorizedValue')
+        }}
+        onChange={(e) => updateDraft(item.id, 'authorizedValue', e.target.value)}
+        onKeyDown={(e) => handleKeyDown(e, item, 'authorizedValue', i)}
       />
     )
 
@@ -611,12 +741,35 @@ export function RatesScreen() {
           >
             {row.financials.marginPercent === null ? '—' : percent(row.financials.marginPercent)}
           </TD>
+
+          {/* % complete — Finance's own estimate, lump_sum Items only
+              (GC 52.03(b), items_percent_only_lump_sum). Earned value for
+              the Item is this / 100 x its own Ext. amount — never inferred,
+              never defaulted; absent here means nothing entered, not 0%. */}
+          <TD align="right" dense className="align-middle">
+            {item.itemKind === 'lump_sum' ? (
+              canEdit ? percentCompleteInput : <PercentDisplay value={item.percentComplete} width={UNIT_W} />
+            ) : (
+              <DashCell width={UNIT_W} />
+            )}
+          </TD>
+
+          {/* Authorized value — the Ministry's own advance authorization
+              (GC 32.01/47.01), provisional_sum Items only. IS the Item's
+              earned value directly, never prorated against anything. */}
+          <TD align="right" dense className="align-middle">
+            {item.itemKind === 'provisional_sum' ? (
+              canEdit ? authorizedValueInput : <MoneyDisplay value={item.authorizedValue} width={EXT_W} />
+            ) : (
+              <DashCell width={EXT_W} />
+            )}
+          </TD>
         </TR>
         {/* Additive to the header banner and the row's own tint, not a
             replacement — this is the detail (what actually went wrong),
             the other two are the "something's wrong, here's how many and
             where" signal for someone who's already scrolled past it. */}
-        {[costFailed, unitPriceFailed].filter((msg): msg is string => msg !== undefined).map((msg, msgIndex) => (
+        {[costFailed, unitPriceFailed, percentCompleteFailed, authorizedValueFailed].filter((msg): msg is string => msg !== undefined).map((msg, msgIndex) => (
           <TR key={msgIndex}>
             <TD colSpan={COL_COUNT} className="text-nc-danger-text">
               {msg}
@@ -657,6 +810,13 @@ export function RatesScreen() {
         <TD align="right" className={`nc-numeric align-middle ${agg.marginPercent !== null && agg.marginPercent < 0 ? 'text-nc-danger-text' : ''}`}>
           {agg.marginPercent === null ? '—' : percent(agg.marginPercent)}
         </TD>
+        {/* % complete/Authorized value have no meaningful section subtotal
+            (a summed percent is meaningless; a summed authorized value
+            would just restate part of the projected-versus-actual block
+            below) — left blank rather than inventing a number nobody asked
+            for. */}
+        <TD />
+        <TD />
       </TR>
     )
   }
@@ -678,6 +838,9 @@ export function RatesScreen() {
         <>
           <NotificationBanner tone="info" className="mb-4">
             Cost and margin below are Keywest's own bid estimate, entered on this screen — actual cost isn't recorded in NovaCore yet.
+          </NotificationBanner>
+          <NotificationBanner tone="info" className="mb-4">
+            Earned, below and in the projected-versus-actual summary at the foot of the table, is Keywest's own measure — recorded quantity, or Finance's own percent-complete/authorization entry, times price. It is not the Ministry's own figure; that side is tracked separately.
           </NotificationBanner>
           {/* Separate from the explainer above — that sentence is always
               true regardless of who's looking; this one is conditional on
@@ -733,6 +896,8 @@ export function RatesScreen() {
                     {sortableHeader('extAmount', 'Ext. amount', 'right')}
                     <TH align="right">Margin</TH>
                     <TH align="right">Margin %</TH>
+                    <TH align="right">% complete</TH>
+                    <TH align="right">Authorized value</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -777,6 +942,62 @@ export function RatesScreen() {
                     </td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
                       {grandTotal.marginPercent === null ? '—' : percent(grandTotal.marginPercent)}
+                    </td>
+                    {/* % complete/Authorized value: no grand-total figure of
+                        their own — see renderSubtotalRow's own comment; the
+                        real totals for what they feed into are the
+                        projected-versus-actual block directly below. */}
+                    <td className="border-t border-nc-border bg-nc-navy" />
+                    <td className="border-t border-nc-border bg-nc-navy" />
+                  </tr>
+                  {/* Projected versus actual — beside the tender price
+                      reconciliation, never merged with it or with each
+                      other: two separate figures, side by side, because
+                      blending them (a quantity-weighted completion
+                      percentage) has been tried and removed from this
+                      product twice. Shown regardless of canEdit — this is
+                      a read of what's already on file, same posture as the
+                      Grand total row above it. */}
+                  <tr>
+                    <td colSpan={COL_COUNT} className="border-t border-nc-border bg-white px-4 py-3 text-sm">
+                      <div className="grid grid-cols-2 gap-8">
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Quantity-measured — Unit Price Items</p>
+                          <p className="text-nc-text">
+                            Projected <span className="nc-numeric font-semibold">{measured.projected === null ? '—' : rate(measured.projected)}</span>
+                            {' · '}
+                            Earned <span className="nc-numeric font-semibold">{measured.earned === null ? '—' : rate(measured.earned)}</span>
+                            {measured.percent !== null && (
+                              <span
+                                className={`nc-numeric ml-2 rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  measured.percent > 1 ? 'bg-nc-over-bg text-nc-over-text' : 'bg-nc-secondary text-nc-text-muted'
+                                }`}
+                                title={measured.percent > 1 ? 'Earned above projected — recorded beyond Approximate Quantity, revenue above tender, not a fault.' : undefined}
+                              >
+                                {percent(measured.percent)}
+                              </span>
+                            )}
+                          </p>
+                          {measured.coverage.total > 0 && measured.coverage.count < measured.coverage.total && (
+                            <p className="mt-1 text-xs text-nc-text-muted">
+                              Covers {measured.coverage.count} of {measured.coverage.total} items — the rest have no Unit price on file yet.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Not quantity-measured — Lump Sum &amp; Provisional Sum Items</p>
+                          <p className="text-nc-text">
+                            Tendered <span className="nc-numeric font-semibold">{unmeasured.tendered === null ? '—' : rate(unmeasured.tendered)}</span>
+                            {' · '}
+                            Earned <span className="nc-numeric font-semibold">{unmeasured.earned === null ? '—' : rate(unmeasured.earned)}</span>
+                          </p>
+                          {unmeasured.coverage.total > 0 && unmeasured.coverage.count < unmeasured.coverage.total && (
+                            <p className="mt-1 text-xs text-nc-text-muted">
+                              Covers {unmeasured.coverage.count} of {unmeasured.coverage.total} items — the rest have nothing recorded as earned yet.
+                            </p>
+                          )}
+                        </div>
+                      </div>
                     </td>
                   </tr>
                   {/* Tender price reconciliation — verifies every transcribed

@@ -383,7 +383,19 @@ describe('pipelineFigures', () => {
 
 describe('moneyMakerRow', () => {
   function item(overrides: Partial<Item>): Item {
-    return { id: 'i1', contractId: 'c1', itemNumber: '01.01', description: 'Test', unit: 'Tonne', approximateQuantity: 100, itemKind: 'unit_price', provisionalSum: null, ...overrides }
+    return {
+      id: 'i1',
+      contractId: 'c1',
+      itemNumber: '01.01',
+      description: 'Test',
+      unit: 'Tonne',
+      approximateQuantity: 100,
+      itemKind: 'unit_price',
+      provisionalSum: null,
+      percentComplete: null,
+      authorizedValue: null,
+      ...overrides,
+    }
   }
   function price(overrides: Partial<ItemPrice>): ItemPrice {
     return { itemId: 'i1', costPrice: null, costBasis: null, unitPrice: null, updatedBy: null, updatedAt: '', ...overrides }
