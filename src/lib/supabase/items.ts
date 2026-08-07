@@ -5,8 +5,8 @@ import { supabase } from './client'
  * Approximate Quantity/percent-complete/a per-unit Cost or Unit Price mean
  * anything — a Lump Sum's approximate_quantity is always 1 (one lump), and
  * a Provisional Sum pays on value authorized in advance, not proportion.
- * See itemProgress.ts's percentComplete and the screens that render "—"
- * for the columns that don't apply to the other two kinds.
+ * See the screens that render "—" for the columns that don't apply to the
+ * other two kinds.
  */
 export type ItemKind = 'unit_price' | 'lump_sum' | 'provisional_sum'
 
