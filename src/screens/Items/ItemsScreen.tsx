@@ -316,9 +316,14 @@ export function ItemsScreen() {
 
       <SandboxBanner contract={contract} />
 
-      {!canWrite ? (
-        <EmptyState title="You don't have permission to add or edit Items on this contract." />
-      ) : (
+      {/* createItems gates writing — the add form below, and the per-row
+          Edit/Rules actions and the inline editors they open. It does not
+          gate reading: items_select_member (RLS) already opens the table to
+          any seated member, matching every other screen that surfaces
+          Items (Tracker, Progress, Daily Entry, Rates) — none of them
+          require createItems just to look. A seat without it sees the same
+          catalogue with no add form and no per-row actions. */}
+      {canWrite && (
         <>
           {/* A distinct card, not a Table — a form styled like the data
               table below it (same TH row) read as the table's own first
@@ -408,32 +413,38 @@ export function ItemsScreen() {
               {addError}
             </NotificationBanner>
           )}
+        </>
+      )}
 
-          {status === 'loading' && (
-            <div className="flex items-center gap-2 py-8 text-nc-text-muted">
-              <Spinner />
-              <span className="text-sm">Loading…</span>
-            </div>
-          )}
-          {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
+      {status === 'loading' && (
+        <div className="flex items-center gap-2 py-8 text-nc-text-muted">
+          <Spinner />
+          <span className="text-sm">Loading…</span>
+        </div>
+      )}
+      {status === 'error' && loadError && <NotificationBanner tone="danger">{loadError}</NotificationBanner>}
 
-          {status === 'ready' &&
-            (sorted.length === 0 ? (
-              <EmptyState icon={<IconClipboardList size={32} stroke={1.5} />} title="No items yet." description="Add the first one above to get started." />
-            ) : (
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Item #</TH>
-                    <TH>Description</TH>
-                    <TH>Unit of Measure</TH>
-                    <TH>Area basis</TH>
-                    <TH align="right">Approximate Quantity</TH>
-                    <TH>Derivation</TH>
-                    <TH>App. rate target</TH>
-                    <TH />
-                  </TR>
-                </THead>
+      {status === 'ready' &&
+        (sorted.length === 0 ? (
+          <EmptyState
+            icon={<IconClipboardList size={32} stroke={1.5} />}
+            title="No items yet."
+            description={canWrite ? 'Add the first one above to get started.' : undefined}
+          />
+        ) : (
+          <Table>
+            <THead>
+              <TR>
+                <TH>Item #</TH>
+                <TH>Description</TH>
+                <TH>Unit of Measure</TH>
+                <TH>Area basis</TH>
+                <TH align="right">Approximate Quantity</TH>
+                <TH>Derivation</TH>
+                <TH>App. rate target</TH>
+                <TH />
+              </TR>
+            </THead>
                 <TBody>
                   {sorted.map((item) =>
                     editingId === item.id ? (
@@ -620,14 +631,16 @@ export function ItemsScreen() {
                         <TD className="nc-numeric">{ruleSummary(ruleByItemId.get(item.id))}</TD>
                         <TD className="nc-numeric">{targetSummary(targetByItemId.get(item.id))}</TD>
                         <TD align="right" dense>
-                          <div className="flex justify-end gap-2">
-                            <Button type="button" variant="secondary" onClick={() => startEdit(item)}>
-                              Edit
-                            </Button>
-                            <Button type="button" variant="secondary" onClick={() => startEditRule(item)}>
-                              Rules
-                            </Button>
-                          </div>
+                          {canWrite && (
+                            <div className="flex justify-end gap-2">
+                              <Button type="button" variant="secondary" onClick={() => startEdit(item)}>
+                                Edit
+                              </Button>
+                              <Button type="button" variant="secondary" onClick={() => startEditRule(item)}>
+                                Rules
+                              </Button>
+                            </div>
+                          )}
                         </TD>
                       </TR>
                     ),
@@ -635,8 +648,6 @@ export function ItemsScreen() {
                 </TBody>
               </Table>
             ))}
-        </>
-      )}
     </div>
   )
 }
