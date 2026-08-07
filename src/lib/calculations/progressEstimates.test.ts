@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest'
+import { claimFieldForKind, proposeClaimedFromRecords, variance } from './progressEstimates'
+
+describe('claimFieldForKind', () => {
+  it('is quantity for unit_price', () => {
+    expect(claimFieldForKind('unit_price')).toBe('quantity')
+  })
+
+  it('is percent for lump_sum', () => {
+    expect(claimFieldForKind('lump_sum')).toBe('percent')
+  })
+
+  it('is value for provisional_sum', () => {
+    expect(claimFieldForKind('provisional_sum')).toBe('value')
+  })
+})
+
+describe('proposeClaimedFromRecords', () => {
+  it('is empty for no records — nothing to propose, not a zero-quantity line', () => {
+    expect(proposeClaimedFromRecords([], '2026-06-01', '2026-06-30', new Map())).toEqual([])
+  })
+
+  it('sums quantity per item within the period, priced at the item’s unit price', () => {
+    const records = [
+      { itemId: 'a', workDate: '2026-06-05', quantity: 100 },
+      { itemId: 'a', workDate: '2026-06-12', quantity: 50 },
+    ]
+    const proposed = proposeClaimedFromRecords(records, '2026-06-01', '2026-06-30', new Map([['a', 10]]))
+    expect(proposed).toEqual([{ itemId: 'a', claimedQuantity: 150, claimedValue: 1500 }])
+  })
+
+  it('excludes records outside the period, inclusive of both boundary dates', () => {
+    const records = [
+      { itemId: 'a', workDate: '2026-05-31', quantity: 999 },
+      { itemId: 'a', workDate: '2026-06-01', quantity: 10 },
+      { itemId: 'a', workDate: '2026-06-30', quantity: 20 },
+      { itemId: 'a', workDate: '2026-07-01', quantity: 999 },
+    ]
+    const proposed = proposeClaimedFromRecords(records, '2026-06-01', '2026-06-30', new Map([['a', 1]]))
+    expect(proposed).toEqual([{ itemId: 'a', claimedQuantity: 30, claimedValue: 30 }])
+  })
+
+  it('keeps items separate', () => {
+    const records = [
+      { itemId: 'a', workDate: '2026-06-05', quantity: 100 },
+      { itemId: 'b', workDate: '2026-06-06', quantity: 5 },
+    ]
+    const proposed = proposeClaimedFromRecords(records, '2026-06-01', '2026-06-30', new Map([['a', 10], ['b', 20]]))
+    expect(proposed).toContainEqual({ itemId: 'a', claimedQuantity: 100, claimedValue: 1000 })
+    expect(proposed).toContainEqual({ itemId: 'b', claimedQuantity: 5, claimedValue: 100 })
+  })
+
+  it('claimedValue is null when the item has no known unit price — absent, not a $0 line', () => {
+    const records = [{ itemId: 'a', workDate: '2026-06-05', quantity: 100 }]
+    const proposed = proposeClaimedFromRecords(records, '2026-06-01', '2026-06-30', new Map([['a', null]]))
+    expect(proposed).toEqual([{ itemId: 'a', claimedQuantity: 100, claimedValue: null }])
+  })
+
+  it('claimedValue is null when the item is absent from the price map entirely', () => {
+    const records = [{ itemId: 'a', workDate: '2026-06-05', quantity: 100 }]
+    const proposed = proposeClaimedFromRecords(records, '2026-06-01', '2026-06-30', new Map())
+    expect(proposed).toEqual([{ itemId: 'a', claimedQuantity: 100, claimedValue: null }])
+  })
+})
+
+describe('variance', () => {
+  it('is certified minus claimed', () => {
+    expect(variance(100, 90)).toBe(-10)
+    expect(variance(100, 110)).toBe(10)
+    expect(variance(100, 100)).toBe(0)
+  })
+
+  it('is null when claimed is unknown', () => {
+    expect(variance(null, 90)).toBeNull()
+  })
+
+  it('is null when certified is unknown — not yet certified reads as absent, not zero', () => {
+    expect(variance(100, null)).toBeNull()
+  })
+
+  it('is null when both are unknown', () => {
+    expect(variance(null, null)).toBeNull()
+  })
+
+  it('does not clamp a negative variance — a shortfall is the gap, not an error', () => {
+    expect(variance(200, 50)).toBe(-150)
+  })
+})

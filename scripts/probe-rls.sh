@@ -434,7 +434,111 @@ check "viewer: v_progress_estimate_reconciliation sees the row (view_rates)" "20
 
 request POST "progress_estimates" "$QUANTITIES_TOKEN" "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-02-01\",\"period_end\":\"2026-02-28\"}"
 ok=0; [ "$STATUS" = "403" ] && ok=1
-check "quantities: insert progress_estimates rejected (no confirm_quantity)" "403" "$ok" "$STATUS $BODY_OUT"
+check "quantities: insert progress_estimates rejected (no set_cost/set_unit_price)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
+# Progress estimates — the Finance write path (0041)
+#
+# 0010 gated INSERT/UPDATE on confirm_quantity — a field-operations right
+# borrowed by proximity, not chosen for what it actually gates on a table
+# that is finance material (its own SELECT policy already agreed: view_rates).
+# 0041 changed the gate to set_cost AND set_unit_price, matching item_prices
+# exactly. The check above (quantities, zero relevant rights either way)
+# can't distinguish the old gate from the new one — it was rejected under
+# both. viewer proves the actual behavioural change that matters: it holds
+# set_cost on this sandbox contract ONLY (0026) and NOT set_unit_price
+# anywhere, and NOT confirm_quantity anywhere — so its rejection here proves
+# the AND-gate genuinely requires both rights, holding ONE is not enough,
+# isolated from full's blanket rights (same isolation viewer already
+# provides for item_prices, above). No existing fixture holds
+# confirm_quantity without also holding set_cost/set_unit_price (full has
+# all three together), so "confirm_quantity alone no longer admits a write"
+# is not independently exercisable without a new seed grant — confirmed
+# instead by direct inspection of the applied policy (pg_policies:
+# progress_estimates_insert/_update's with_check is exactly "has_right(...,
+# 'set_cost') AND has_right(..., 'set_unit_price')", no confirm_quantity
+# anywhere in it, and no second, more permissive INSERT/UPDATE policy
+# exists on either table to admit a write around it) — the items_update_
+# right lesson is about a SECOND policy silently admitting what a narrower
+# one blocks; confirmed there is only one INSERT and one UPDATE policy per
+# table here, so that failure mode does not apply.
+# =============================================================================
+echo
+echo "=== Progress estimates — the Finance write path (0041) ==="
+
+request POST "progress_estimates" "$VIEWER_TOKEN" "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-03-01\",\"period_end\":\"2026-03-31\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer: insert progress_estimates rejected (set_cost alone, no set_unit_price)" "403" "$ok" "$STATUS $BODY_OUT"
+
+request POST "progress_estimate_items" "$VIEWER_TOKEN" \
+  "{\"progress_estimate_id\":\"$ESTIMATE_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"certified_quantity\":1}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer: insert progress_estimate_items rejected (set_cost alone, no set_unit_price)" "403" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimates?select=*&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: progress_estimates select empty (zero rights, retest post-0041)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# -----------------------------------------------------------------------------
+# The freeze — claimed_* is a statement made on a date, not a rollup. full
+# (set_cost + set_unit_price) submits the setup estimate, then a claimed
+# edit is rejected while certified/paid stay writable — the guard trigger
+# is column-scoped, not a blanket freeze of the whole row.
+# -----------------------------------------------------------------------------
+ITEM_ROW=$(curl -s "$SUPABASE_URL/rest/v1/progress_estimate_items?progress_estimate_id=eq.$ESTIMATE_ID&item_id=eq.$LINE_ITEM_ID&select=id" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $FULL_TOKEN")
+PE_ITEM_ID=$(json_field "$ITEM_ROW" 0 id)
+
+request PATCH "progress_estimates?id=eq.$ESTIMATE_ID" "$FULL_TOKEN" '{"status":"submitted"}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 status)" = "submitted" ] && ok=1
+check "full: submit progress_estimates (status -> submitted, setup for the freeze below)" "200, status=submitted" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "progress_estimate_items?id=eq.$PE_ITEM_ID" "$FULL_TOKEN" '{"claimed_quantity":9999}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: claimed_quantity edit rejected once submitted (frozen — trigger, not RLS)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "progress_estimate_items?id=eq.$PE_ITEM_ID" "$FULL_TOKEN" '{"certified_quantity":95,"paid_amount":480}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 certified_quantity)" = "95" ] && ok=1
+check "full: certified_quantity/paid_amount still writable once submitted (freeze is claimed_* only)" "200, certified_quantity=95" "$ok" "$STATUS $BODY_OUT"
+
+# -----------------------------------------------------------------------------
+# History — trigger-write-only, read gated on view_rates same as the source
+# tables. The certified_quantity/paid_amount UPDATE just above is real data
+# for the read checks below.
+# -----------------------------------------------------------------------------
+request GET "progress_estimate_items_history?progress_estimate_item_id=eq.$PE_ITEM_ID&select=*" "$VIEWER_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "viewer: progress_estimate_items_history sees the logged change (view_rates)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimate_items_history?progress_estimate_item_id=eq.$PE_ITEM_ID&select=*" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: progress_estimate_items_history empty (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimate_status_history?progress_estimate_id=eq.$ESTIMATE_ID&select=*" "$VIEWER_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "viewer: progress_estimate_status_history sees the draft->submitted row (view_rates)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimate_status_history?progress_estimate_id=eq.$ESTIMATE_ID&select=*" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly: progress_estimate_status_history empty (zero rights)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request POST "progress_estimate_items_history" "$FULL_TOKEN" \
+  "{\"progress_estimate_item_id\":\"$PE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"new_certified_quantity\":1}"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: direct insert into progress_estimate_items_history rejected (trigger-only writes)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request POST "progress_estimate_status_history" "$FULL_TOKEN" \
+  "{\"progress_estimate_id\":\"$ESTIMATE_ID\",\"contract_id\":\"$PROJECT_ID\",\"new_status\":\"received\"}"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: direct insert into progress_estimate_status_history rejected (trigger-only writes)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# Reset the setup estimate back to draft so a rerun of this suite starts
+# from the same state (the freeze trigger only blocks claimed_*, not status
+# itself moving back down — nothing in this schema forbids un-submitting,
+# and probe-rls.sh's own convention throughout is idempotent reruns).
+request PATCH "progress_estimates?id=eq.$ESTIMATE_ID" "$FULL_TOKEN" '{"status":"draft"}'
+ok=0; [ "$STATUS" = "200" ] && ok=1
+check "full: reset setup estimate back to draft (idempotent rerun)" "200" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
 # Positive controls — prove the seats can still do their jobs. A suite that

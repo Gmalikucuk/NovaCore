@@ -7,6 +7,7 @@ import {
   IconClipboardCheck,
   IconCurrencyDollar,
   IconDeviceMobile,
+  IconFileInvoice,
   IconFilePlus,
   IconGavel,
   IconHome,
@@ -203,6 +204,10 @@ export function Sidebar() {
                     <NavLink to="/finance" className={navLinkClass}>
                       <IconCalendarStats size={18} stroke={1.75} />
                       Months
+                    </NavLink>
+                    <NavLink to="/progress-estimates" className={navLinkClass}>
+                      <IconFileInvoice size={18} stroke={1.75} />
+                      Progress estimates
                     </NavLink>
                   </div>
                 </div>

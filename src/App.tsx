@@ -18,6 +18,8 @@ import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecords
 import { ProgressScreen } from './screens/Progress/ProgressScreen'
 import { MonthsScreen } from './screens/Finance/MonthsScreen'
 import { FinanceMonthScreen } from './screens/Finance/FinanceMonthScreen'
+import { ProgressEstimatesScreen } from './screens/Finance/ProgressEstimatesScreen'
+import { ProgressEstimateScreen } from './screens/Finance/ProgressEstimateScreen'
 import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
 import { TrackerScreen } from './screens/Tracker/TrackerScreen'
 import { TrackerItemScreen } from './screens/Tracker/TrackerItemScreen'
@@ -186,6 +188,27 @@ function App() {
                   element={
                     <ErrorBoundary>
                       <FinanceMonthScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                {/* Progress estimates — the list. Reached from the Finance
+                    nav link. */}
+                <Route
+                  path="/progress-estimates"
+                  element={
+                    <ErrorBoundary>
+                      <ProgressEstimatesScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                {/* One estimate's detail — reached only by opening a row on
+                    the list (or right after creating one), same convention
+                    as /finance/:period. */}
+                <Route
+                  path="/progress-estimates/:id"
+                  element={
+                    <ErrorBoundary>
+                      <ProgressEstimateScreen />
                     </ErrorBoundary>
                   }
                 />
