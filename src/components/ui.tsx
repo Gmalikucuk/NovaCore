@@ -218,8 +218,24 @@ interface AlignProp {
   align?: 'left' | 'right'
 }
 
-export function TH({ align = 'left', className = '', ...props }: ThHTMLAttributes<HTMLTableCellElement> & AlignProp) {
-  return <th className={`text-label bg-nc-secondary px-4 py-2.5 font-semibold uppercase tracking-wide text-nc-text-muted ${align === 'right' ? 'text-right' : 'text-left'} ${className}`} {...props} />
+interface CompactProp {
+  /**
+   * Horizontal counterpart to dense's vertical one — px-4 to px-2. For a
+   * table with more columns than a normal row of text needs (Rates'
+   * eleven, SeatMembers' eight rights), the padding itself is a real
+   * fraction of the table's total width; this is the opt-in to reclaim it
+   * without touching every other Table consumer's spacing.
+   */
+  compact?: boolean
+}
+
+export function TH({ align = 'left', compact = false, className = '', ...props }: ThHTMLAttributes<HTMLTableCellElement> & AlignProp & CompactProp) {
+  return (
+    <th
+      className={`text-label bg-nc-secondary ${compact ? 'px-2' : 'px-4'} py-2.5 font-semibold uppercase tracking-wide text-nc-text-muted ${align === 'right' ? 'text-right' : 'text-left'} ${className}`}
+      {...props}
+    />
+  )
 }
 
 interface DenseProp {
@@ -236,8 +252,13 @@ interface DenseProp {
   dense?: boolean
 }
 
-export function TD({ align = 'left', prose = false, dense = false, className = '', ...props }: TdHTMLAttributes<HTMLTableCellElement> & AlignProp & { prose?: boolean } & DenseProp) {
-  return <td className={`text-data px-4 ${dense ? 'py-1' : 'py-3'} ${align === 'right' ? 'text-right' : 'text-left'} ${prose ? 'nc-prose' : ''} ${className}`} {...props} />
+export function TD({ align = 'left', prose = false, dense = false, compact = false, className = '', ...props }: TdHTMLAttributes<HTMLTableCellElement> & AlignProp & { prose?: boolean } & DenseProp & CompactProp) {
+  return (
+    <td
+      className={`text-data ${compact ? 'px-2' : 'px-4'} ${dense ? 'py-1' : 'py-3'} ${align === 'right' ? 'text-right' : 'text-left'} ${prose ? 'nc-prose' : ''} ${className}`}
+      {...props}
+    />
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────

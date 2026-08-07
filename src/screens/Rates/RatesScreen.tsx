@@ -14,7 +14,8 @@ import { errorMessage } from '../../lib/errorMessage'
 import { percent, quantity as fmtQuantity, rate } from '../../lib/format'
 import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
-const COL_COUNT = 11
+const FULL_COL_COUNT = 11
+const CORE_COL_COUNT = 9
 
 /** Every field this screen can commit — the original two (cost/unitPrice, upserted to item_prices together) plus the two "earned" fields added for projected-versus-actual (percentComplete/authorizedValue, written directly to items, one at a time, independently of each other and of cost/unitPrice). */
 type EditableField = 'cost' | 'unitPrice' | 'percentComplete' | 'authorizedValue'
@@ -167,6 +168,16 @@ export function RatesScreen() {
   // rule: UI gates are a courtesy, not enforcement — the RLS policies are
   // what actually block the write either way.
   const canEdit = contract.setCost && contract.setUnitPrice
+
+  // % complete and Authorized value apply to Lump Sum and Provisional Sum
+  // Items respectively — on a contract mostly made of Unit Price Items
+  // (every real contract so far) they're almost entirely em-dashes, and at
+  // eleven columns this table doesn't fit 1440px. Collapsed by default,
+  // same "secondary, behind a control" treatment Overview already gives
+  // its own optional columns — nothing here is dropped, only hidden until
+  // asked for.
+  const [showEarnedColumns, setShowEarnedColumns] = useState(false)
+  const colCount = showEarnedColumns ? FULL_COL_COUNT : CORE_COL_COUNT
 
   const [items, setItems] = useState<Item[]>([])
   const [prices, setPrices] = useState<Map<string, ItemPrice>>(new Map())
@@ -520,7 +531,7 @@ export function RatesScreen() {
 
   function sortableHeader(key: SortKey, label: string, align: 'left' | 'right' = 'left'): ReactNode {
     return (
-      <TH align={align} onClick={() => toggleSort(key)} className="cursor-pointer select-none hover:bg-nc-border/40">
+      <TH align={align} compact onClick={() => toggleSort(key)} className="cursor-pointer select-none hover:bg-nc-border/40">
         <span className="inline-flex items-center gap-1">
           {label}
           <SortIndicator active={sortKey === key} dir={sortDir} />
@@ -655,13 +666,15 @@ export function RatesScreen() {
             This has to stay after focus leaves the row, not just flash at
             the moment of failure. */}
         <TR className={rowHasFailure ? 'bg-nc-danger-bg/40' : !row.priced ? 'bg-nc-secondary/60' : undefined}>
-          <TD className="nc-numeric align-middle">{item.itemNumber}</TD>
-          <TD prose className="align-middle">
-            <div className="max-w-[240px] truncate" title={item.description}>
+          <TD compact className="nc-numeric align-middle">
+            {item.itemNumber}
+          </TD>
+          <TD prose compact className="align-middle">
+            <div className="max-w-[190px] truncate" title={item.description}>
               {item.description}
             </div>
           </TD>
-          <TD align="right" className="nc-numeric align-middle">
+          <TD align="right" compact className="nc-numeric align-middle">
             {item.itemKind === 'unit_price' ? (
               <>
                 {fmtQuantity(item.approximateQuantity)} <span className="text-nc-text-muted">{item.unit}</span>
@@ -673,7 +686,7 @@ export function RatesScreen() {
 
           {/* Unit cost — editable only for a Unit Price Item; a rate has no
               meaning for Lump Sum/Provisional Sum. */}
-          <TD align="right" dense className="align-middle">
+          <TD align="right" dense compact className="align-middle">
             {item.itemKind === 'unit_price' ? (
               <div
                 className="flex items-center justify-end gap-1.5"
@@ -685,8 +698,13 @@ export function RatesScreen() {
                 }}
               >
                 {canEdit ? costInput : <MoneyDisplay value={row.costPrice} width={UNIT_W} />}
-                <div style={{ width: 100 }} className="shrink-0">
-                  {showBasisControl && (
+                {/* Reserved width only while the basis picker is actually
+                    shown (focus, or already committed as 'total') — not on
+                    every row regardless, which used to hold a full 100px
+                    open behind nothing for every Unit Price row that never
+                    shows it. */}
+                {showBasisControl && (
+                  <div style={{ width: 100 }} className="shrink-0">
                     <Select
                       aria-label={`${item.itemNumber} cost basis`}
                       style={{ width: 100 }}
@@ -699,19 +717,19 @@ export function RatesScreen() {
                       <option value="per_unit">per unit</option>
                       <option value="total">total</option>
                     </Select>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             ) : (
-              <DashCell width={UNIT_W} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Ext. cost' : undefined} />
+              <DashCell width={UNIT_W} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Extended cost' : undefined} />
             )}
           </TD>
 
-          {/* Ext. cost — derived for a Unit Price Item; IS the editable
+          {/* Extended cost — derived for a Unit Price Item; IS the editable
               cost estimate for a Lump Sum Item (cost_basis is always
               'total' there, so the stored figure already is this column);
               never applicable to Provisional Sum. */}
-          <TD align="right" dense className="align-middle">
+          <TD align="right" dense compact className="align-middle">
             {item.itemKind === 'lump_sum' ? (
               canEdit ? (
                 costInput
@@ -726,7 +744,7 @@ export function RatesScreen() {
           </TD>
 
           {/* Unit price — same shape as Unit cost. */}
-          <TD align="right" dense className="align-middle">
+          <TD align="right" dense compact className="align-middle">
             {item.itemKind === 'unit_price' ? (
               canEdit ? (
                 priceInput
@@ -734,15 +752,15 @@ export function RatesScreen() {
                 <MoneyDisplay value={row.unitPrice} width={UNIT_W + 20} />
               )
             ) : (
-              <DashCell width={UNIT_W + 20} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Ext. amount' : undefined} />
+              <DashCell width={UNIT_W + 20} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Extended amount' : undefined} />
             )}
           </TD>
 
-          {/* Ext. amount — derived for Unit Price; IS the editable lump
-              sum price for Lump Sum; sourced from Schedule 7's own
+          {/* Extended amount — derived for Unit Price; IS the editable
+              lump sum price for Lump Sum; sourced from Schedule 7's own
               Provisional Sum allowance (never entered here) for
               Provisional Sum. */}
-          <TD align="right" dense className="align-middle">
+          <TD align="right" dense compact className="align-middle">
             {item.itemKind === 'lump_sum' ? (
               canEdit ? (
                 priceInput
@@ -757,11 +775,12 @@ export function RatesScreen() {
           {/* Margin — MARGIN, NOT MARKUP: of revenue (Ext. amount), never
               of cost. Never computed for Provisional Sum (reimbursed, not
               margined) — em-dash, never 0. */}
-          <TD align="right" className={`nc-numeric align-middle ${row.financials.margin !== null && row.financials.margin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+          <TD align="right" compact className={`nc-numeric align-middle ${row.financials.margin !== null && row.financials.margin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
             {row.financials.margin === null ? '—' : rate(row.financials.margin)}
           </TD>
           <TD
             align="right"
+            compact
             className={`nc-numeric align-middle ${
               row.financials.marginPercent !== null && row.financials.marginPercent < 0
                 ? 'font-semibold bg-nc-danger-bg text-nc-danger-text'
@@ -779,25 +798,31 @@ export function RatesScreen() {
           {/* % complete — Finance's own estimate, lump_sum Items only
               (GC 52.03(b), items_percent_only_lump_sum). Earned value for
               the Item is this / 100 x its own Ext. amount — never inferred,
-              never defaulted; absent here means nothing entered, not 0%. */}
-          <TD align="right" dense className="align-middle">
-            {item.itemKind === 'lump_sum' ? (
-              canEdit ? percentCompleteInput : <PercentDisplay value={item.percentComplete} width={UNIT_W} />
-            ) : (
-              <DashCell width={UNIT_W} />
-            )}
-          </TD>
+              never defaulted; absent here means nothing entered, not 0%.
+              Column hidden entirely unless showEarnedColumns — see its own
+              declaration. */}
+          {showEarnedColumns && (
+            <TD align="right" dense compact className="align-middle">
+              {item.itemKind === 'lump_sum' ? (
+                canEdit ? percentCompleteInput : <PercentDisplay value={item.percentComplete} width={UNIT_W} />
+              ) : (
+                <DashCell width={UNIT_W} />
+              )}
+            </TD>
+          )}
 
           {/* Authorized value — the Ministry's own advance authorization
               (GC 32.01/47.01), provisional_sum Items only. IS the Item's
               earned value directly, never prorated against anything. */}
-          <TD align="right" dense className="align-middle">
-            {item.itemKind === 'provisional_sum' ? (
-              canEdit ? authorizedValueInput : <MoneyDisplay value={item.authorizedValue} width={EXT_W} />
-            ) : (
-              <DashCell width={EXT_W} />
-            )}
-          </TD>
+          {showEarnedColumns && (
+            <TD align="right" dense compact className="align-middle">
+              {item.itemKind === 'provisional_sum' ? (
+                canEdit ? authorizedValueInput : <MoneyDisplay value={item.authorizedValue} width={EXT_W} />
+              ) : (
+                <DashCell width={EXT_W} />
+              )}
+            </TD>
+          )}
         </TR>
         {/* Additive to the header banner and the row's own tint, not a
             replacement — this is the detail (what actually went wrong),
@@ -805,7 +830,7 @@ export function RatesScreen() {
             where" signal for someone who's already scrolled past it. */}
         {[costFailed, unitPriceFailed, percentCompleteFailed, authorizedValueFailed].filter((msg): msg is string => msg !== undefined).map((msg, msgIndex) => (
           <TR key={msgIndex}>
-            <TD colSpan={COL_COUNT} className="text-nc-danger-text">
+            <TD colSpan={colCount} className="text-nc-danger-text">
               {msg}
             </TD>
           </TR>
@@ -818,10 +843,10 @@ export function RatesScreen() {
     const agg = aggregateFinancials(rowsInGroup.map((r) => ({ itemKind: r.item.itemKind, financials: r.financials })))
     return (
       <TR key={key} className="bg-nc-secondary font-semibold">
-        <TD colSpan={4} className="text-data align-middle text-nc-text">
+        <TD colSpan={4} compact className="text-data align-middle text-nc-text">
           {label}
         </TD>
-        <TD align="right" className="nc-numeric align-middle">
+        <TD align="right" compact className="nc-numeric align-middle">
           {agg.extCostSum === null ? '—' : rate(agg.extCostSum)}
           {costTrackingEnabled && agg.costCoverage.total > 0 && (
             <span className="ml-1.5 whitespace-nowrap text-xs font-normal text-nc-text-muted">
@@ -829,11 +854,11 @@ export function RatesScreen() {
             </span>
           )}
         </TD>
-        <TD />
-        <TD align="right" className="nc-numeric align-middle">
+        <TD compact />
+        <TD align="right" compact className="nc-numeric align-middle">
           {agg.extAmountSum === null ? '—' : rate(agg.extAmountSum)}
         </TD>
-        <TD align="right" className={`nc-numeric align-middle ${agg.marginSum !== null && agg.marginSum < 0 ? 'text-nc-danger-text' : ''}`}>
+        <TD align="right" compact className={`nc-numeric align-middle ${agg.marginSum !== null && agg.marginSum < 0 ? 'text-nc-danger-text' : ''}`}>
           {agg.marginSum === null ? '—' : rate(agg.marginSum)}
           {costTrackingEnabled && agg.marginCoverage.total > 0 && (
             <span className="ml-1.5 whitespace-nowrap text-xs font-normal text-nc-text-muted">
@@ -841,16 +866,17 @@ export function RatesScreen() {
             </span>
           )}
         </TD>
-        <TD align="right" className={`nc-numeric align-middle ${agg.marginPercent !== null && agg.marginPercent < 0 ? 'text-nc-danger-text' : ''}`}>
+        <TD align="right" compact className={`nc-numeric align-middle ${agg.marginPercent !== null && agg.marginPercent < 0 ? 'text-nc-danger-text' : ''}`}>
           {agg.marginPercent === null ? '—' : percent(agg.marginPercent)}
         </TD>
         {/* % complete/Authorized value have no meaningful section subtotal
             (a summed percent is meaningless; a summed authorized value
             would just restate part of the projected-versus-actual block
             below) — left blank rather than inventing a number nobody asked
-            for. */}
-        <TD />
-        <TD />
+            for. Omitted along with their columns when showEarnedColumns is
+            off. */}
+        {showEarnedColumns && <TD compact />}
+        {showEarnedColumns && <TD compact />}
       </TR>
     )
   }
@@ -930,11 +956,24 @@ export function RatesScreen() {
             (rows.length === 0 ? (
               <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
             ) : (
-              <Table fullWidth={false} maxHeight="calc(100vh - 280px)" className="w-fit">
+              <>
+                {/* % complete and Authorized value only ever apply to Lump
+                    Sum and Provisional Sum Items respectively — on a
+                    contract that's mostly Unit Price Items (every real
+                    contract so far), they're two more-often-than-not empty
+                    columns on an already eleven-column table. Collapsed by
+                    default; nothing behind this toggle is removed, only
+                    hidden until asked for. */}
+                <div className="mb-3">
+                  <Button type="button" variant="ghost" onClick={() => setShowEarnedColumns((v) => !v)} aria-pressed={showEarnedColumns}>
+                    {showEarnedColumns ? 'Hide completion & authorization columns' : 'Show completion & authorization columns'}
+                  </Button>
+                </div>
+                <Table fullWidth={false} maxHeight="calc(100vh - 280px)" className="w-fit">
                 <THead className="sticky top-0 z-10">
                   {failedItemIds.size > 0 && (
                     <tr>
-                      <th colSpan={COL_COUNT} className="bg-nc-danger-bg p-0 text-left">
+                      <th colSpan={colCount} className="bg-nc-danger-bg p-0 text-left">
                         <button
                           type="button"
                           onClick={focusFirstFailedRow}
@@ -947,16 +986,34 @@ export function RatesScreen() {
                   )}
                   <TR>
                     {sortableHeader('itemNumber', 'Item #')}
-                    <TH>Description</TH>
+                    <TH compact>Description</TH>
                     {sortableHeader('quantity', 'Approx. Qty', 'right')}
-                    <TH align="right">Unit cost</TH>
-                    <TH align="right">Ext. cost</TH>
-                    <TH align="right">Unit price</TH>
-                    {sortableHeader('extAmount', 'Ext. amount', 'right')}
-                    <TH align="right">Margin</TH>
-                    <TH align="right">Margin %</TH>
-                    <TH align="right">% complete</TH>
-                    <TH align="right">Authorized value</TH>
+                    <TH align="right" compact>
+                      Unit cost
+                    </TH>
+                    <TH align="right" compact>
+                      Extended cost
+                    </TH>
+                    <TH align="right" compact>
+                      Unit price
+                    </TH>
+                    {sortableHeader('extAmount', 'Extended amount', 'right')}
+                    <TH align="right" compact>
+                      Margin
+                    </TH>
+                    <TH align="right" compact>
+                      Margin %
+                    </TH>
+                    {showEarnedColumns && (
+                      <TH align="right" compact>
+                        % complete
+                      </TH>
+                    )}
+                    {showEarnedColumns && (
+                      <TH align="right" compact>
+                        Authorized value
+                      </TH>
+                    )}
                   </TR>
                 </THead>
                 <TBody>
@@ -964,7 +1021,7 @@ export function RatesScreen() {
                     ? sectionGroups.map((group) => (
                         <Fragment key={group.prefix}>
                           <TR>
-                            <TD colSpan={COL_COUNT} className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted border-t border-nc-border first:border-t-0">
+                            <TD colSpan={colCount} className="text-xs font-semibold uppercase tracking-wide text-nc-text-muted border-t border-nc-border first:border-t-0">
                               {sectionLabel(group.prefix)}
                             </TD>
                           </TR>
@@ -976,10 +1033,10 @@ export function RatesScreen() {
                 </TBody>
                 <tfoot>
                   <tr>
-                    <td colSpan={4} className="text-data border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                    <td colSpan={4} className="text-data border-t border-nc-border bg-nc-navy px-2 py-3 text-right font-semibold text-white">
                       Grand total
                     </td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-2 py-3 text-right font-semibold text-white">
                       {grandTotal.extCostSum === null ? '—' : rate(grandTotal.extCostSum)}
                       {costTrackingEnabled && grandTotal.costCoverage.total > 0 && (
                         <span className="ml-1.5 block whitespace-nowrap text-xs font-normal opacity-80">
@@ -988,10 +1045,10 @@ export function RatesScreen() {
                       )}
                     </td>
                     <td className="border-t border-nc-border bg-nc-navy" />
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-2 py-3 text-right font-semibold text-white">
                       {grandTotal.extAmountSum === null ? '—' : rate(grandTotal.extAmountSum)}
                     </td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-2 py-3 text-right font-semibold text-white">
                       {grandTotal.marginSum === null ? '—' : rate(grandTotal.marginSum)}
                       {costTrackingEnabled && grandTotal.marginCoverage.total > 0 && (
                         <span className="ml-1.5 block whitespace-nowrap text-xs font-normal opacity-80">
@@ -999,15 +1056,17 @@ export function RatesScreen() {
                         </span>
                       )}
                     </td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
+                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-2 py-3 text-right font-semibold text-white">
                       {grandTotal.marginPercent === null ? '—' : percent(grandTotal.marginPercent)}
                     </td>
                     {/* % complete/Authorized value: no grand-total figure of
                         their own — see renderSubtotalRow's own comment; the
                         real totals for what they feed into are the
-                        projected-versus-actual block directly below. */}
-                    <td className="border-t border-nc-border bg-nc-navy" />
-                    <td className="border-t border-nc-border bg-nc-navy" />
+                        projected-versus-actual block directly below.
+                        Omitted along with their columns when
+                        showEarnedColumns is off. */}
+                    {showEarnedColumns && <td className="border-t border-nc-border bg-nc-navy" />}
+                    {showEarnedColumns && <td className="border-t border-nc-border bg-nc-navy" />}
                   </tr>
                   {/* Projected versus actual — beside the tender price
                       reconciliation, never merged with it or with each
@@ -1018,7 +1077,7 @@ export function RatesScreen() {
                       a read of what's already on file, same posture as the
                       Grand total row above it. */}
                   <tr>
-                    <td colSpan={COL_COUNT} className="border-t border-nc-border bg-white px-4 py-3 text-sm">
+                    <td colSpan={colCount} className="border-t border-nc-border bg-white px-4 py-3 text-sm">
                       <div className="grid grid-cols-2 gap-8">
                         <div>
                           <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Quantity-measured — Unit Price Items</p>
@@ -1067,7 +1126,7 @@ export function RatesScreen() {
                       typo or a revised award figure can be corrected here
                       too — not just entered once and then locked. */}
                   <tr>
-                    <td colSpan={COL_COUNT} className="border-t border-nc-border bg-nc-secondary px-4 py-3 text-sm">
+                    <td colSpan={colCount} className="border-t border-nc-border bg-nc-secondary px-4 py-3 text-sm">
                       <div className="flex flex-wrap items-center gap-2">
                         {tenderPrice !== null && reconciliation ? (
                           reconciliation.matches ? (
@@ -1117,6 +1176,7 @@ export function RatesScreen() {
                   </tr>
                 </tfoot>
               </Table>
+              </>
             ))}
         </>
       )}
