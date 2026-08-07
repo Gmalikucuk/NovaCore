@@ -1,6 +1,6 @@
 import { IconAlertTriangle, IconClockPause, IconFlag } from '@tabler/icons-react'
 import type { ItemPrice } from '../lib/supabase/prices'
-import { BEHIND_RATE_THRESHOLD_DAYS, type ProblemItem } from '../lib/calculations/overview'
+import type { ProblemItem } from '../lib/calculations/overview'
 import { money, quantity as fmtQuantity } from '../lib/format'
 
 const PROBLEM_KIND_LABEL: Record<ProblemItem['kind'], string> = {
@@ -30,11 +30,15 @@ function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>): s
     const atCost = price?.costPrice !== null && price?.costPrice !== undefined && price.costBasis === 'per_unit' ? ` — ${money(overage * price.costPrice)} at cost` : ''
     return `${fmtQuantity(overage)} ${row.unit} over the Approximate Quantity${atCost}.`
   }
-  // behind_rate — flagged past BEHIND_RATE_THRESHOLD_DAYS; named here so
-  // the flag doesn't read as an unexplained number, since there's no
-  // season-end date in the schema to compare against instead (see
-  // overview.ts).
-  return `At the recent rate, ~${row.workingDaysRemaining} more working days needed — flagged past ${BEHIND_RATE_THRESHOLD_DAYS}.`
+  // behind_rate — the classification still uses workingDaysRemaining
+  // internally (overview.ts, unchanged), but that figure is a projection
+  // (remaining ÷ a 30-day rate) and is deliberately not stated here. What
+  // IS observable, and what's shown instead: how much has actually been
+  // recorded lately, over how many days, against how much is left. The
+  // reader draws their own conclusion about whether that pace is adequate
+  // — NovaCore doesn't divide it into a day-count and hand over an
+  // implied verdict.
+  return `${fmtQuantity(row.quantityLast30)} ${row.unit} recorded in the last 30 days (${row.workingDaysLast30 ?? 0} working day${row.workingDaysLast30 === 1 ? '' : 's'}) — ${fmtQuantity(row.quantityRemaining)} ${row.unit} remains.`
 }
 
 /**

@@ -104,7 +104,26 @@ export async function fetchContractMonths(contractId: string): Promise<ContractM
   })
 }
 
-/** Rate-of-progress per unit_price Item (0013's v_item_progress_rate) — an early-warning indicator, not a forecast (linear projection from the last 30 days over days actually worked). Carries no money and needs no view_rates. */
+/**
+ * Rate-of-progress per unit_price Item (0013's v_item_progress_rate).
+ * Carries no money and needs no view_rates.
+ *
+ * workingDaysRemaining IS a projection — a linear extrapolation of
+ * quantityRemaining over the last-30-days rate — despite this view's own
+ * age predating that being named plainly. It is deliberately not rendered
+ * anywhere as of the production-rate brief: ProblemRow.tsx's "behind rate"
+ * sentence states quantityLast30/workingDaysLast30/quantityRemaining
+ * instead, the observable facts the projection was computed from, not the
+ * projection itself. workingDaysRemaining stays computed here (and
+ * classifyProblem in overview.ts still uses it as a trigger) so the
+ * column doesn't need a schema change to stop being surfaced — see that
+ * brief's report for the full list of who reads this view and why.
+ *
+ * quantityPerWorkingDay is dead in every production consumer as of the
+ * same brief — computed here, read nowhere but overview.test.ts's fixture
+ * data. Left in place pending a decision on the view as a whole, not
+ * removed piecemeal.
+ */
 export interface ItemProgressRate {
   itemId: string
   contractId: string

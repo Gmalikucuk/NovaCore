@@ -69,11 +69,16 @@ export function monthDirection(current: number, previous: number): Direction {
 // "Behind rate" has no season-end date anywhere in the schema (checked:
 // contracts has no such column) to compare working_days_remaining against,
 // so there is no literal way to compute "will not finish in the season."
-// BEHIND_RATE_THRESHOLD_DAYS is a stated, visible-in-the-UI stand-in — six
-// working weeks of remaining work at the observed rate is a real problem on
-// any contract's timeline, not a threshold tuned to a specific season. This
-// is the piece of the brief most likely to need a real value once a season
-// boundary exists per contract — flagged in the handoff report.
+// BEHIND_RATE_THRESHOLD_DAYS is six working weeks of remaining work at the
+// observed rate — a real problem on any contract's timeline, not a
+// threshold tuned to a specific season. It is used ONLY as an internal
+// trigger for this classification now, not rendered — ProblemRow.tsx's
+// "behind rate" sentence (as of the production-rate brief) states the
+// observable facts the trigger was computed from instead of the day-count
+// itself, since workingDaysRemaining is a projection and this screen
+// doesn't state one. This is still the piece most likely to need a real
+// value once a season boundary exists per contract — flagged in the
+// handoff report.
 // ─────────────────────────────────────────────────────────────────────────
 
 export const BEHIND_RATE_THRESHOLD_DAYS = 30

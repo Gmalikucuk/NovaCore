@@ -127,3 +127,50 @@ export function quantityPercent(range: QuantityRange, value: number): number {
   const span = range.hi - range.lo || 1
   return ((value - range.lo) / span) * 100
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Observed rate — plain arithmetic beside the curve, not a forecast. See
+// this brief's own "What this is, and what it is emphatically not": four
+// facts (quantity to date, working days, rate per working day, remaining),
+// no projected completion, no season comparison. Derived entirely from the
+// same cumulativeSeries() the curve already draws — points.length IS the
+// working-day count (cumulativeSeries already collapses same-day records
+// and keys one point per distinct work_date), and the last point's
+// cumulative IS quantity to date. No second fetch, no second rule.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Below this many working days, a rate is noise rather than signal — one
+ * unusually large or small day can swing the average by a wide margin. At
+ * 5, no single day can be more than a fifth of the sample. Chosen for the
+ * same reason RatesScreen suppresses its margin bands below ten priced
+ * Items: a stated figure that would visibly jump on the next single data
+ * point reads as more certain than it is, so it's better not shown at all.
+ * Inclusive — an Item with exactly 5 working days still gets a rate; it's
+ * a thin sample, not a forbidden one.
+ */
+export const MIN_WORKING_DAYS_FOR_RATE = 5
+
+export interface ProductionFigures {
+  quantityToDate: number
+  workingDays: number
+  /** approximateQuantity - quantityToDate. Negative means the Item has recorded past its Approximate Quantity — a surplus, not a deficit; callers render the sign, not the word "remaining," in that case. */
+  remaining: number
+}
+
+/** The three base facts derivable from a cumulative series alone — quantity to date, the working-day count, and signed remaining. Null for an Item with no records, same as every other empty-input case in this module. */
+export function productionFigures(points: readonly Pick<CumulativePoint, 'cumulative'>[], approximateQuantity: number): ProductionFigures | null {
+  if (points.length === 0) return null
+  const quantityToDate = points[points.length - 1].cumulative
+  return { quantityToDate, workingDays: points.length, remaining: approximateQuantity - quantityToDate }
+}
+
+/** quantityToDate / workingDays — meaningless at workingDays = 0, but productionFigures never returns that (points.length >= 1 whenever it returns non-null). */
+export function ratePerWorkingDay(figures: Pick<ProductionFigures, 'quantityToDate' | 'workingDays'>): number {
+  return figures.quantityToDate / figures.workingDays
+}
+
+/** Whether the working-day sample is large enough to state a rate at all — see MIN_WORKING_DAYS_FOR_RATE's own doc comment for why 5, and why inclusive. */
+export function hasEnoughWorkingDaysForRate(workingDays: number): boolean {
+  return workingDays >= MIN_WORKING_DAYS_FOR_RATE
+}

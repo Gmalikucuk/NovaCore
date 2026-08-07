@@ -1,4 +1,16 @@
-import { cumulativeSeries, dateRange, datePercent, dateTicks, quantityRange, quantityPercent, type ProductionRecord } from '../lib/calculations/productionCurve'
+import {
+  cumulativeSeries,
+  dateRange,
+  datePercent,
+  dateTicks,
+  quantityRange,
+  quantityPercent,
+  productionFigures,
+  ratePerWorkingDay,
+  hasEnoughWorkingDaysForRate,
+  MIN_WORKING_DAYS_FOR_RATE,
+  type ProductionRecord,
+} from '../lib/calculations/productionCurve'
 import { formatDayLabel, formatDayTick } from '../lib/dateFormat'
 import { quantity as fmtQuantity } from '../lib/format'
 import { StatusBadge } from './ui'
@@ -52,6 +64,13 @@ function stepPath(points: readonly { x: number; y: number }[], groundY: number):
  * over it. Where the curve finishes over that line, the "over" badge
  * reuses the app's existing neutral over-quantity tone (StatusBadge
  * status="over") — a gain worth noting, not a fault worth a danger colour.
+ *
+ * Beneath each chart, four plain facts (productionFigures/ratePerWorkingDay
+ * in productionCurve.ts): quantity to date, working days, the resulting
+ * rate, and remaining (or surplus, unclamped, when over). Arithmetic on
+ * records that exist, not a projection — no completion date, no season
+ * comparison, nothing stated below MIN_WORKING_DAYS_FOR_RATE working days,
+ * where a rate would be noise dressed as a figure.
  */
 export function ProductionCurve({ items, records }: { items: readonly CurveItem[]; records: readonly ProductionRecord[] }) {
   const byItem = new Map<string, ProductionRecord[]>()
@@ -128,6 +147,27 @@ export function ProductionCurve({ items, records }: { items: readonly CurveItem[
             <p className="nc-numeric mt-1 text-xs text-nc-text-muted">
               {range.loDate === range.hiDate ? formatDayLabel(range.loDate) : `${formatDayLabel(range.loDate)} → ${formatDayLabel(range.hiDate)}`}
             </p>
+
+            {(() => {
+              const figures = productionFigures(points, item.approximateQuantity)
+              if (figures === null) return null
+              const enoughForRate = hasEnoughWorkingDaysForRate(figures.workingDays)
+              const rate = enoughForRate ? ratePerWorkingDay(figures) : null
+              const workingDayWord = figures.workingDays === 1 ? 'working day' : 'working days'
+              const isSurplus = figures.remaining < 0
+              return (
+                <div className="mt-2 border-t border-nc-border pt-2 text-xs text-nc-text">
+                  <p className="nc-numeric">
+                    {rate !== null
+                      ? `${fmtQuantity(figures.quantityToDate, item.unit)} over ${figures.workingDays} ${workingDayWord} — ${fmtQuantity(rate, item.unit)} per working day`
+                      : `${fmtQuantity(figures.quantityToDate, item.unit)} over ${figures.workingDays} ${workingDayWord} — no rate stated below ${MIN_WORKING_DAYS_FOR_RATE} working days.`}
+                  </p>
+                  <p className="nc-numeric mt-1">
+                    {isSurplus ? `${fmtQuantity(Math.abs(figures.remaining), item.unit)} surplus — over Approximate Quantity` : `${fmtQuantity(figures.remaining, item.unit)} remaining`}
+                  </p>
+                </div>
+              )
+            })()}
           </div>
         )
       })}

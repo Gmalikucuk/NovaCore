@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cumulativeSeries, dateRange, datePercent, dateTicks, quantityRange, quantityPercent } from './productionCurve'
+import { cumulativeSeries, dateRange, datePercent, dateTicks, quantityRange, quantityPercent, productionFigures, ratePerWorkingDay, hasEnoughWorkingDaysForRate, MIN_WORKING_DAYS_FOR_RATE } from './productionCurve'
 
 describe('cumulativeSeries', () => {
   it('is empty for no records — nothing to draw, not a zero-height chart', () => {
@@ -123,5 +123,57 @@ describe('quantityPercent', () => {
     expect(quantityPercent(range, 0)).toBe(0)
     expect(quantityPercent(range, 200)).toBe(100)
     expect(quantityPercent(range, 100)).toBe(50)
+  })
+})
+
+describe('productionFigures', () => {
+  it('is null for no records — nothing to state', () => {
+    expect(productionFigures([], 1000)).toBeNull()
+  })
+
+  it('working days is the point count, quantity to date is the last cumulative, remaining is signed', () => {
+    const points = [{ cumulative: 100 }, { cumulative: 250 }, { cumulative: 400 }]
+    expect(productionFigures(points, 1000)).toEqual({ quantityToDate: 400, workingDays: 3, remaining: 600 })
+  })
+
+  it('remaining goes negative — a surplus, not clamped to zero — when the Item is over Approximate Quantity', () => {
+    const points = [{ cumulative: 435.94 }]
+    expect(productionFigures(points, 300)!.remaining).toBeCloseTo(-135.94, 5)
+  })
+
+  it('the real Venables Top Lift numbers (05.03.02): 32 working days, 48,129.82 to date, 2,520.18 remaining', () => {
+    const points = Array.from({ length: 32 }, (_, i) => ({ cumulative: i === 31 ? 48129.82 : 0 }))
+    const figures = productionFigures(points, 50650)!
+    expect(figures.workingDays).toBe(32)
+    expect(figures.quantityToDate).toBeCloseTo(48129.82, 2)
+    expect(figures.remaining).toBeCloseTo(2520.18, 2)
+  })
+})
+
+describe('ratePerWorkingDay', () => {
+  it('divides quantity to date by working days', () => {
+    expect(ratePerWorkingDay({ quantityToDate: 100, workingDays: 4 })).toBe(25)
+  })
+
+  it('the real Venables Cold Mill rate (04.03.02): 377,103.02 over 35 working days', () => {
+    expect(ratePerWorkingDay({ quantityToDate: 377103.02, workingDays: 35 })).toBeCloseTo(10774.37, 2)
+  })
+})
+
+describe('hasEnoughWorkingDaysForRate', () => {
+  it('is false below the threshold', () => {
+    expect(hasEnoughWorkingDaysForRate(MIN_WORKING_DAYS_FOR_RATE - 1)).toBe(false)
+  })
+
+  it('is true at exactly the threshold — inclusive, a thin sample is not a forbidden one', () => {
+    expect(hasEnoughWorkingDaysForRate(MIN_WORKING_DAYS_FOR_RATE)).toBe(true)
+  })
+
+  it('is true well above the threshold', () => {
+    expect(hasEnoughWorkingDaysForRate(32)).toBe(true)
+  })
+
+  it('the real Venables Top Lift Side Roads case (05.03.03) sits exactly at the threshold: 5 working days, still gets a rate', () => {
+    expect(hasEnoughWorkingDaysForRate(5)).toBe(true)
   })
 })
