@@ -22,14 +22,14 @@ import { Button, EmptyState, Input, NotificationBanner, PageHeader, Select, Spin
  * not an attempt to group them.
  */
 const RIGHTS: { key: ContractRightKey; label: string }[] = [
-  { key: 'createItems', label: 'Add or edit Items' },
-  { key: 'setCost', label: 'Set internal cost' },
-  { key: 'setUnitPrice', label: 'Set Unit Price' },
-  { key: 'enterQuantity', label: 'Enter quantities' },
-  { key: 'correctQuantity', label: 'Correct quantities' },
-  { key: 'confirmQuantity', label: 'Confirm quantities' },
-  { key: 'viewRates', label: 'View rates and cost' },
-  { key: 'extractReport', label: 'Export reports' },
+  { key: 'createItems', label: 'Add/edit Items' },
+  { key: 'setCost', label: 'Set cost' },
+  { key: 'setUnitPrice', label: 'Set price' },
+  { key: 'enterQuantity', label: 'Enter quantity' },
+  { key: 'correctQuantity', label: 'Correct quantity' },
+  { key: 'confirmQuantity', label: 'Confirm quantity' },
+  { key: 'viewRates', label: 'View rates' },
+  { key: 'extractReport', label: 'Export' },
 ]
 
 /**
@@ -212,9 +212,9 @@ export function SeatMembersScreen() {
               <Table>
                 <THead>
                   <TR>
-                    <TH>Name</TH>
+                    <TH compact>Name</TH>
                     {RIGHTS.map((r) => (
-                      <TH key={r.key} align="right">
+                      <TH key={r.key} align="right" compact>
                         {r.label}
                       </TH>
                     ))}
@@ -230,9 +230,9 @@ export function SeatMembersScreen() {
                   ) : (
                     members.map((member) => (
                       <TR key={member.userId}>
-                        <TD>{member.fullName ?? 'Unnamed'}</TD>
+                        <TD compact>{member.fullName ?? 'Unnamed'}</TD>
                         {RIGHTS.map((r) => (
-                          <TD key={r.key} align="right">
+                          <TD key={r.key} align="right" compact>
                             <input
                               type="checkbox"
                               className="h-4 w-4"
