@@ -5,6 +5,7 @@ import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { fetchPinnedItems, pinItem, unpinItem, type PinnedItem } from '../../lib/supabase/pinnedItems'
+import { fetchEffectiveStationRecords, type EffectiveStationRow } from '../../lib/supabase/dashboard'
 import { buildProblemList } from '../../lib/calculations/overview'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { margin as computeMargin } from '../../lib/calculations/margin'
@@ -12,6 +13,7 @@ import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
 import { Button, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner } from '../../components/ui'
 import { ProblemRow } from '../../components/ProblemRow'
+import { StationRibbon } from '../../components/StationRibbon'
 
 const ATTENTION_CAP = 5
 
@@ -79,6 +81,7 @@ export function ProgressScreen() {
   const [prices, setPrices] = useState<ItemPrice[]>([])
   const [progressRate, setProgressRate] = useState<ItemProgressRate[]>([])
   const [pins, setPins] = useState<PinnedItem[]>([])
+  const [stationRecords, setStationRecords] = useState<EffectiveStationRow[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -96,12 +99,14 @@ export function ProgressScreen() {
       contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([]),
       fetchItemProgressRate(contract.id),
       fetchPinnedItems(contract.id),
+      fetchEffectiveStationRecords(contract.id),
     ])
-      .then(([itemRows, priceRows, progressRows, pinRows]) => {
+      .then(([itemRows, priceRows, progressRows, pinRows, stationRows]) => {
         setItems(itemRows)
         setPrices(priceRows)
         setProgressRate(progressRows)
         setPins(pinRows)
+        setStationRecords(stationRows)
         setStatus('ready')
       })
       .catch((err: unknown) => {
@@ -146,6 +151,35 @@ export function ProgressScreen() {
         })),
     [pins, progressByItem, priceByItem, contract.viewRates],
   )
+
+  // Station along the x-axis, one lane per pinned Item — see StationRibbon.
+  // Three distinct empty states, checked in this order: an empty contract
+  // reads differently from a contract whose records simply weren't
+  // recorded with stations, which reads differently again from a
+  // contract that's ready to show something but nobody has pinned
+  // anything yet. stationRecords is already scoped to confirmed,
+  // non-superseded records (quantity_records_effective) — contract-wide,
+  // not filtered to pinned Items, so the first two checks are honest
+  // regardless of what's pinned.
+  const hasAnyRecords = stationRecords.length > 0
+  const hasAnyStations = stationRecords.some((r) => r.stationFrom !== null)
+
+  const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
+  const ribbonItems = useMemo(
+    () =>
+      pins
+        .map((pin) => itemById.get(pin.itemId))
+        .filter((i): i is Item => i !== undefined)
+        .sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber))
+        .map((i) => ({ id: i.id, itemNumber: i.itemNumber, description: i.description })),
+    [pins, itemById],
+  )
+  const ribbonRecords = useMemo(() => {
+    const pinnedIds = new Set(pins.map((p) => p.itemId))
+    return stationRecords
+      .filter((r) => r.stationFrom !== null && pinnedIds.has(r.itemId))
+      .map((r) => ({ itemId: r.itemId, stationFrom: r.stationFrom as number, stationTo: r.stationTo, lkiSegment: r.lkiSegment }))
+  }, [stationRecords, pins])
 
   async function handlePin() {
     if (!pinSelection) return
@@ -242,6 +276,22 @@ export function ProgressScreen() {
                   </div>
                 )}
               </>
+            )}
+          </section>
+
+          <section className="mb-8">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Coverage</h2>
+            {!hasAnyRecords ? (
+              <EmptyState title="No quantity has been recorded on this contract yet." description="Once the first confirmed record with a station carries a range, its Item's coverage will draw here." />
+            ) : !hasAnyStations ? (
+              <EmptyState
+                title="Records exist on this contract, but none carry a station."
+                description="This screen draws coverage from station_from/station_to on confirmed records. Entering a station range on new records — the same Station from/to fields already on Daily Entry — is what would make this view work here."
+              />
+            ) : ribbonItems.length === 0 ? (
+              <EmptyState title="Station data exists on this contract, but nothing is pinned." description="Pin an Item above to see its recorded coverage here." />
+            ) : (
+              <StationRibbon items={ribbonItems} records={ribbonRecords} />
             )}
           </section>
 
