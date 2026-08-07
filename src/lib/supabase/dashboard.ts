@@ -48,3 +48,37 @@ export async function fetchEffectiveStationRecords(contractId: string): Promise<
     lkiSegment: row.lki_segment,
   }))
 }
+
+/**
+ * Every (item, work_date, quantity) on a confirmed, non-superseded record,
+ * for the production curve (Progress). Unlike fetchEffectiveStationRecords
+ * above, this reads quantity_records_effective directly rather than
+ * re-deriving "effective" client-side: the only columns needed here
+ * (item_id, work_date, quantity) were never among the ones the view was
+ * missing before 3ad5f79, and the view is the fixed, guarded source of
+ * truth now — there is nothing to route around. filterEffective() and
+ * this view are documented as one rule expressed twice (effectiveEntries.
+ * ts); reading the view here, the table directly for the ribbon, is using
+ * whichever fits the call site, not an inconsistency.
+ */
+export interface EffectiveProductionRow {
+  itemId: string
+  workDate: string
+  quantity: number
+}
+
+interface RawProductionRow {
+  item_id: string
+  work_date: string
+  quantity: string
+}
+
+export async function fetchEffectiveProductionRecords(contractId: string): Promise<EffectiveProductionRow[]> {
+  const { data, error } = await supabase.from('quantity_records_effective').select('item_id, work_date, quantity').eq('contract_id', contractId)
+  if (error) throw error
+  return ((data ?? []) as RawProductionRow[]).map((row) => ({
+    itemId: row.item_id,
+    workDate: row.work_date,
+    quantity: Number(row.quantity),
+  }))
+}

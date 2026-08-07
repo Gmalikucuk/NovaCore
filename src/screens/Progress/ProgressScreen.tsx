@@ -5,7 +5,7 @@ import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { fetchPinnedItems, pinItem, unpinItem, type PinnedItem } from '../../lib/supabase/pinnedItems'
-import { fetchEffectiveStationRecords, type EffectiveStationRow } from '../../lib/supabase/dashboard'
+import { fetchEffectiveStationRecords, fetchEffectiveProductionRecords, type EffectiveStationRow, type EffectiveProductionRow } from '../../lib/supabase/dashboard'
 import { buildProblemList } from '../../lib/calculations/overview'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { margin as computeMargin } from '../../lib/calculations/margin'
@@ -14,6 +14,7 @@ import { money, percent, quantity as fmtQuantity } from '../../lib/format'
 import { Button, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner } from '../../components/ui'
 import { ProblemRow } from '../../components/ProblemRow'
 import { StationRibbon } from '../../components/StationRibbon'
+import { ProductionCurve } from '../../components/ProductionCurve'
 
 const ATTENTION_CAP = 5
 
@@ -70,9 +71,7 @@ function PinPicker({
  * paving; "Items in progress — X of Y" replaced it briefly but is gone too
  * now — a bare count of how many Items have started doesn't answer a real
  * question on its own, and padding this screen with a stat card just to fill
- * space it doesn't organically need is worse than leaving it thin. A later
- * brief reimagines this as a cumulative production curve; nothing here is a
- * placeholder for that in the meantime.
+ * space it doesn't organically need is worse than leaving it thin.
  */
 export function ProgressScreen() {
   const contract = useOutletContext<MyContract>()
@@ -82,6 +81,7 @@ export function ProgressScreen() {
   const [progressRate, setProgressRate] = useState<ItemProgressRate[]>([])
   const [pins, setPins] = useState<PinnedItem[]>([])
   const [stationRecords, setStationRecords] = useState<EffectiveStationRow[]>([])
+  const [productionRecords, setProductionRecords] = useState<EffectiveProductionRow[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -100,13 +100,15 @@ export function ProgressScreen() {
       fetchItemProgressRate(contract.id),
       fetchPinnedItems(contract.id),
       fetchEffectiveStationRecords(contract.id),
+      fetchEffectiveProductionRecords(contract.id),
     ])
-      .then(([itemRows, priceRows, progressRows, pinRows, stationRows]) => {
+      .then(([itemRows, priceRows, progressRows, pinRows, stationRows, productionRows]) => {
         setItems(itemRows)
         setPrices(priceRows)
         setProgressRate(progressRows)
         setPins(pinRows)
         setStationRecords(stationRows)
+        setProductionRecords(productionRows)
         setStatus('ready')
       })
       .catch((err: unknown) => {
@@ -180,6 +182,38 @@ export function ProgressScreen() {
       .filter((r) => r.stationFrom !== null && pinnedIds.has(r.itemId))
       .map((r) => ({ itemId: r.itemId, stationFrom: r.stationFrom as number, stationTo: r.stationTo, lkiSegment: r.lkiSegment }))
   }, [stationRecords, pins])
+
+  // Time along the x-axis, one small chart per pinned Item — see
+  // ProductionCurve. Reuses the same pinned-Item selection as the ribbon
+  // (pins, itemById) but its own fetch (fetchEffectiveProductionRecords,
+  // work_date/quantity rather than station_from/station_to) — so
+  // "hasAnyProductionRecords" is checked against productionRecords, not
+  // reused from the ribbon's hasAnyRecords, even though both ultimately
+  // reflect the same underlying fact (any confirmed effective record on
+  // this contract). Keeping each section's empty-state check tied to its
+  // own fetch avoids one section's rendering depending on another's
+  // plumbing. Only two top-level empty states apply here, not three: every
+  // record carries work_date/quantity (NOT NULL columns), so there is no
+  // "records exist but none carry X" case the way the ribbon has for
+  // stations. The third case the brief calls for — an Item pinned with no
+  // records of its own — is handled per-item inside ProductionCurve
+  // itself, not as a section-wide empty state, because each Item's chart
+  // has its own axis; there is no shared axis for it to draw an empty
+  // track against the way an unworked ribbon lane can.
+  const hasAnyProductionRecords = productionRecords.length > 0
+  const curveItems = useMemo(
+    () =>
+      pins
+        .map((pin) => itemById.get(pin.itemId))
+        .filter((i): i is Item => i !== undefined)
+        .sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber))
+        .map((i) => ({ id: i.id, itemNumber: i.itemNumber, description: i.description, unit: i.unit, approximateQuantity: i.approximateQuantity })),
+    [pins, itemById],
+  )
+  const curveRecords = useMemo(() => {
+    const pinnedIds = new Set(pins.map((p) => p.itemId))
+    return productionRecords.filter((r) => pinnedIds.has(r.itemId))
+  }, [productionRecords, pins])
 
   async function handlePin() {
     if (!pinSelection) return
@@ -276,6 +310,31 @@ export function ProgressScreen() {
                   </div>
                 )}
               </>
+            )}
+          </section>
+
+          {/*
+            Production ordered before Coverage, not after: Coverage (the
+            ribbon) needs station_from/station_to, which real contracts
+            mostly don't carry yet (Venables: 181 confirmed records, zero
+            with a station — see the ribbon's own brief). Production needs
+            only work_date/quantity, which every record has, so on the one
+            real contract with real data today it renders fully while
+            Coverage still shows its "none carry a station" empty state.
+            Leading with the section actually showing something, on the
+            contract that actually has data, beats opening the screen on
+            an empty-state card. On the sandbox (where both render) this
+            is a smaller, more arguable call — but the real-contract case
+            is the one that matters more often, so it decided the order.
+          */}
+          <section className="mb-8">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Production</h2>
+            {!hasAnyProductionRecords ? (
+              <EmptyState title="No quantity has been recorded on this contract yet." description="Once the first confirmed record lands, its Item's production curve will draw here." />
+            ) : curveItems.length === 0 ? (
+              <EmptyState title="Quantity has been recorded on this contract, but nothing is pinned." description="Pin an Item above to see its production curve here." />
+            ) : (
+              <ProductionCurve items={curveItems} records={curveRecords} />
             )}
           </section>
 

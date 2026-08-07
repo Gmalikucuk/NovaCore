@@ -13,6 +13,19 @@ export function formatDayLabel(dateStr: string): string {
   return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
+/** "2026-07-10" -> "Jul 10" — same local-date parsing as formatDayLabel, without the weekday. For axis ticks, where the weekday is noise, not signal. */
+export function formatDayTick(dateStr: string): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/** Parsed as a local date, not UTC — the same timezone-safe construction every date-string parser in this file uses. Exposed for callers that need the underlying Date (e.g. to compute an epoch-time position on an axis), not just a formatted label. */
+export function parseLocalDate(dateStr: string): Date {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
 /** Whole days between `dateStr` and today (positive when dateStr is in the past) — parsed as local dates, not UTC, same timezone-safe approach as formatDayLabel. Rounded rather than floored/truncated so a DST transition day can't quietly shift the count by an hour's worth of a day. */
 export function daysAgo(dateStr: string): number {
   const [year, month, day] = dateStr.split('-').map(Number)
