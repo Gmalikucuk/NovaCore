@@ -3,6 +3,17 @@ import { useOutletContext } from 'react-router-dom'
 import { IconClipboardList } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { createItem, fetchItems, updateItem, type AreaBasis, type Item, type ItemInput } from '../../lib/supabase/items'
+import {
+  deleteApplicationRateTarget,
+  deleteDerivationRule,
+  fetchApplicationRateTargets,
+  fetchDerivationRules,
+  upsertApplicationRateTarget,
+  upsertDerivationRule,
+  type ApplicationRateTarget,
+  type DerivationBasis,
+  type DerivationRule,
+} from '../../lib/supabase/derivationRules'
 import { UNITS } from '../../lib/itemUnits'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
@@ -39,6 +50,42 @@ function parseAreaBasisSelectValue(raw: string): AreaBasis | null {
   return raw === '' ? null : (raw as AreaBasis)
 }
 
+const DERIVATION_BASIS_OPTIONS: { value: DerivationBasis; label: string }[] = [
+  { value: 'area', label: 'Area (m²)' },
+  { value: 'length', label: 'Length (m)' },
+]
+
+interface RuleForm {
+  coefficient: string
+  basis: DerivationBasis
+  sourceItemIds: Set<string>
+}
+
+const BLANK_RULE_FORM: RuleForm = { coefficient: '', basis: 'area', sourceItemIds: new Set() }
+
+interface TargetForm {
+  targetRate: string
+  bandLowPercent: string
+  bandHighPercent: string
+}
+
+const BLANK_TARGET_FORM: TargetForm = { targetRate: '', bandLowPercent: '', bandHighPercent: '' }
+
+/** "—" for no rule, never a blank cell — absence must read as absent. */
+function ruleSummary(rule: DerivationRule | undefined): string {
+  if (!rule) return '—'
+  const basisLabel = rule.basis === 'area' ? 'area' : 'length'
+  return `${rule.coefficient} × ${basisLabel} (${rule.sourceItemIds.length} source${rule.sourceItemIds.length === 1 ? '' : 's'})`
+}
+
+function targetSummary(target: ApplicationRateTarget | undefined): string {
+  if (!target) return '—'
+  if (target.bandLowPercent !== null && target.bandHighPercent !== null) {
+    return `${target.targetRate} (${target.bandLowPercent}–${target.bandHighPercent}%)`
+  }
+  return `${target.targetRate}`
+}
+
 function parseQuantity(raw: string): number {
   const n = Number(raw)
   return raw.trim() === '' || Number.isNaN(n) ? 0 : n
@@ -67,6 +114,14 @@ export function ItemsScreen() {
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
 
+  const [rules, setRules] = useState<DerivationRule[]>([])
+  const [targets, setTargets] = useState<ApplicationRateTarget[]>([])
+  const [ruleEditingId, setRuleEditingId] = useState<string | null>(null)
+  const [ruleForm, setRuleForm] = useState<RuleForm>(BLANK_RULE_FORM)
+  const [targetForm, setTargetForm] = useState<TargetForm>(BLANK_TARGET_FORM)
+  const [ruleError, setRuleError] = useState<string | null>(null)
+  const [savingRule, setSavingRule] = useState(false)
+
   useEffect(() => {
     setStatus('loading')
     fetchItems(contract.id)
@@ -78,7 +133,16 @@ export function ItemsScreen() {
         setLoadError(errorMessage(err))
         setStatus('error')
       })
+    fetchDerivationRules(contract.id)
+      .then(setRules)
+      .catch((err: unknown) => console.warn('fetchDerivationRules failed:', err))
+    fetchApplicationRateTargets(contract.id)
+      .then(setTargets)
+      .catch((err: unknown) => console.warn('fetchApplicationRateTargets failed:', err))
   }, [contract.id])
+
+  const ruleByItemId = useMemo(() => new Map(rules.map((r) => [r.itemId, r])), [rules])
+  const targetByItemId = useMemo(() => new Map(targets.map((t) => [t.itemId, t])), [targets])
 
   const sorted = useMemo(() => [...items].sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber)), [items])
 
@@ -162,6 +226,85 @@ export function ItemsScreen() {
       setEditError(errorMessage(err))
     } finally {
       setSavingEdit(false)
+    }
+  }
+
+  function startEditRule(item: Item) {
+    const rule = ruleByItemId.get(item.id)
+    const target = targetByItemId.get(item.id)
+    setRuleEditingId(item.id)
+    setRuleForm(rule ? { coefficient: String(rule.coefficient), basis: rule.basis, sourceItemIds: new Set(rule.sourceItemIds) } : BLANK_RULE_FORM)
+    setTargetForm(
+      target
+        ? { targetRate: String(target.targetRate), bandLowPercent: target.bandLowPercent === null ? '' : String(target.bandLowPercent), bandHighPercent: target.bandHighPercent === null ? '' : String(target.bandHighPercent) }
+        : BLANK_TARGET_FORM,
+    )
+    setRuleError(null)
+  }
+
+  function toggleSourceItem(itemId: string) {
+    setRuleForm((prev) => {
+      const next = new Set(prev.sourceItemIds)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return { ...prev, sourceItemIds: next }
+    })
+  }
+
+  // Rule and target save independently, so entering only one of the two
+  // (the common case — most Items with a rate target carry no derivation
+  // rule, and vice versa) never requires touching the other's fields.
+  async function handleSaveRuleAndTarget(e: FormEvent) {
+    e.preventDefault()
+    if (!ruleEditingId) return
+    setRuleError(null)
+
+    const coefficientTrim = ruleForm.coefficient.trim()
+    const targetRateTrim = targetForm.targetRate.trim()
+
+    if (coefficientTrim !== '' && (Number.isNaN(Number(coefficientTrim)) || Number(coefficientTrim) <= 0)) {
+      setRuleError('Coefficient must be a positive number.')
+      return
+    }
+    if (coefficientTrim !== '' && ruleForm.sourceItemIds.size === 0) {
+      setRuleError('A rule needs at least one source Item.')
+      return
+    }
+    if (targetRateTrim !== '' && (Number.isNaN(Number(targetRateTrim)) || Number(targetRateTrim) <= 0)) {
+      setRuleError('Target rate must be a positive number.')
+      return
+    }
+
+    setSavingRule(true)
+    try {
+      if (coefficientTrim === '') {
+        if (ruleByItemId.has(ruleEditingId)) await deleteDerivationRule(ruleEditingId)
+      } else {
+        await upsertDerivationRule(ruleEditingId, contract.id, {
+          coefficient: Number(coefficientTrim),
+          basis: ruleForm.basis,
+          sourceItemIds: [...ruleForm.sourceItemIds],
+        })
+      }
+
+      if (targetRateTrim === '') {
+        if (targetByItemId.has(ruleEditingId)) await deleteApplicationRateTarget(ruleEditingId)
+      } else {
+        await upsertApplicationRateTarget(ruleEditingId, contract.id, {
+          targetRate: Number(targetRateTrim),
+          bandLowPercent: targetForm.bandLowPercent.trim() === '' ? null : Number(targetForm.bandLowPercent.trim()),
+          bandHighPercent: targetForm.bandHighPercent.trim() === '' ? null : Number(targetForm.bandHighPercent.trim()),
+        })
+      }
+
+      const [freshRules, freshTargets] = await Promise.all([fetchDerivationRules(contract.id), fetchApplicationRateTargets(contract.id)])
+      setRules(freshRules)
+      setTargets(freshTargets)
+      setRuleEditingId(null)
+    } catch (err) {
+      setRuleError(errorMessage(err))
+    } finally {
+      setSavingRule(false)
     }
   }
 
@@ -286,6 +429,8 @@ export function ItemsScreen() {
                     <TH>Unit of Measure</TH>
                     <TH>Area basis</TH>
                     <TH align="right">Approximate Quantity</TH>
+                    <TH>Derivation</TH>
+                    <TH>App. rate target</TH>
                     <TH />
                   </TR>
                 </THead>
@@ -293,7 +438,7 @@ export function ItemsScreen() {
                   {sorted.map((item) =>
                     editingId === item.id ? (
                       <TR key={item.id}>
-                        <TD colSpan={6} dense>
+                        <TD colSpan={8} dense>
                           <form onSubmit={handleSaveEdit} className="flex flex-wrap items-center gap-2">
                             <Input
                               className="nc-numeric w-32"
@@ -345,6 +490,118 @@ export function ItemsScreen() {
                           </form>
                         </TD>
                       </TR>
+                    ) : ruleEditingId === item.id ? (
+                      <TR key={item.id}>
+                        <TD colSpan={8} dense>
+                          <form onSubmit={handleSaveRuleAndTarget} className="flex flex-col gap-4">
+                            <div>
+                              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Derivation rule — leave Coefficient blank for no rule</p>
+                              <div className="flex flex-wrap items-end gap-3">
+                                <div className="w-32">
+                                  <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="li-rule-coefficient">
+                                    Coefficient
+                                  </label>
+                                  <Input
+                                    id="li-rule-coefficient"
+                                    className="nc-numeric"
+                                    type="number"
+                                    inputMode="decimal"
+                                    step="any"
+                                    value={ruleForm.coefficient}
+                                    onChange={(e) => setRuleForm({ ...ruleForm, coefficient: e.target.value })}
+                                    placeholder="0.26"
+                                  />
+                                </div>
+                                <div className="w-40">
+                                  <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="li-rule-basis">
+                                    Basis
+                                  </label>
+                                  <Select id="li-rule-basis" value={ruleForm.basis} onChange={(e) => setRuleForm({ ...ruleForm, basis: e.target.value as DerivationBasis })}>
+                                    {DERIVATION_BASIS_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        {o.label}
+                                      </option>
+                                    ))}
+                                  </Select>
+                                </div>
+                                <div className="min-w-[16rem] flex-1">
+                                  <p className="mb-1 block text-xs text-nc-text-muted">Sources — which Items' same-date records this rule sums</p>
+                                  <div className="max-h-40 overflow-y-auto rounded border border-nc-border bg-white p-2">
+                                    {sorted
+                                      .filter((i) => i.id !== item.id)
+                                      .map((i) => (
+                                        <label key={i.id} className="flex items-center gap-2 py-0.5 text-sm">
+                                          <input type="checkbox" checked={ruleForm.sourceItemIds.has(i.id)} onChange={() => toggleSourceItem(i.id)} />
+                                          <span className="nc-numeric text-nc-text-muted">{i.itemNumber}</span>
+                                          <span>{i.description}</span>
+                                        </label>
+                                      ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            <div>
+                              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Application rate target — leave Target rate blank for none</p>
+                              <div className="flex flex-wrap items-end gap-3">
+                                <div className="w-36">
+                                  <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="li-target-rate">
+                                    Target rate
+                                  </label>
+                                  <Input
+                                    id="li-target-rate"
+                                    className="nc-numeric"
+                                    type="number"
+                                    inputMode="decimal"
+                                    step="any"
+                                    value={targetForm.targetRate}
+                                    onChange={(e) => setTargetForm({ ...targetForm, targetRate: e.target.value })}
+                                    placeholder="124.35"
+                                  />
+                                </div>
+                                <div className="w-32">
+                                  <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="li-target-band-low">
+                                    Band low %
+                                  </label>
+                                  <Input
+                                    id="li-target-band-low"
+                                    className="nc-numeric"
+                                    type="number"
+                                    inputMode="decimal"
+                                    step="any"
+                                    value={targetForm.bandLowPercent}
+                                    onChange={(e) => setTargetForm({ ...targetForm, bandLowPercent: e.target.value })}
+                                    placeholder="96"
+                                  />
+                                </div>
+                                <div className="w-32">
+                                  <label className="mb-1 block text-xs text-nc-text-muted" htmlFor="li-target-band-high">
+                                    Band high %
+                                  </label>
+                                  <Input
+                                    id="li-target-band-high"
+                                    className="nc-numeric"
+                                    type="number"
+                                    inputMode="decimal"
+                                    step="any"
+                                    value={targetForm.bandHighPercent}
+                                    onChange={(e) => setTargetForm({ ...targetForm, bandHighPercent: e.target.value })}
+                                    placeholder="104"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button type="submit" disabled={savingRule}>
+                                {savingRule ? 'Saving…' : 'Save'}
+                              </Button>
+                              <Button type="button" variant="ghost" onClick={() => setRuleEditingId(null)}>
+                                Cancel
+                              </Button>
+                              {ruleError && <span className="text-sm text-nc-danger-text">{ruleError}</span>}
+                            </div>
+                          </form>
+                        </TD>
+                      </TR>
                     ) : (
                       <TR key={item.id}>
                         <TD className="nc-numeric">{item.itemNumber}</TD>
@@ -360,10 +617,17 @@ export function ItemsScreen() {
                         <TD align="right" className="nc-numeric">
                           {displayQuantity(item)}
                         </TD>
+                        <TD className="nc-numeric">{ruleSummary(ruleByItemId.get(item.id))}</TD>
+                        <TD className="nc-numeric">{targetSummary(targetByItemId.get(item.id))}</TD>
                         <TD align="right" dense>
-                          <Button type="button" variant="secondary" onClick={() => startEdit(item)}>
-                            Edit
-                          </Button>
+                          <div className="flex justify-end gap-2">
+                            <Button type="button" variant="secondary" onClick={() => startEdit(item)}>
+                              Edit
+                            </Button>
+                            <Button type="button" variant="secondary" onClick={() => startEditRule(item)}>
+                              Rules
+                            </Button>
+                          </div>
                         </TD>
                       </TR>
                     ),

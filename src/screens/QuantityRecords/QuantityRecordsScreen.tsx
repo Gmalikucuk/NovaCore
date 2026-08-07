@@ -15,12 +15,14 @@ import {
   type Direction,
 } from '../../lib/supabase/quantityRecords'
 import { fetchItemMonths, fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
+import { fetchDerivationRules, type DerivationRule } from '../../lib/supabase/derivationRules'
 import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { formatDayLabel, todayLocalDateString } from '../../lib/dateFormat'
 import { parseStation, quantity as fmtQuantity, station } from '../../lib/format'
 import { areaDifference, computeAreaFromWidth } from '../../lib/calculations/stretch'
+import { deriveQuantity } from '../../lib/calculations/derivation'
 import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, StatusBadge, Spinner } from '../../components/ui'
 
 type DayRecord = Omit<QueuedQuantityRecord, 'pending' | 'lastError'>
@@ -61,6 +63,7 @@ export function QuantityRecordsScreen() {
   const [items, setItems] = useState<Item[]>([])
   const [locations, setLocations] = useState<string[]>([])
   const [itemProgress, setItemProgress] = useState<ItemProgress[]>([])
+  const [rules, setRules] = useState<DerivationRule[]>([])
   const [allRecords, setAllRecords] = useState<DayRecord[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -82,6 +85,7 @@ export function QuantityRecordsScreen() {
   // prefill for a correction/edit (an existing record's figure is already
   // the record of truth).
   const [areaFieldTouched, setAreaFieldTouched] = useState(false)
+  const [derivedQuantityTouched, setDerivedQuantityTouched] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
@@ -107,6 +111,11 @@ export function QuantityRecordsScreen() {
       .catch(() => {
         console.warn('fetchItemProgress failed — Add picker will be unsorted')
       })
+    // Drives the derived-quantity convenience-fill only — a failed fetch
+    // leaves every Item behaving as if it has no rule, never a page error.
+    fetchDerivationRules(contract.id)
+      .then(setRules)
+      .catch((err: unknown) => console.warn('fetchDerivationRules failed:', err))
   }, [contract.id])
 
   function reload() {
@@ -253,6 +262,39 @@ export function QuantityRecordsScreen() {
   const enteredAreaIsh = areaUnit ? (fields.quantity === '' ? null : Number(fields.quantity)) : fields.area === '' ? null : Number(fields.area)
   const areaDiff = areaDifference(enteredAreaIsh !== null && !Number.isNaN(enteredAreaIsh) ? enteredAreaIsh : null, computedArea)
 
+  // Derivation (0039) — a rule proposes this Item's quantity from OTHER
+  // Items' own same-date records; it never writes anything on its own.
+  // The proposal only ever convenience-fills the Quantity field, exactly
+  // like width x reach does for area above, and is superseded the instant
+  // the person types into Quantity directly.
+  const ruleByItemId = useMemo(() => new Map(rules.map((r) => [r.itemId, r])), [rules])
+  const areaBasisByItemId = useMemo(() => new Map(items.map((i) => [i.id, i.areaBasis])), [items])
+  const derivationRule = formItem ? ruleByItemId.get(formItem.id) : undefined
+
+  const sourceRecordsForDerivation = useMemo(() => {
+    if (!derivationRule) return []
+    const sourceIds = new Set(derivationRule.sourceItemIds)
+    return allRecords
+      .filter((r) => r.workDate === workDate && sourceIds.has(r.itemId) && !supersededByConfirmed.has(r.id))
+      .map((r) => ({ itemId: r.itemId, quantity: r.quantity, area: r.area, stationFrom: r.stationFrom, stationTo: r.stationTo }))
+  }, [allRecords, derivationRule, workDate, supersededByConfirmed])
+
+  const derivedProposal = useMemo(
+    () => (derivationRule ? deriveQuantity(derivationRule, areaBasisByItemId, sourceRecordsForDerivation) : null),
+    [derivationRule, areaBasisByItemId, sourceRecordsForDerivation],
+  )
+
+  useEffect(() => {
+    if (!derivationRule || derivedQuantityTouched || derivedProposal === null) return
+    setFields((f) => ({ ...f, quantity: derivedProposal.toFixed(2) }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [derivedProposal, derivationRule, derivedQuantityTouched])
+
+  const enteredQuantityForDerivation = fields.quantity === '' ? null : Number(fields.quantity)
+  const derivationDiff = derivationRule
+    ? areaDifference(enteredQuantityForDerivation !== null && !Number.isNaN(enteredQuantityForDerivation) ? enteredQuantityForDerivation : null, derivedProposal)
+    : null
+
   function openAdd() {
     setPanelOpen(true)
     setFormItem(null)
@@ -260,6 +302,7 @@ export function QuantityRecordsScreen() {
     setEditingId(null)
     setFields(BLANK)
     setAreaFieldTouched(false)
+    setDerivedQuantityTouched(false)
     setFormError(null)
     setPickerSearch('')
     requestAnimationFrame(() => pickerSearchRef.current?.focus())
@@ -269,6 +312,7 @@ export function QuantityRecordsScreen() {
     setFormItem(item)
     setFields(BLANK)
     setAreaFieldTouched(false)
+    setDerivedQuantityTouched(false)
     setCorrectingId(null)
     setEditingId(null)
     setFormError(null)
@@ -282,6 +326,7 @@ export function QuantityRecordsScreen() {
     setEditingId(null)
     setFields(BLANK)
     setAreaFieldTouched(false)
+    setDerivedQuantityTouched(false)
     setFormError(null)
   }
 
@@ -310,6 +355,7 @@ export function QuantityRecordsScreen() {
     // silently recomputed just because a width and stations happen to be
     // present on it.
     setAreaFieldTouched(true)
+    setDerivedQuantityTouched(true)
     setFormError(null)
     requestAnimationFrame(() => stationFromRef.current?.focus())
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -338,6 +384,7 @@ export function QuantityRecordsScreen() {
       area: record.area !== null ? String(record.area) : '',
     })
     setAreaFieldTouched(true)
+    setDerivedQuantityTouched(true)
     setFormError(null)
     requestAnimationFrame(() => stationFromRef.current?.focus())
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -500,6 +547,7 @@ export function QuantityRecordsScreen() {
         // included — is the default for everything else.
         setFields((f) => ({ ...BLANK, location: f.location, direction: f.direction, lkiSegment: f.lkiSegment, lkiVersion: f.lkiVersion }))
         setAreaFieldTouched(false)
+        setDerivedQuantityTouched(false)
         setCorrectingId(null)
         stationFromRef.current?.focus()
         refreshSilently()
@@ -674,6 +722,7 @@ export function QuantityRecordsScreen() {
                               setCorrectingId(null)
                               setFields(BLANK)
                               setAreaFieldTouched(false)
+                              setDerivedQuantityTouched(false)
                             }}
                           >
                             Cancel correction
@@ -859,13 +908,29 @@ export function QuantityRecordsScreen() {
                             value={fields.quantity}
                             onChange={(e) => {
                               if (areaUnit) setAreaFieldTouched(true)
+                              if (derivationRule) setDerivedQuantityTouched(true)
                               setFields({ ...fields, quantity: e.target.value })
                             }}
                             onKeyDown={handleFormKeyDown}
                             disabled={!formUsable}
                           />
                           {areaUnit && <p className="mt-1 w-40 text-xs text-nc-text-subtle">This Item's quantity is its area.</p>}
+                          {derivationRule && (
+                            <p className="mt-1 w-40 text-xs text-nc-text-subtle">
+                              Derived: {derivationRule.coefficient} × {derivationRule.basis} of {derivationRule.sourceItemIds.length} Item{derivationRule.sourceItemIds.length === 1 ? '' : 's'}{' '}
+                              recorded {formatDayLabel(workDate)}.
+                            </p>
+                          )}
                         </div>
+                        {derivationRule && derivationDiff !== null && derivationDiff !== 0 && (
+                          // Never an alarm tone — the field sheet's own
+                          // figure supersedes the derivation by the same
+                          // standing rule as area, not an error to correct.
+                          <p className="w-full text-xs text-nc-text-muted">
+                            Entered quantity is {fmtQuantity(Math.abs(derivationDiff))} {formItem?.unit} {derivationDiff > 0 ? 'more' : 'less'} than the derived figure (
+                            {derivedProposal === null ? '—' : fmtQuantity(derivedProposal)} {formItem?.unit}).
+                          </p>
+                        )}
                         {showStretchFields && areaDiff !== null && areaDiff !== 0 && (
                           // Never an alarm tone — a difference here can
                           // legitimately mean the field sheet's own measured

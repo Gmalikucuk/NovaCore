@@ -1120,6 +1120,76 @@ request PATCH "items?id=eq.$GUARD_LUMP_SUM_ID" "$QUANTITIES_TOKEN" '{"descriptio
 ok=0; [ "$STATUS" = "200" ] && ok=1
 check "quantities: ordinary field edit still succeeds (create_items, finance fields untouched)" "200" "$ok" "$STATUS $BODY_OUT"
 
+# =============================================================================
+# item_derivation_rules / item_derivation_sources / item_application_rate_
+# targets (0039) — same create_items gate as area_basis, fresh tables with
+# no prior grant to widen (see 0039's own header on why no trigger is
+# needed here, unlike 0037). PROBE-002 (Tonne, separately_measured) is the
+# rule/target Item; PROBE-004 (also Tonne, separately_measured, same
+# contract) is the source. Both pre-exist as fixtures (0025).
+# GUARD_LUMP_SUM_ID (PROBE-ADMIN, just above) is what makes the
+# cross-contract composite-FK check possible this far into the script.
+# =============================================================================
+echo
+echo "=== item_derivation_rules / sources / item_application_rate_targets (0039) ==="
+
+RULE_ITEM_ID="c0ffee00-c0de-0000-0000-000000000002"
+SOURCE_ITEM_ID="3c4e0a28-2e27-40ee-b1e6-4f8cd6233c33"
+
+request POST "item_derivation_rules" "$FULL_TOKEN" \
+  "{\"item_id\":\"$RULE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"coefficient\":0.26,\"basis\":\"area\"}"
+ok=0; [ "$STATUS" = "201" ] && ok=1
+check "full: create a derivation rule (create_items)" "201" "$ok" "$STATUS $BODY_OUT"
+
+request POST "item_derivation_sources" "$FULL_TOKEN" \
+  "{\"rule_item_id\":\"$RULE_ITEM_ID\",\"source_item_id\":\"$SOURCE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\"}"
+ok=0; [ "$STATUS" = "201" ] && ok=1
+check "full: add a source to the rule (create_items)" "201" "$ok" "$STATUS $BODY_OUT"
+
+request GET "item_derivation_rules?item_id=eq.$RULE_ITEM_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities: reads the rule (membership alone, no right needed)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request POST "item_derivation_rules" "$QUANTITIES_TOKEN" \
+  "{\"item_id\":\"$SOURCE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"coefficient\":1,\"basis\":\"area\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: create a derivation rule rejected (no create_items)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# contract_id correctly matches the rule (PROJECT_ID) here — it's the
+# SOURCE Item that actually belongs elsewhere (GUARD_LUMP_SUM_ID, on
+# PROBE-ADMIN), isolating the second composite FK specifically rather
+# than just tripping the first one on a contract_id/rule mismatch.
+request POST "item_derivation_sources" "$FULL_TOKEN" \
+  "{\"rule_item_id\":\"$RULE_ITEM_ID\",\"source_item_id\":\"$GUARD_LUMP_SUM_ID\",\"contract_id\":\"$PROJECT_ID\"}"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: source Item that actually belongs to a different contract rejected (composite FK)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request POST "item_application_rate_targets" "$FULL_TOKEN" \
+  "{\"item_id\":\"$RULE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"target_rate\":124.35,\"band_low_percent\":96,\"band_high_percent\":104}"
+ok=0; [ "$STATUS" = "201" ] && ok=1
+check "full: create an application rate target (create_items)" "201" "$ok" "$STATUS $BODY_OUT"
+
+request POST "item_application_rate_targets" "$QUANTITIES_TOKEN" \
+  "{\"item_id\":\"$SOURCE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"target_rate\":100}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities: create an application rate target rejected (no create_items)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# Cleanup — rule delete cascades to its source row. "{}" body triggers
+# Prefer: return=representation (see request()), so PostgREST returns 200
+# with the deleted row rather than a bodyless 204 — matching every other
+# DELETE cleanup in this suite (pinned_items, item_jobs).
+request DELETE "item_derivation_rules?item_id=eq.$RULE_ITEM_ID" "$FULL_TOKEN" "{}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "cleanup: derivation rule (and its source, via cascade) deleted" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request DELETE "item_application_rate_targets?item_id=eq.$RULE_ITEM_ID" "$FULL_TOKEN" "{}"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "cleanup: application rate target deleted" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "item_derivation_sources?rule_item_id=eq.$RULE_ITEM_ID" "$FULL_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "cleanup: derivation source cascaded away with its rule" "200, []" "$ok" "$STATUS $BODY_OUT"
+
 # correct_only holds manage_members but has never been added to this
 # contract by anyone — seeing it at all is the widened contracts_select_
 # member (0028) actually doing something, not is_member() coincidentally
