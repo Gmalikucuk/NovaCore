@@ -142,7 +142,7 @@ export function ProgressScreen() {
         .filter((row): row is { pin: PinnedItem; progress: ItemProgressRate } => row.progress !== undefined)
         .map((row) => ({
           ...row,
-          margin: contract.viewRates
+          margin: contract.viewRates && contract.costTrackingEnabled
             ? computeMargin(
                 row.progress.quantityToDate,
                 priceByItem.get(row.pin.itemId)?.costPrice ?? null,
@@ -151,7 +151,7 @@ export function ProgressScreen() {
               )
             : null,
         })),
-    [pins, progressByItem, priceByItem, contract.viewRates],
+    [pins, progressByItem, priceByItem, contract.viewRates, contract.costTrackingEnabled],
   )
 
   // Station along the x-axis, one lane per pinned Item — see StationRibbon.
@@ -362,7 +362,7 @@ export function ProgressScreen() {
               <>
                 <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
                   {visibleProblems.map((p) => (
-                    <ProblemRow key={`${p.kind}-${p.row.itemId}`} problem={p} priceByItem={priceByItem} />
+                    <ProblemRow key={`${p.kind}-${p.row.itemId}`} problem={p} priceByItem={priceByItem} costTrackingEnabled={contract.costTrackingEnabled} />
                   ))}
                 </div>
                 {hiddenProblemCount > 0 && (

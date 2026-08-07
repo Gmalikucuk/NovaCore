@@ -15,7 +15,7 @@ function ProblemIcon({ kind }: { kind: ProblemItem['kind'] }) {
   return <IconFlag size={16} stroke={1.75} className="text-nc-info-text" />
 }
 
-function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>): string {
+function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>, costTrackingEnabled: boolean): string {
   const { kind, row } = p
   if (kind === 'stalled') {
     return row.lastWorkDate ? `No activity since ${row.lastWorkDate} — not finished.` : 'No confirmed activity yet — not finished.'
@@ -26,8 +26,10 @@ function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>): s
     // A per-unit rate turns the overage into a dollar figure directly. A
     // total cost has no such reading — "overage x total" isn't a real
     // number, it's just wrong, so this stays silent rather than showing
-    // one (0023).
-    const atCost = price?.costPrice !== null && price?.costPrice !== undefined && price.costBasis === 'per_unit' ? ` — ${money(overage * price.costPrice)} at cost` : ''
+    // one (0023). Suppressed entirely, regardless of basis, until cost
+    // tracking is deliberately on for this Item's contract (0042).
+    const atCost =
+      costTrackingEnabled && price?.costPrice !== null && price?.costPrice !== undefined && price.costBasis === 'per_unit' ? ` — ${money(overage * price.costPrice)} at cost` : ''
     return `${fmtQuantity(overage)} ${row.unit} over the Approximate Quantity${atCost}.`
   }
   // behind_rate — the classification still uses workingDaysRemaining
@@ -48,7 +50,18 @@ function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>): s
  * contract it's looking at, Overview is mixing rows from several and needs
  * to say which one each row is from.
  */
-export function ProblemRow({ problem, priceByItem, contractLabel }: { problem: ProblemItem; priceByItem: Map<string, ItemPrice>; contractLabel?: string }) {
+export function ProblemRow({
+  problem,
+  priceByItem,
+  costTrackingEnabled,
+  contractLabel,
+}: {
+  problem: ProblemItem
+  priceByItem: Map<string, ItemPrice>
+  /** Whether the "at cost" overage figure may show at all, for this problem's own contract (0042) — required, not defaulted, so a new call site can't silently inherit "on." */
+  costTrackingEnabled: boolean
+  contractLabel?: string
+}) {
   return (
     <div className="flex items-start gap-3 px-4 py-3">
       <ProblemIcon kind={problem.kind} />
@@ -57,7 +70,7 @@ export function ProblemRow({ problem, priceByItem, contractLabel }: { problem: P
           <span className="nc-numeric font-semibold text-nc-text">{problem.row.itemNumber}</span> <span className="text-nc-text-muted">{problem.row.description}</span>
           {contractLabel && <span className="ml-2 text-xs text-nc-text-subtle">· {contractLabel}</span>}
         </p>
-        <p className="text-sm text-nc-text-muted">{problemSentence(problem, priceByItem)}</p>
+        <p className="text-sm text-nc-text-muted">{problemSentence(problem, priceByItem, costTrackingEnabled)}</p>
       </div>
       <span className="shrink-0 rounded-full bg-nc-secondary px-2 py-0.5 text-xs font-medium text-nc-text-muted">{PROBLEM_KIND_LABEL[problem.kind]}</span>
     </div>

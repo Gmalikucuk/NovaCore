@@ -153,11 +153,12 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   const periodStartCol = baseHeaders.length + 1
   const trailingStartCol = periodStartCol + monthHeaderCount
 
-  // A cost caption row (viewRates contracts only — no Cost/Margin column
-  // exists at all otherwise) shifts the grouped header and every data row
-  // down by one, same "genuinely different shape" reasoning as the Finance
-  // export's own sandbox row.
-  const costCaptionRowCount = contract.viewRates ? 1 : 0
+  // A cost caption row (viewRates contracts with cost tracking on only —
+  // 0042; every Est. Cost/Est. Margin cell is already null otherwise, so
+  // there's nothing left to caveat) shifts the grouped header and every
+  // data row down by one, same "genuinely different shape" reasoning as
+  // the Finance export's own sandbox row.
+  const costCaptionRowCount = contract.viewRates && contract.costTrackingEnabled ? 1 : 0
   const headerRow2Num = 2 + costCaptionRowCount
   const headerRow3Num = headerRow2Num + 1
   const dataStartRowNum = headerRow3Num + 1
@@ -178,10 +179,11 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
   titleCell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } }
 
-  // Row 2 (viewRates contracts only) — every "Est. Cost"/"Est. Margin"
-  // column below is Keywest's own bid estimate, not a measured fact; same
-  // wording as Rates and the Finance export's equivalent note.
-  if (contract.viewRates) {
+  // Row 2 (viewRates contracts with cost tracking on only, 0042) — every
+  // "Est. Cost"/"Est. Margin" column below is Keywest's own bid estimate,
+  // not a measured fact; same wording as Rates and the Finance export's
+  // equivalent note.
+  if (contract.viewRates && contract.costTrackingEnabled) {
     sheet.mergeCells(2, 1, 2, colCount)
     const costCaptionCell = sheet.getCell(2, 1)
     costCaptionCell.value = 'Cost and margin figures are Keywest’s own bid estimate — actual cost is not yet recorded in NovaCore.'
@@ -251,7 +253,10 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
       const itemProgress = progressByItem.get(item.id)
       const price = priceByItem.get(item.id)
       const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
-      const cost = unitPriced ? (price?.costPrice ?? null) : null
+      // Suppressed until cost tracking is deliberately on for this
+      // contract (0042) — costToDate/marginToDate cascade from this one
+      // variable, same as FinanceMonthScreen's own gate.
+      const cost = unitPriced && contract.costTrackingEnabled ? (price?.costPrice ?? null) : null
       const costBasis = unitPriced ? (price?.costBasis ?? null) : null
       const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
       const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
@@ -395,16 +400,16 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
 
   const headers = ['Item #', 'Description', 'Approx. Qty', 'Qty to Date', 'Remaining', '% Complete', ...(contract.viewRates ? ['Unit Price', 'Value to Date', 'Est. Cost to Date', 'Est. Margin to Date'] : [])]
 
-  // A cost caption row (viewRates contracts only) shifts the header and
-  // every data row down by one — same reasoning as the Tracker sheet's own
-  // equivalent row above.
-  const costCaptionRowCount = contract.viewRates ? 1 : 0
+  // A cost caption row (viewRates contracts with cost tracking on only,
+  // 0042) shifts the header and every data row down by one — same
+  // reasoning as the Tracker sheet's own equivalent row above.
+  const costCaptionRowCount = contract.viewRates && contract.costTrackingEnabled ? 1 : 0
   const headerRowNum = 1 + costCaptionRowCount
   const dataStartRowNum = headerRowNum + 1
 
   const sheet = workbook.addWorksheet('Summary', { views: [{ state: 'frozen', xSplit: 2, ySplit: headerRowNum }] })
 
-  if (contract.viewRates) {
+  if (contract.viewRates && contract.costTrackingEnabled) {
     sheet.mergeCells(1, 1, 1, headers.length)
     const costCaptionCell = sheet.getCell(1, 1)
     costCaptionCell.value = 'Cost and margin figures are Keywest’s own bid estimate — actual cost is not yet recorded in NovaCore.'
@@ -424,7 +429,7 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
     const itemProgress = progressByItem.get(item.id)
     const price = priceByItem.get(item.id)
     const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
-    const cost = unitPriced ? (price?.costPrice ?? null) : null
+    const cost = unitPriced && contract.costTrackingEnabled ? (price?.costPrice ?? null) : null
     const costBasis = unitPriced ? (price?.costBasis ?? null) : null
     const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
     const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null

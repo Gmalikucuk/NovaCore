@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type ReactN
 import { useOutletContext } from 'react-router-dom'
 import { IconArrowDown, IconArrowUp, IconArrowsSort, IconCurrencyDollar } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
-import { updateTenderPrice } from '../../lib/supabase/contracts'
+import { updateTenderPrice, updateCostTrackingEnabled } from '../../lib/supabase/contracts'
 import { fetchItems, updateItemAuthorizedValue, updateItemPercentComplete, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchItemProgressRate } from '../../lib/supabase/monthlyPeriods'
@@ -12,7 +12,7 @@ import { measuredRollup, unmeasuredRollup } from '../../lib/calculations/project
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
 import { errorMessage } from '../../lib/errorMessage'
 import { percent, quantity as fmtQuantity, rate } from '../../lib/format'
-import { EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 const COL_COUNT = 11
 
@@ -229,6 +229,28 @@ export function RatesScreen() {
   const [tenderPriceSaving, setTenderPriceSaving] = useState(false)
   const [tenderPriceError, setTenderPriceError] = useState<string | null>(null)
 
+  // Whether Margin/Est. cost render anywhere outside this screen's own
+  // entry columns (0042) — mirrored into local state for the same reason
+  // tenderPrice is: a toggle here reflects immediately without waiting on
+  // Sidebar's own outer contract fetch to re-run.
+  const [costTrackingEnabled, setCostTrackingEnabled] = useState(contract.costTrackingEnabled)
+  useEffect(() => setCostTrackingEnabled(contract.costTrackingEnabled), [contract.id, contract.costTrackingEnabled])
+  const [costTrackingSaving, setCostTrackingSaving] = useState(false)
+  const [costTrackingError, setCostTrackingError] = useState<string | null>(null)
+
+  async function toggleCostTracking() {
+    setCostTrackingSaving(true)
+    setCostTrackingError(null)
+    try {
+      await updateCostTrackingEnabled(contract.id, !costTrackingEnabled)
+      setCostTrackingEnabled((v) => !v)
+    } catch (err) {
+      setCostTrackingError(errorMessage(err))
+    } finally {
+      setCostTrackingSaving(false)
+    }
+  }
+
   useEffect(() => {
     setStatus('loading')
     // fetchItemProgressRate is scoped to unit_price Items only (v_item_
@@ -266,7 +288,7 @@ export function RatesScreen() {
         const costPrice = price?.costPrice ?? null
         const costBasis = price?.costBasis ?? null
         const unitPrice = price?.unitPrice ?? null
-        const financials = rowFinancials({
+        const rawFinancials = rowFinancials({
           itemKind: item.itemKind,
           approximateQuantity: item.approximateQuantity,
           provisionalSum: item.provisionalSum,
@@ -274,6 +296,15 @@ export function RatesScreen() {
           costBasis,
           unitPrice,
         })
+        // Margin/Margin % are suppressed until cost tracking is deliberately
+        // turned on (0042) — Unit cost/Ext. cost stay real regardless, since
+        // those are the entry surface itself, not a derived claim. Nulled
+        // here, at the one place every row's financials are built, rather
+        // than at each render site — every consumer downstream (the row
+        // cell, section subtotals, the grand total, the tercile bands) sees
+        // "no margin" through the exact same absent-reads-as-em-dash path
+        // it already uses for a Provisional Sum row's own null margin.
+        const financials = costTrackingEnabled ? rawFinancials : { ...rawFinancials, margin: null, marginPercent: null }
         // A Provisional Sum Item is "priced" the moment Schedule 7's own
         // allowance is on the Item — nothing is ever entered for it here.
         // Every other kind is priced once both its extended figures are
@@ -281,7 +312,7 @@ export function RatesScreen() {
         const priced = item.itemKind === 'provisional_sum' ? item.provisionalSum !== null : financials.extCost !== null && financials.extAmount !== null
         return { item, costPrice, costBasis, unitPrice, quantityToDate: quantityByItem.get(item.id) ?? 0, financials, priced }
       }),
-    [items, prices, quantityByItem],
+    [items, prices, quantityByItem, costTrackingEnabled],
   )
 
   const rows = useMemo<IndexedRow[]>(() => {
@@ -482,7 +513,10 @@ export function RatesScreen() {
   // carries a cost, so it was never a candidate), and showing that number
   // alone read as "the contract has 45 Items," not "45 of them can be
   // costed."
-  const subtitle = `${contract.name}${status === 'ready' ? ` · ${rows.length} Items · ${grandTotal.costCoverage.count} of ${grandTotal.costCoverage.total} have an Est. cost` : ''}`
+  // The cost-coverage fragment is itself a claim about how much cost data
+  // means something — quiet along with margin (0042) rather than reporting
+  // a completeness fraction for figures nothing downstream is showing.
+  const subtitle = `${contract.name}${status === 'ready' ? ` · ${rows.length} Items${costTrackingEnabled ? ` · ${grandTotal.costCoverage.count} of ${grandTotal.costCoverage.total} have an Est. cost` : ''}` : ''}`
 
   function sortableHeader(key: SortKey, label: string, align: 'left' | 'right' = 'left'): ReactNode {
     return (
@@ -789,7 +823,7 @@ export function RatesScreen() {
         </TD>
         <TD align="right" className="nc-numeric align-middle">
           {agg.extCostSum === null ? '—' : rate(agg.extCostSum)}
-          {agg.costCoverage.total > 0 && (
+          {costTrackingEnabled && agg.costCoverage.total > 0 && (
             <span className="ml-1.5 whitespace-nowrap text-xs font-normal text-nc-text-muted">
               covers {agg.costCoverage.count} of {agg.costCoverage.total}
             </span>
@@ -801,7 +835,7 @@ export function RatesScreen() {
         </TD>
         <TD align="right" className={`nc-numeric align-middle ${agg.marginSum !== null && agg.marginSum < 0 ? 'text-nc-danger-text' : ''}`}>
           {agg.marginSum === null ? '—' : rate(agg.marginSum)}
-          {agg.marginCoverage.total > 0 && (
+          {costTrackingEnabled && agg.marginCoverage.total > 0 && (
             <span className="ml-1.5 whitespace-nowrap text-xs font-normal text-nc-text-muted">
               covers {agg.marginCoverage.count} of {agg.marginCoverage.total}
             </span>
@@ -836,12 +870,37 @@ export function RatesScreen() {
         <EmptyState title="You don't have permission to view rates on this contract." />
       ) : (
         <>
-          <NotificationBanner tone="info" className="mb-4">
-            Cost and margin below are Keywest's own bid estimate, entered on this screen — actual cost isn't recorded in NovaCore yet.
-          </NotificationBanner>
+          {costTrackingEnabled && (
+            <NotificationBanner tone="info" className="mb-4">
+              Cost and margin below are Keywest's own bid estimate, entered on this screen — actual cost isn't recorded in NovaCore yet.
+            </NotificationBanner>
+          )}
           <NotificationBanner tone="info" className="mb-4">
             Earned, below and in the projected-versus-actual summary at the foot of the table, is Keywest's own measure — recorded quantity, or Finance's own percent-complete/authorization entry, times price. It is not the Ministry's own figure; that side is tracked separately.
           </NotificationBanner>
+
+          {/* The cost-tracking switch itself (0042) — the one control that
+              decides whether Margin/Est. cost render anywhere on this
+              contract outside the entry columns just below. Unit cost/Ext.
+              cost stay real and enterable regardless of this toggle; only
+              what's DERIVED from them (here and everywhere else in
+              NovaCore) depends on it. */}
+          {canEdit && (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-nc-border bg-white px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-nc-text">Cost tracking is {costTrackingEnabled ? 'on' : 'off'} for this contract.</p>
+                <p className="text-xs text-nc-text-muted">
+                  {costTrackingEnabled
+                    ? 'Margin and Est. cost figures show here and elsewhere in NovaCore, computed from the costs entered below.'
+                    : 'Unit cost and Ext. cost stay enterable below. Margin and Est. cost figures stay hidden everywhere in NovaCore until this is turned on.'}
+                </p>
+                {costTrackingError && <p className="mt-1 text-xs text-nc-danger-text">{costTrackingError}</p>}
+              </div>
+              <Button type="button" variant="secondary" disabled={costTrackingSaving} onClick={() => void toggleCostTracking()}>
+                {costTrackingSaving ? 'Saving…' : costTrackingEnabled ? 'Turn off cost tracking' : 'Turn on cost tracking'}
+              </Button>
+            </div>
+          )}
           {/* Separate from the explainer above — that sentence is always
               true regardless of who's looking; this one is conditional on
               the seat, and reads oddly tacked onto a sentence that isn't
@@ -922,7 +981,7 @@ export function RatesScreen() {
                     </td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
                       {grandTotal.extCostSum === null ? '—' : rate(grandTotal.extCostSum)}
-                      {grandTotal.costCoverage.total > 0 && (
+                      {costTrackingEnabled && grandTotal.costCoverage.total > 0 && (
                         <span className="ml-1.5 block whitespace-nowrap text-xs font-normal opacity-80">
                           covers {grandTotal.costCoverage.count} of {grandTotal.costCoverage.total} items
                         </span>
@@ -934,7 +993,7 @@ export function RatesScreen() {
                     </td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-4 py-3 text-right font-semibold text-white">
                       {grandTotal.marginSum === null ? '—' : rate(grandTotal.marginSum)}
-                      {grandTotal.marginCoverage.total > 0 && (
+                      {costTrackingEnabled && grandTotal.marginCoverage.total > 0 && (
                         <span className="ml-1.5 block whitespace-nowrap text-xs font-normal opacity-80">
                           covers {grandTotal.marginCoverage.count} of {grandTotal.marginCoverage.total} items
                         </span>

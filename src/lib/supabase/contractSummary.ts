@@ -45,8 +45,15 @@ export async function loadContractSummary(contract: MyContract): Promise<Contrac
       return price?.unitPrice != null ? r.quantityToDate * price.unitPrice : null
     }),
   )
-  const marginToDate = sumOrNull(
-    progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
-  )
+  // Null the whole computation, not just its cost input, when this
+  // contract has cost tracking off (0042) — margin.ts's own null-
+  // propagation would already zero the RESULT out from a null cost, but
+  // this reads more directly as "not computed" than "computed from a
+  // costPrice that happens to be null."
+  const marginToDate = contract.costTrackingEnabled
+    ? sumOrNull(
+        progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
+      )
+    : null
   return { contract, valueToDate, marginToDate, items, progressRate, prices }
 }

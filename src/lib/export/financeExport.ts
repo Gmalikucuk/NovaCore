@@ -72,8 +72,13 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
   const sandboxRowCount = contract.isSandbox ? 1 : 0
   const freshnessRowNum = 2 + sandboxRowCount
   const captionRowNum = 3 + sandboxRowCount
+  // The cost caption only means anything once cost tracking is
+  // deliberately on for this contract (0042) — every cost/margin cell
+  // below is already null otherwise (monthRows nulled them upstream), so
+  // there's nothing left to caveat.
+  const costCaptionRowCount = contract.costTrackingEnabled ? 1 : 0
   const costCaptionRowNum = 4 + sandboxRowCount
-  const headerRowNum = 5 + sandboxRowCount
+  const headerRowNum = costCaptionRowNum + costCaptionRowCount
   const dataStartRow = headerRowNum + 1
 
   const workbook = new ExcelJS.Workbook()
@@ -136,10 +141,12 @@ export function buildFinanceWorkbook(input: FinanceExportInput): ExcelJS.Workboo
   // measured fact — NovaCore has never recorded what work actually cost.
   // Same wording as the equivalent note on Rates; a workbook forwarded out
   // of context has no screen nearby to supply this caveat on its own.
-  sheet.mergeCells(costCaptionRowNum, 1, costCaptionRowNum, colCount)
-  const costCaptionCell = sheet.getCell(costCaptionRowNum, 1)
-  costCaptionCell.value = 'Cost and margin figures are Keywest’s own bid estimate — actual cost is not yet recorded in NovaCore.'
-  costCaptionCell.font = { italic: true, size: 9 }
+  if (contract.costTrackingEnabled) {
+    sheet.mergeCells(costCaptionRowNum, 1, costCaptionRowNum, colCount)
+    const costCaptionCell = sheet.getCell(costCaptionRowNum, 1)
+    costCaptionCell.value = 'Cost and margin figures are Keywest’s own bid estimate — actual cost is not yet recorded in NovaCore.'
+    costCaptionCell.font = { italic: true, size: 9 }
+  }
 
   // Column headers.
   const headerRow = sheet.getRow(headerRowNum)

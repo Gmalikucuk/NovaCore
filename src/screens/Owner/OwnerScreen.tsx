@@ -94,7 +94,7 @@ export function OwnerScreen({ contract }: { contract: MyContract }) {
           ...row,
           // Absent, not zero, when there's no price — and omitted from the
           // block entirely (not blanked) for a seat without view_rates.
-          margin: contract.viewRates
+          margin: contract.viewRates && contract.costTrackingEnabled
             ? computeMargin(
                 row.progress.quantityToDate,
                 priceByItem.get(row.pin.itemId)?.costPrice ?? null,
@@ -104,7 +104,7 @@ export function OwnerScreen({ contract }: { contract: MyContract }) {
             : null,
         }))
         .sort((a, b) => compareItemCodes(a.progress.itemNumber, b.progress.itemNumber)),
-    [pins, progressByItem, priceByItem, contract.viewRates],
+    [pins, progressByItem, priceByItem, contract.viewRates, contract.costTrackingEnabled],
   )
 
   // Over-quantity first — that's what costs money today — then stalled.

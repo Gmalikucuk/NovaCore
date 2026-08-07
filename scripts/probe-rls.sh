@@ -1829,6 +1829,39 @@ request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"tender_price":null}
 check "cleanup: tender_price reverted to null" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# cost_tracking_enabled (0042) — gated identically to tender_price (set_cost
+# AND set_unit_price both), same "who may touch pricing figures on this
+# contract" surface, not a new decision. Readable by any member regardless
+# of rights; only the WRITE is rights-gated.
+# =============================================================================
+echo
+echo "=== cost_tracking_enabled (0042) ==="
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"cost_tracking_enabled":true}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
+check "full: set cost_tracking_enabled (set_cost + set_unit_price)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"cost_tracking_enabled":false}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: set cost_tracking_enabled rejected (no set_cost/set_unit_price)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$VIEWER_TOKEN" '{"cost_tracking_enabled":false}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "viewer: set cost_tracking_enabled rejected (view_rates alone is not enough)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# json_field's Python helper stringifies a JSON boolean as Python's own
+# True/False, not JSON's true/false — matched here, not "fixed" in the
+# helper (nothing else in this file reads a boolean field through it yet).
+request GET "contracts?id=eq.$PROJECT_ID&select=cost_tracking_enabled" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 cost_tracking_enabled)" = "True" ] && ok=1
+check "quantities: read cost_tracking_enabled (view alone needs no rights)" "200, true" "$ok" "$STATUS $BODY_OUT"
+
+# Revert — this project is a shared fixture across the whole suite, and
+# cost_tracking_enabled's own default (false) is its baseline seed.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"cost_tracking_enabled":false}'
+check "cleanup: cost_tracking_enabled reverted to false" "200, 1 row" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# =============================================================================
 # contract_state — gated on manage_members (company-wide), same right
 # SeatMembers already requires to administer a contract, not a new
 # decision. correct_only holds manage_members but none of full's

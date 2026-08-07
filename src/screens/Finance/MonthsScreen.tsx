@@ -98,10 +98,13 @@ export function MonthsScreen() {
           monthKey: { year: y, month: m },
           isCurrent: period === currentPeriod,
           value: contractMonth?.valueInPeriod ?? null,
-          margin: contractMonth?.marginInPeriod ?? null,
+          // Suppressed until cost tracking is deliberately on for this
+          // contract (0042) — Value stays real regardless, it's price-
+          // derived, not cost-derived.
+          margin: contract.costTrackingEnabled ? (contractMonth?.marginInPeriod ?? null) : null,
         }
       })
-  }, [itemMonths, contractMonths, nowMonthKey])
+  }, [itemMonths, contractMonths, nowMonthKey, contract.costTrackingEnabled])
 
   const maxMonthValue = useMemo(() => financeMonths.reduce((max, fm) => Math.max(max, fm.value ?? 0), 0), [financeMonths])
 

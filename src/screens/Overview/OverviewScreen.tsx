@@ -171,9 +171,10 @@ export function OverviewScreen() {
   // no schedule to be behind or stalled on. See contractParticipatesInProduction's own comment.
   const productionSummaries = useMemo(() => realSummaries.filter((s) => contractParticipatesInProduction(s.contract.contractState)), [realSummaries])
   // Margin is only ever worth offering when at least one real contract can
-  // actually be priced — otherwise the toggle would just reveal columns of
-  // em-dashes across the board.
-  const marginAvailable = useMemo(() => realSummaries.some((s) => s.contract.viewRates), [realSummaries])
+  // actually be priced AND has cost tracking deliberately on (0042) —
+  // otherwise the toggle would just reveal columns of em-dashes across the
+  // board.
+  const marginAvailable = useMemo(() => realSummaries.some((s) => s.contract.viewRates && s.contract.costTrackingEnabled), [realSummaries])
 
   // ── Pipeline band ─────────────────────────────────────────────────────
   const pipelineRows = useMemo(
@@ -257,9 +258,12 @@ export function OverviewScreen() {
       const progressByItem = new Map(s.progressRate.map((p) => [p.itemId, p]))
       const label = contractLabel(s.contract)
       for (const item of s.items) {
-        rows.push(
-          moneyMakerRow({ contractId: s.contract.id, contractLabel: label, contractState: s.contract.contractState, item, price: priceByItem.get(item.id), progress: progressByItem.get(item.id) }),
-        )
+        const rawPrice = priceByItem.get(item.id)
+        // Cost/basis masked when this contract has cost tracking off
+        // (0042) — unitPrice stays real, since valueEarned/valueTendered
+        // are price-derived, not cost-derived.
+        const price = s.contract.costTrackingEnabled || rawPrice === undefined ? rawPrice : { ...rawPrice, costPrice: null, costBasis: null }
+        rows.push(moneyMakerRow({ contractId: s.contract.id, contractLabel: label, contractState: s.contract.contractState, item, price, progress: progressByItem.get(item.id) }))
       }
     }
     return rows
@@ -292,13 +296,16 @@ export function OverviewScreen() {
   }
 
   // Margin coverage — scoped to contracts the seat can actually price
-  // (view_rates), and to the two cost-applicable kinds (unit_price,
-  // lump_sum) — a Provisional Sum Item was never a margin candidate,
-  // structurally, not just currently uncosted (matches aggregateFinancials'
-  // own scoping on Rates).
+  // (view_rates) AND that have cost tracking deliberately on (0042), and
+  // to the two cost-applicable kinds (unit_price, lump_sum) — a
+  // Provisional Sum Item was never a margin candidate, structurally, not
+  // just currently uncosted (matches aggregateFinancials' own scoping on
+  // Rates). A contract with tracking off is excluded from the denominator
+  // entirely here, not counted-but-uncosted — its cost isn't a gap, it's
+  // not being claimed.
   const marginCoverage = useMemo(() => {
     const financialRows = realSummaries
-      .filter((s) => s.contract.viewRates)
+      .filter((s) => s.contract.viewRates && s.contract.costTrackingEnabled)
       .flatMap((s) => {
         const priceByItem = new Map(s.prices.map((p) => [p.itemId, p]))
         return s.items.map((item) => {
@@ -334,7 +341,9 @@ export function OverviewScreen() {
     [attentionByContract],
   )
   const taggedProblems = useMemo(() => {
-    const tagged = attentionByContract.flatMap(({ summary, result }) => result.problems.map((problem) => ({ problem, contractLabel: contractLabel(summary.contract) })))
+    const tagged = attentionByContract.flatMap(({ summary, result }) =>
+      result.problems.map((problem) => ({ problem, contractLabel: contractLabel(summary.contract), costTrackingEnabled: summary.contract.costTrackingEnabled })),
+    )
     return tagged.slice().sort((a, b) => PROBLEM_ORDER[a.problem.kind] - PROBLEM_ORDER[b.problem.kind])
   }, [attentionByContract])
   const suppressedNotes = useMemo(
@@ -342,9 +351,17 @@ export function OverviewScreen() {
     [attentionByContract],
   )
 
+  // Feeds overQuantityValueAboveSchedule (unitPrice only — untouched by
+  // 0042) and ProblemRow's own "at cost" sentence (costPrice — masked here
+  // per each item's own contract, since this map merges Items across
+  // several contracts that may not all have cost tracking on).
   const priceByItem = useMemo(() => {
     const map = new Map<string, ItemPrice>()
-    for (const s of realSummaries) for (const p of s.prices) map.set(p.itemId, p)
+    for (const s of realSummaries) {
+      for (const p of s.prices) {
+        map.set(p.itemId, s.contract.costTrackingEnabled ? p : { ...p, costPrice: null, costBasis: null })
+      }
+    }
     return map
   }, [realSummaries])
 
@@ -683,8 +700,14 @@ export function OverviewScreen() {
                   <div>
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-nc-text-subtle">Behind rate or stalled</h3>
                     <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
-                      {visibleProblems.map(({ problem, contractLabel: label }) => (
-                        <ProblemRow key={`${label}-${problem.kind}-${problem.row.itemId}`} problem={problem} priceByItem={priceByItem} contractLabel={label} />
+                      {visibleProblems.map(({ problem, contractLabel: label, costTrackingEnabled: problemCostTrackingEnabled }) => (
+                        <ProblemRow
+                          key={`${label}-${problem.kind}-${problem.row.itemId}`}
+                          problem={problem}
+                          priceByItem={priceByItem}
+                          costTrackingEnabled={problemCostTrackingEnabled}
+                          contractLabel={label}
+                        />
                       ))}
                     </div>
                     {hiddenProblemCount > 0 && (

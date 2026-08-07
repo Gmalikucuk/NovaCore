@@ -113,8 +113,11 @@ export function FinanceMonthScreen() {
   // level up from the per-item table.
   const valueThisMonth = currentContractMonth?.valueInPeriod ?? null
   const valueLastMonth = previousContractMonth?.valueInPeriod ?? null
-  const marginThisMonth = currentContractMonth?.marginInPeriod ?? null
-  const marginLastMonth = previousContractMonth?.marginInPeriod ?? null
+  // Suppressed until cost tracking is deliberately on for this contract
+  // (0042) — Value stays real regardless, it's price-derived, not
+  // cost-derived.
+  const marginThisMonth = contract.costTrackingEnabled ? (currentContractMonth?.marginInPeriod ?? null) : null
+  const marginLastMonth = contract.costTrackingEnabled ? (previousContractMonth?.marginInPeriod ?? null) : null
 
   const availableMonths = useMemo(() => {
     const keys = new Set(itemMonths.map((m) => m.periodMonth))
@@ -140,7 +143,11 @@ export function FinanceMonthScreen() {
         // this screen exists to fix.
         const quantityInPeriod = unitPriced ? (inPeriod ? inPeriod.quantityInPeriod : null) : null
         const quantityInPreviousPeriod = unitPriced ? (inPreviousPeriod ? inPreviousPeriod.quantityInPeriod : null) : null
-        const cost = unitPriced ? (price?.costPrice ?? null) : null
+        // Cost/margin/period-cost/period-margin/cost-to-date/margin-to-date
+        // all derive from this one variable — nulled here, at the source,
+        // when cost tracking is off for this contract (0042), rather than
+        // at each of the derived figures below.
+        const cost = unitPriced && contract.costTrackingEnabled ? (price?.costPrice ?? null) : null
         const costBasis = unitPriced ? (price?.costBasis ?? null) : null
         const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
         const quantityToDate = unitPriced ? (progress?.quantityToDate ?? 0) : null
@@ -174,7 +181,7 @@ export function FinanceMonthScreen() {
           isOverQuantity: unitPriced ? (progress?.isOverQuantity ?? false) : false,
         }
       }),
-    [items, itemMonthByItem, previousItemMonthByItem, priceByItem, progressByItem],
+    [items, itemMonthByItem, previousItemMonthByItem, priceByItem, progressByItem, contract.costTrackingEnabled],
   )
 
   const monthTotals = useMemo(
@@ -334,7 +341,7 @@ export function FinanceMonthScreen() {
                       }
                       sub={
                         marginThisMonth === null ? (
-                          "Cost isn't fully priced for this month's Items"
+                          contract.costTrackingEnabled ? "Cost isn't fully priced for this month's Items" : undefined
                         ) : marginLastMonth !== null ? (
                           <>
                             <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {rate(marginLastMonth)} the prior month
@@ -385,7 +392,12 @@ export function FinanceMonthScreen() {
                     )
                   })}
                 </Select>
-                {contract.viewRates && (
+                {/* Nothing behind this toggle worth revealing until cost
+                    tracking is deliberately on for this contract (0042) —
+                    every cell it would show is already null at this point,
+                    so the toggle itself goes quiet rather than opening onto
+                    a wall of em-dashes. */}
+                {contract.viewRates && contract.costTrackingEnabled && (
                   <Button type="button" variant="secondary" onClick={() => setShowCostMargin((v) => !v)} aria-pressed={showCostMargin}>
                     {showCostMargin ? 'Hide cost & margin' : 'Show cost & margin'}
                   </Button>

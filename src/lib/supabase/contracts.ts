@@ -32,6 +32,8 @@ export interface MyContract extends ContractRights {
   contractEnd: string | null
   /** pipeline/active/warranty_period/closed_out/archived — see ContractState. Drives Needs Attention's stalled suppression and, going forward, Portfolio's sectioning. */
   contractState: ContractState
+  /** Whether derived cost figures (Margin, Margin %, Est. cost/margin, the pinned-Item margin line, Needs Attention's at-cost sentence, both Excel exports) render anywhere outside Rates' own entry columns (0042). Defaults false — cost coverage is not yet real on any contract. A person's deliberate call, never inferred from how much cost happens to be entered. */
+  costTrackingEnabled: boolean
 }
 
 /**
@@ -64,6 +66,7 @@ interface RawMembershipRow {
     tender_price: string | null
     contract_end: string | null
     contract_state: ContractState
+    cost_tracking_enabled: boolean
   }
 }
 
@@ -87,7 +90,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   const { data, error } = await supabase
     .from('contract_members')
     .select(
-      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end, contract_state )',
+      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end, contract_state, cost_tracking_enabled )',
     )
     .eq('user_id', user.id)
   if (error) throw error
@@ -102,6 +105,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       tenderPrice: r.contracts.tender_price === null ? null : Number(r.contracts.tender_price),
       contractEnd: r.contracts.contract_end,
       contractState: r.contracts.contract_state,
+      costTrackingEnabled: r.contracts.cost_tracking_enabled,
       createItems: r.create_items,
       setCost: r.set_cost,
       setUnitPrice: r.set_unit_price,
@@ -152,7 +156,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
       is_sandbox: input.isSandbox,
       created_by: user.id,
     })
-    .select('id, contract_name, contract_no, is_sandbox, contract_state')
+    .select('id, contract_name, contract_no, is_sandbox, contract_state, cost_tracking_enabled')
     .single()
   if (error) throw error
 
@@ -164,6 +168,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
     tenderPrice: null,
     contractEnd: input.contractEnd,
     contractState: data.contract_state,
+    costTrackingEnabled: data.cost_tracking_enabled,
     // The creator's own rights on their brand-new contract — create_items
     // only (see above), everything else false until seated separately.
     createItems: true,
@@ -212,5 +217,17 @@ export async function updateTenderPrice(contractId: string, tenderPrice: number 
  */
 export async function updateContractState(contractId: string, state: ContractState): Promise<void> {
   const { error } = await supabase.from('contracts').update({ contract_state: state }).eq('id', contractId)
+  if (error) throw error
+}
+
+/**
+ * The one switch (0042) deciding whether Margin/Est. cost/Est. margin
+ * render anywhere on this contract outside Rates' own entry columns. Gated
+ * the same as updateTenderPrice above (set_cost + set_unit_price,
+ * contracts_cost_tracking_update_right) — the same "who may touch pricing
+ * figures on this contract" surface, not a new decision.
+ */
+export async function updateCostTrackingEnabled(contractId: string, enabled: boolean): Promise<void> {
+  const { error } = await supabase.from('contracts').update({ cost_tracking_enabled: enabled }).eq('id', contractId)
   if (error) throw error
 }
