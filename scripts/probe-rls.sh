@@ -344,6 +344,107 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
 check "readonly: item_prices on sandbox project" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
+# Cost tracking mask (0044) — cost_tracking_enabled was client-only until
+# this migration: item_prices_select_right gates rows on view_rates alone,
+# regardless of the flag, so a seat with view_rates but no set_cost received
+# real cost_price/cost_basis over the wire even with cost tracking off (the
+# UI hid it, the response didn't). v_item_prices_visible is the fix — the
+# one place the mask lives, read by fetchItemPrices and joined by every
+# cost-emitting view instead of the raw table. Proves NULL, not a 400 or an
+# empty result: the row exists (unit_price comes back real) and one column
+# is masked, which is a different, correct outcome from the row being
+# hidden — the wrong kind of pass here would look identical to the right
+# kind unless asserted precisely.
+#
+# Neither existing sandbox fixture combination fits both sides of this
+# check on the same project — checked every project each of the five
+# fixtures is seated on before picking these two:
+#   - viewer (cfo@novacore.test) holds set_cost on the sandbox project
+#     specifically (seeded for the LS/PS cost-write probes further down),
+#     so it cannot stand in for "view_rates without set_cost" there.
+#   - readonly (owner@novacore.test) holds exactly (view_rates: true,
+#     set_cost: false) on PROBE-ADMIN-0000, the reserved guard/edge-case
+#     fixture (0037) — but neither of its two items had a priced item_prices
+#     row until 0045 added one to GUARD.01 specifically so this negative
+#     case would have something real to mask.
+# =============================================================================
+echo "=== Cost tracking mask (0044) ==="
+
+# GUARD.01 on PROBE-ADMIN-0000 (0045) — cost_price 100, cost_basis total,
+# unit_price 200. cost_tracking_enabled is false on this project (0005/0006
+# default, never touched).
+GUARD_PROJECT_ID="ba5eba11-0000-0000-0000-000000000000"
+GUARD_PRICED_ITEM_ID="deadbeef-0000-0000-0000-0000000000a1"
+
+# Negative — readonly holds view_rates on PROBE-ADMIN-0000 but not set_cost:
+# exactly the seat this mask exists to protect.
+request GET "v_item_prices_visible?item_id=eq.$GUARD_PRICED_ITEM_ID&select=item_id,cost_price,cost_basis,unit_price" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  masked=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if d['cost_price'] is None and d['cost_basis'] is None and d['unit_price'] is not None else '0')
+" "$BODY_OUT")
+  [ "$masked" = "1" ] && ok=1
+fi
+check "readonly (view_rates, no set_cost): v_item_prices_visible masks cost, keeps unit_price" "200, cost null / unit_price real" "$ok" "$STATUS $BODY_OUT"
+
+# Same seat, direct against item_prices — unchanged by this migration, and
+# deliberately not fixed here (see the report): the raw table is still
+# readable by any view_rates holder regardless of cost_tracking_enabled.
+# This documents that the gap exists rather than letting the check above
+# imply it's fully closed.
+request GET "item_prices?item_id=eq.$GUARD_PRICED_ITEM_ID&select=item_id,cost_price" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  real=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if d['cost_price'] is not None else '0')
+" "$BODY_OUT")
+  [ "$real" = "1" ] && ok=1
+fi
+check "readonly: item_prices raw table still unmasked (known, disclosed gap — 0044 does not close this)" "200, cost_price real" "$ok" "$STATUS $BODY_OUT"
+
+# Positive — full holds set_cost + set_unit_price on the sandbox project:
+# the entry surface the mask's own exemption protects (cost_tracking_
+# enabled OR has_right(..., 'set_cost')). This is the check most likely to
+# look redundant to someone reading the view later and get deleted as dead
+# weight — it isn't: without it, upsertItemPrice's own RETURNING would hand
+# a Finance user null back for the cost figure they just wrote, any time
+# tracking happens to be off. If this ever fails, the exemption regressed.
+# PROBE-002, not GUARD.01 — full has no membership on PROBE-ADMIN-0000 at
+# all, so this exercises the sandbox project's own priced item instead
+# (cost_price 10, cost_basis per_unit, unit_price 20).
+FULL_PRICED_ITEM_ID="c0ffee00-c0de-0000-0000-000000000002"
+request GET "v_item_prices_visible?item_id=eq.$FULL_PRICED_ITEM_ID&select=item_id,cost_price,cost_basis,unit_price" "$FULL_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  real=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if d['cost_price'] == 10 and d['cost_basis'] == 'per_unit' and d['unit_price'] == 20 else '0')
+" "$BODY_OUT")
+  [ "$real" = "1" ] && ok=1
+fi
+check "full (set_cost holder): v_item_prices_visible keeps cost real — protects the entry-surface exemption from regression" "200, cost_price real" "$ok" "$STATUS $BODY_OUT"
+
+# v_contract_month's own cost_in_period/margin_in_period are not probed
+# directly here — it joins v_item_prices_visible (not item_prices) as of
+# 0044, so its masking is structurally guaranteed by the check above, not a
+# second, independent thing that could drift. Confirmed manually during
+# 0044's build (real numbers before the migration, null after, for a
+# view_rates-without-set_cost seat) rather than baked in as a standing
+# check: no fixture combines (view_rates, no set_cost) with BOTH a real
+# item_prices row AND a confirmed quantity_records row on a unit_price Item
+# — PROBE-ADMIN-0000's two items are lump_sum/provisional_sum, outside
+# v_contract_month's own unit_price-only scope, and adding a third,
+# unit_price GUARD item with a confirmed quantity record just to reach
+# v_contract_month specifically was more fixture surface than this check
+# is worth.
+
+# =============================================================================
 # Monthly period views (0013) — v_contract_month joins item_prices, so it's
 # behind the same finance wall by construction: view_rates gates it exactly
 # like item_prices itself, zero rows rather than an error for a seat without

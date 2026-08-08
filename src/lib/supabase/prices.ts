@@ -39,9 +39,15 @@ function mapPriceRow(row: RawPriceRow): ItemPrice {
  * something this function needs to enforce itself. An item with no row
  * here at all is unpriced — the Rates screen's "still unpriced" callout is a
  * set-difference against fetchItems(), not a flag on this row.
+ *
+ * Reads v_item_prices_visible (0044), not the raw table — the one place
+ * cost_tracking_enabled is actually enforced, not just displayed. costPrice/
+ * costBasis mask to null there unless the contract has cost tracking on, or
+ * the caller holds set_cost (the entry surface, exempt so a Finance user
+ * keeps seeing what they're entering). unitPrice is never masked.
  */
 export async function fetchItemPrices(contractId: string): Promise<ItemPrice[]> {
-  const { data, error } = await supabase.from('item_prices').select(PRICE_SELECT).eq('contract_id', contractId)
+  const { data, error } = await supabase.from('v_item_prices_visible').select(PRICE_SELECT).eq('contract_id', contractId)
   if (error) throw error
   return (data ?? []).map((row) => mapPriceRow(row as unknown as RawPriceRow))
 }
@@ -58,6 +64,13 @@ export async function fetchItemPrices(contractId: string): Promise<ItemPrice[]> 
  * item_prices_update_right) — set_unit_price is required only when the
  * target Item is actually unit_price (0023), so a Lump Sum/Provisional Sum
  * Item's cost-only write needs set_cost alone.
+ *
+ * Writes the raw table, not v_item_prices_visible (0044) — the mask is a
+ * read-side concern only, and its own set_cost exemption means a writer
+ * always sees their own cost figure back regardless of cost_tracking_enabled;
+ * routing writes through a view here would gain nothing and risks breaking
+ * Postgres's RETURNING, which needs the same SELECT-equivalent privilege as
+ * a read.
  */
 export async function upsertItemPrice(input: {
   itemId: string
