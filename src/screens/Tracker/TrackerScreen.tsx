@@ -3,8 +3,9 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import { IconAlertTriangle, IconTable } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
-import { fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
+import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
+import { remainingDisplay } from '../../lib/calculations/trackerRemaining'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportTrackerWorkbook } from '../../lib/export/trackerExport'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
@@ -28,7 +29,7 @@ export function TrackerScreen() {
   const navigate = useNavigate()
 
   const [items, setItems] = useState<Item[]>([])
-  const [progress, setProgress] = useState<ItemProgress[]>([])
+  const [progress, setProgress] = useState<ItemProgressRate[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
@@ -36,7 +37,7 @@ export function TrackerScreen() {
 
   useEffect(() => {
     setStatus('loading')
-    Promise.all([fetchItems(contract.id), fetchItemProgress(contract.id)])
+    Promise.all([fetchItems(contract.id), fetchItemProgressRate(contract.id)])
       .then(([itemRows, progressRows]) => {
         setItems(itemRows)
         setProgress(progressRows)
@@ -138,10 +139,12 @@ export function TrackerScreen() {
                   </TR>
                   {section.items.map((item) => {
                     const unitPriced = item.itemKind === 'unit_price'
-                    const itemProgress = progressByItem.get(item.id)
-                    const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
-                    const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
-                    const isOverQuantity = remaining !== null && remaining < 0
+                    // v_item_progress_rate is scoped to unit_price Items only —
+                    // Lump Sum/Provisional Sum never have a row here, but their
+                    // own figures (percentComplete/provisionalSum/authorizedValue)
+                    // already live directly on the Item, no separate fetch needed.
+                    const itemProgress = unitPriced ? progressByItem.get(item.id) : undefined
+                    const remaining = itemProgress ? remainingDisplay(itemProgress) : null
 
                     return (
                       <TR key={item.id}>
@@ -170,18 +173,18 @@ export function TrackerScreen() {
                             tone plus a non-colour signal as the Finance
                             screen and its export already use for the same
                             condition — one rule, three surfaces. */}
-                        <TD align="right" className={`nc-numeric ${isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
+                        <TD align="right" className={`nc-numeric ${remaining?.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
                           {item.itemKind === 'lump_sum' ? (
-                            `${percent(itemProgress?.percentComplete != null ? itemProgress.percentComplete / 100 : null)} complete`
+                            `${percent(item.percentComplete != null ? item.percentComplete / 100 : null)} complete`
                           ) : item.itemKind === 'provisional_sum' ? (
-                            `${money(itemProgress?.authorizedValue ?? null)} of ${money(itemProgress?.provisionalSum ?? null)}`
-                          ) : isOverQuantity ? (
+                            `${money(item.authorizedValue)} of ${money(item.provisionalSum)}`
+                          ) : remaining?.isOverQuantity ? (
                             <span className="inline-flex items-center justify-end gap-1">
                               <IconAlertTriangle size={13} stroke={1.75} />
-                              {fmtQuantity(Math.abs(remaining as number))} over
+                              {fmtQuantity(remaining.amount)} over
                             </span>
                           ) : (
-                            fmtQuantity(remaining)
+                            fmtQuantity(remaining?.amount ?? null)
                           )}
                         </TD>
                       </TR>

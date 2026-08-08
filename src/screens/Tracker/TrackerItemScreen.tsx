@@ -4,9 +4,10 @@ import { IconAlertTriangle, IconArrowLeft, IconCalendarPlus } from '@tabler/icon
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
-import { fetchItemMonths, fetchItemProgress, type ItemMonth, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
+import { fetchItemMonths, fetchItemProgressRate, type ItemMonth, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { fetchContractQuantityRecords } from '../../lib/supabase/quantityRecords'
 import { formatMonthLabel, monthKeyFromDate, monthKeyToPeriod, previousMonth } from '../../lib/calculations/overview'
+import { remainingDisplay } from '../../lib/calculations/trackerRemaining'
 import { formatDayLabel } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity, station } from '../../lib/format'
@@ -34,7 +35,7 @@ export function TrackerItemScreen() {
   const [items, setItems] = useState<Item[]>([])
   const [prices, setPrices] = useState<ItemPrice[]>([])
   const [itemMonths, setItemMonths] = useState<ItemMonth[]>([])
-  const [progress, setProgress] = useState<ItemProgress[]>([])
+  const [progress, setProgress] = useState<ItemProgressRate[]>([])
   const [records, setRecords] = useState<Awaited<ReturnType<typeof fetchContractQuantityRecords>>>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -45,7 +46,7 @@ export function TrackerItemScreen() {
       fetchItems(contract.id),
       contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([]),
       fetchItemMonths(contract.id),
-      fetchItemProgress(contract.id),
+      fetchItemProgressRate(contract.id),
       fetchContractQuantityRecords(contract.id),
     ])
       .then(([itemRows, priceRows, itemMonthRows, progressRows, recordRows]) => {
@@ -109,8 +110,7 @@ export function TrackerItemScreen() {
   const quantityInPeriod = unitPriced ? (inCurrentPeriod?.quantityInPeriod ?? null) : null
   const quantityInPreviousPeriod = unitPriced ? (inPreviousPeriod?.quantityInPeriod ?? 0) : null
   const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
-  const remaining = unitPriced && item ? item.approximateQuantity - (quantityToDate ?? 0) : null
-  const isOverQuantity = remaining !== null && remaining < 0
+  const remaining = itemProgress ? remainingDisplay(itemProgress) : null
 
   const valueInPeriod = unitPriced && unitPrice !== null && quantityInPeriod !== null ? quantityInPeriod * unitPrice : null
   const valueInPreviousPeriod = unitPriced && unitPrice !== null && quantityInPreviousPeriod !== null ? quantityInPreviousPeriod * unitPrice : null
@@ -178,14 +178,14 @@ export function TrackerItemScreen() {
                         derived completion figure. Over quantity carries the
                         same violet tone plus a non-colour signal as Finance
                         and its export use for the same condition. */}
-                    <TD align="right" className={`nc-numeric ${isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
-                      {isOverQuantity ? (
+                    <TD align="right" className={`nc-numeric ${remaining?.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
+                      {remaining?.isOverQuantity ? (
                         <span className="inline-flex items-center justify-end gap-1">
                           <IconAlertTriangle size={13} stroke={1.75} />
-                          {fmtQuantity(Math.abs(remaining as number))} over
+                          {fmtQuantity(remaining.amount)} over
                         </span>
                       ) : (
-                        fmtQuantity(remaining)
+                        fmtQuantity(remaining?.amount ?? null)
                       )}
                     </TD>
                   </TR>
@@ -214,8 +214,8 @@ export function TrackerItemScreen() {
             ) : (
               <p className="text-sm text-nc-text">
                 {item.itemKind === 'lump_sum'
-                  ? `${percent(itemProgress?.percentComplete != null ? itemProgress.percentComplete / 100 : null)} complete.`
-                  : `${money(itemProgress?.authorizedValue ?? null)} of ${money(itemProgress?.provisionalSum ?? null)} authorized.`}
+                  ? `${percent(item.percentComplete != null ? item.percentComplete / 100 : null)} complete.`
+                  : `${money(item.authorizedValue)} of ${money(item.provisionalSum)} authorized.`}
               </p>
             )}
           </section>
