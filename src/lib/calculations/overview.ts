@@ -359,8 +359,9 @@ export interface MoneyMakerRow {
   quantityPercent: number | null
   valueEarned: number | null
   valueTendered: number | null
-  margin: number | null
-  marginPercent: number | null
+  /** At Approximate Quantity — the TENDERED figure (bidSummary.ts's own RowFinancials.tenderedMargin), matching valueTendered's own naming; never a to-date margin. */
+  marginTendered: number | null
+  marginTenderedPercent: number | null
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -467,7 +468,7 @@ export function moneyMakerRow(params: {
     quantityPercent,
     valueEarned,
     valueTendered: financials.extAmount,
-    margin: financials.margin,
-    marginPercent: financials.marginPercent,
+    marginTendered: financials.tenderedMargin,
+    marginTenderedPercent: financials.tenderedMarginPercent,
   }
 }

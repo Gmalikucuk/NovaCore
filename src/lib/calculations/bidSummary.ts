@@ -18,8 +18,9 @@ import { estimatedCost, sumOrNull, type CostBasis } from './margin'
 export interface RowFinancials {
   extCost: number | null
   extAmount: number | null
-  margin: number | null
-  marginPercent: number | null
+  /** Margin at Approximate Quantity — the TENDERED figure (the whole scope, as bid), never quantity_to_date. See margin.ts's contractSummary.ts callers for the "to date" counterpart; the two are never interchangeable. */
+  tenderedMargin: number | null
+  tenderedMarginPercent: number | null
 }
 
 export interface RowFinancialsInput {
@@ -34,17 +35,19 @@ export interface RowFinancialsInput {
 
 export function rowFinancials(input: RowFinancialsInput): RowFinancials {
   if (input.itemKind === 'provisional_sum') {
-    return { extCost: null, extAmount: input.provisionalSum, margin: null, marginPercent: null }
+    return { extCost: null, extAmount: input.provisionalSum, tenderedMargin: null, tenderedMarginPercent: null }
   }
   const extCost = estimatedCost(input.approximateQuantity, input.costPrice, input.costBasis)
   const extAmount =
     input.itemKind === 'lump_sum' ? input.unitPrice : input.unitPrice === null ? null : input.approximateQuantity * input.unitPrice
   // MARGIN, NOT MARKUP — of revenue (Ext. amount), never of cost. A missing
   // extCost or extAmount reads as unknown, never as zero (sumOrNull's own
-  // reasoning, one level down).
-  const margin = extAmount === null || extCost === null ? null : extAmount - extCost
-  const marginPercent = margin === null || extAmount === null || extAmount <= 0 ? null : margin / extAmount
-  return { extCost, extAmount, margin, marginPercent }
+  // reasoning, one level down). TENDERED, not to-date — this whole function
+  // is at approximateQuantity, never quantity_to_date (see margin.ts's own
+  // margin(), used elsewhere for the to-date figure).
+  const tenderedMargin = extAmount === null || extCost === null ? null : extAmount - extCost
+  const tenderedMarginPercent = tenderedMargin === null || extAmount === null || extAmount <= 0 ? null : tenderedMargin / extAmount
+  return { extCost, extAmount, tenderedMargin, tenderedMarginPercent }
 }
 
 export interface Coverage {
@@ -56,9 +59,10 @@ export interface Aggregate {
   extCostSum: number | null
   costCoverage: Coverage
   extAmountSum: number | null
-  marginSum: number | null
-  marginCoverage: Coverage
-  marginPercent: number | null
+  /** Tendered margin, summed — see RowFinancials.tenderedMargin. */
+  tenderedMarginSum: number | null
+  tenderedMarginCoverage: Coverage
+  tenderedMarginPercent: number | null
 }
 
 /**
@@ -75,14 +79,15 @@ export function aggregateFinancials(rows: readonly { itemKind: ItemKind; financi
   const extCostSum = sumOrNull(costApplicable.map((r) => r.financials.extCost))
   const costCoverage = { count: costApplicable.filter((r) => r.financials.extCost !== null).length, total: costApplicable.length }
   const extAmountSum = sumOrNull(rows.map((r) => r.financials.extAmount))
-  const marginSum = sumOrNull(costApplicable.map((r) => r.financials.margin))
-  const marginCoverage = { count: costApplicable.filter((r) => r.financials.margin !== null).length, total: costApplicable.length }
+  const tenderedMarginSum = sumOrNull(costApplicable.map((r) => r.financials.tenderedMargin))
+  const tenderedMarginCoverage = { count: costApplicable.filter((r) => r.financials.tenderedMargin !== null).length, total: costApplicable.length }
   // Blended against the SAME subset's own revenue, not the grand Ext.
   // amount — provisional_sum's pass-through reimbursement was never a
   // candidate for margin, so it shouldn't dilute the percentage either.
   const marginApplicableAmount = sumOrNull(costApplicable.map((r) => r.financials.extAmount))
-  const marginPercent = marginSum !== null && marginApplicableAmount !== null && marginApplicableAmount > 0 ? marginSum / marginApplicableAmount : null
-  return { extCostSum, costCoverage, extAmountSum, marginSum, marginCoverage, marginPercent }
+  const tenderedMarginPercent =
+    tenderedMarginSum !== null && marginApplicableAmount !== null && marginApplicableAmount > 0 ? tenderedMarginSum / marginApplicableAmount : null
+  return { extCostSum, costCoverage, extAmountSum, tenderedMarginSum, tenderedMarginCoverage, tenderedMarginPercent }
 }
 
 export type MarginBand = 'below' | 'neutral' | 'above'

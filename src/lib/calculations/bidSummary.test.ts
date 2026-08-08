@@ -23,28 +23,28 @@ describe('rowFinancials — unit_price', () => {
   it('is MARGIN, not markup — the brief\'s own Top Lift Job B figures: $87.20 price, $68.50 cost', () => {
     const r = rowFinancials(unitPriceInput({ approximateQuantity: 100, costPrice: 68.5, unitPrice: 87.2 }))
     // margin: (87.20 - 68.50) / 87.20 = 21.4%
-    expect(r.marginPercent).toBeCloseTo(0.214, 3)
+    expect(r.tenderedMarginPercent).toBeCloseTo(0.214, 3)
     // NOT markup, which would read 27.3% — (87.20 - 68.50) / 68.50
-    expect(r.marginPercent).not.toBeCloseTo(0.273, 3)
+    expect(r.tenderedMarginPercent).not.toBeCloseTo(0.273, 3)
   })
 
   it('a total-basis Unit Price Item ignores quantity for cost, like Lump Sum does', () => {
     const r = rowFinancials(unitPriceInput({ approximateQuantity: 16000, costPrice: 80000, costBasis: 'total', unitPrice: 5 }))
     expect(r.extCost).toBe(80000)
     expect(r.extAmount).toBe(80000)
-    expect(r.margin).toBeCloseTo(16000 * 5 - 80000, 5)
+    expect(r.tenderedMargin).toBeCloseTo(16000 * 5 - 80000, 5)
   })
 
   it('is unpriced (all null) when neither cost nor price is entered', () => {
     const r = rowFinancials(unitPriceInput({ costPrice: null, costBasis: null, unitPrice: null }))
-    expect(r).toEqual({ extCost: null, extAmount: null, margin: null, marginPercent: null })
+    expect(r).toEqual({ extCost: null, extAmount: null, tenderedMargin: null, tenderedMarginPercent: null })
   })
 
   it('extCost alone does not produce a margin — a missing price is not a zero price', () => {
     const r = rowFinancials(unitPriceInput({ unitPrice: null }))
     expect(r.extCost).not.toBeNull()
     expect(r.extAmount).toBeNull()
-    expect(r.margin).toBeNull()
+    expect(r.tenderedMargin).toBeNull()
   })
 })
 
@@ -60,7 +60,7 @@ describe('rowFinancials — lump_sum', () => {
     })
     expect(r.extCost).toBe(38000)
     expect(r.extAmount).toBe(52000)
-    expect(r.margin).toBe(14000)
+    expect(r.tenderedMargin).toBe(14000)
   })
 
   it('extAmount is taken directly regardless of approximate_quantity — Schedule 7 gives Lump Sum no reliable quantity to trust', () => {
@@ -77,7 +77,7 @@ describe('rowFinancials — lump_sum', () => {
 
   it('unpriced Lump Sum is all null', () => {
     const r = rowFinancials({ itemKind: 'lump_sum', approximateQuantity: 1, provisionalSum: null, costPrice: null, costBasis: null, unitPrice: null })
-    expect(r).toEqual({ extCost: null, extAmount: null, margin: null, marginPercent: null })
+    expect(r).toEqual({ extCost: null, extAmount: null, tenderedMargin: null, tenderedMarginPercent: null })
   })
 })
 
@@ -93,13 +93,13 @@ describe('rowFinancials — provisional_sum', () => {
     })
     expect(r.extAmount).toBe(150000)
     expect(r.extCost).toBeNull()
-    expect(r.margin).toBeNull()
-    expect(r.marginPercent).toBeNull()
+    expect(r.tenderedMargin).toBeNull()
+    expect(r.tenderedMarginPercent).toBeNull()
   })
 
   it('margin is null, never 0, even when provisionalSum is a real number', () => {
     const r = rowFinancials({ itemKind: 'provisional_sum', approximateQuantity: 1, provisionalSum: 5000, costPrice: null, costBasis: null, unitPrice: null })
-    expect(r.margin).toBeNull()
+    expect(r.tenderedMargin).toBeNull()
   })
 
   it('Ext. amount is null when provisional_sum itself was never entered on the Item', () => {
@@ -125,22 +125,22 @@ describe('aggregateFinancials', () => {
     const agg = aggregateFinancials(rows)
     expect(agg.extCostSum).toBe(5000 + 38000)
     expect(agg.costCoverage).toEqual({ count: 2, total: 3 }) // 3 cost-applicable rows (2 unit_price + 1 lump_sum), 2 actually costed
-    expect(agg.marginSum).toBe(3000 + 14000)
-    expect(agg.marginCoverage).toEqual({ count: 2, total: 3 })
+    expect(agg.tenderedMarginSum).toBe(3000 + 14000)
+    expect(agg.tenderedMarginCoverage).toEqual({ count: 2, total: 3 })
   })
 
   it('margin percent is blended against the margin-applicable rows\' own revenue, not the grand Ext. amount (provisional_sum excluded)', () => {
     const agg = aggregateFinancials(rows)
     // margin-applicable revenue: 8000 (row1) + 8000 (row2, uncosted but priced) + 52000 (lump sum) = 68000
-    expect(agg.marginPercent).toBeCloseTo(17000 / 68000, 5)
+    expect(agg.tenderedMarginPercent).toBeCloseTo(17000 / 68000, 5)
   })
 
   it('is all-null/zero-coverage for an empty row set, never a bare 0', () => {
     const agg = aggregateFinancials([])
     expect(agg.extCostSum).toBeNull()
     expect(agg.extAmountSum).toBeNull()
-    expect(agg.marginSum).toBeNull()
-    expect(agg.marginPercent).toBeNull()
+    expect(agg.tenderedMarginSum).toBeNull()
+    expect(agg.tenderedMarginPercent).toBeNull()
     expect(agg.costCoverage).toEqual({ count: 0, total: 0 })
   })
 })

@@ -6,7 +6,7 @@ import { updateTenderPrice, updateCostTrackingEnabled } from '../../lib/supabase
 import { fetchItems, updateItemAuthorizedValue, updateItemPercentComplete, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchItemProgressRate } from '../../lib/supabase/monthlyPeriods'
-import type { CostBasis } from '../../lib/calculations/margin'
+import { gateOnCostTracking, type CostBasis } from '../../lib/calculations/margin'
 import { aggregateFinancials, marginBands, reconcileTenderPrice, rowFinancials, type MarginBand, type RowFinancials } from '../../lib/calculations/bidSummary'
 import { measuredRollup, unmeasuredRollup } from '../../lib/calculations/projectedActual'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
@@ -315,7 +315,11 @@ export function RatesScreen() {
         // cell, section subtotals, the grand total, the tercile bands) sees
         // "no margin" through the exact same absent-reads-as-em-dash path
         // it already uses for a Provisional Sum row's own null margin.
-        const financials = costTrackingEnabled ? rawFinancials : { ...rawFinancials, margin: null, marginPercent: null }
+        const financials = {
+          ...rawFinancials,
+          tenderedMargin: gateOnCostTracking(rawFinancials.tenderedMargin, costTrackingEnabled),
+          tenderedMarginPercent: gateOnCostTracking(rawFinancials.tenderedMarginPercent, costTrackingEnabled),
+        }
         // A Provisional Sum Item is "priced" the moment Schedule 7's own
         // allowance is on the Item — nothing is ever entered for it here.
         // Every other kind is priced once both its extended figures are
@@ -377,7 +381,7 @@ export function RatesScreen() {
   // stay fixed regardless of sort order or which section is being read.
   const maxExtAmount = useMemo(() => rows.reduce((max, r) => Math.max(max, r.financials.extAmount ?? 0), 0), [rows])
   const bandByRowId = useMemo(
-    () => marginBands(rows.map((r) => ({ rowId: r.item.id, marginPercent: r.financials.marginPercent }))),
+    () => marginBands(rows.map((r) => ({ rowId: r.item.id, marginPercent: r.financials.tenderedMarginPercent }))),
     [rows],
   )
   const bandsActive = bandByRowId.size > 0
@@ -775,14 +779,14 @@ export function RatesScreen() {
           {/* Margin — MARGIN, NOT MARKUP: of revenue (Ext. amount), never
               of cost. Never computed for Provisional Sum (reimbursed, not
               margined) — em-dash, never 0. */}
-          <TD align="right" compact className={`nc-numeric align-middle ${row.financials.margin !== null && row.financials.margin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-            {row.financials.margin === null ? '—' : rate(row.financials.margin)}
+          <TD align="right" compact className={`nc-numeric align-middle ${row.financials.tenderedMargin !== null && row.financials.tenderedMargin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+            {row.financials.tenderedMargin === null ? '—' : rate(row.financials.tenderedMargin)}
           </TD>
           <TD
             align="right"
             compact
             className={`nc-numeric align-middle ${
-              row.financials.marginPercent !== null && row.financials.marginPercent < 0
+              row.financials.tenderedMarginPercent !== null && row.financials.tenderedMarginPercent < 0
                 ? 'font-semibold bg-nc-danger-bg text-nc-danger-text'
                 : BAND_TONE[bandByRowId.get(item.id) ?? 'neutral']
             }`}
@@ -792,7 +796,7 @@ export function RatesScreen() {
                 : undefined
             }
           >
-            {row.financials.marginPercent === null ? '—' : percent(row.financials.marginPercent)}
+            {row.financials.tenderedMarginPercent === null ? '—' : percent(row.financials.tenderedMarginPercent)}
           </TD>
 
           {/* % complete — Finance's own estimate, lump_sum Items only
@@ -858,16 +862,16 @@ export function RatesScreen() {
         <TD align="right" compact className="nc-numeric align-middle">
           {agg.extAmountSum === null ? '—' : rate(agg.extAmountSum)}
         </TD>
-        <TD align="right" compact className={`nc-numeric align-middle ${agg.marginSum !== null && agg.marginSum < 0 ? 'text-nc-danger-text' : ''}`}>
-          {agg.marginSum === null ? '—' : rate(agg.marginSum)}
-          {costTrackingEnabled && agg.marginCoverage.total > 0 && (
+        <TD align="right" compact className={`nc-numeric align-middle ${agg.tenderedMarginSum !== null && agg.tenderedMarginSum < 0 ? 'text-nc-danger-text' : ''}`}>
+          {agg.tenderedMarginSum === null ? '—' : rate(agg.tenderedMarginSum)}
+          {costTrackingEnabled && agg.tenderedMarginCoverage.total > 0 && (
             <span className="ml-1.5 whitespace-nowrap text-xs font-normal text-nc-text-muted">
-              covers {agg.marginCoverage.count} of {agg.marginCoverage.total}
+              covers {agg.tenderedMarginCoverage.count} of {agg.tenderedMarginCoverage.total}
             </span>
           )}
         </TD>
-        <TD align="right" compact className={`nc-numeric align-middle ${agg.marginPercent !== null && agg.marginPercent < 0 ? 'text-nc-danger-text' : ''}`}>
-          {agg.marginPercent === null ? '—' : percent(agg.marginPercent)}
+        <TD align="right" compact className={`nc-numeric align-middle ${agg.tenderedMarginPercent !== null && agg.tenderedMarginPercent < 0 ? 'text-nc-danger-text' : ''}`}>
+          {agg.tenderedMarginPercent === null ? '—' : percent(agg.tenderedMarginPercent)}
         </TD>
         {/* % complete/Authorized value have no meaningful section subtotal
             (a summed percent is meaningless; a summed authorized value
@@ -1049,15 +1053,15 @@ export function RatesScreen() {
                       {grandTotal.extAmountSum === null ? '—' : rate(grandTotal.extAmountSum)}
                     </td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-2 py-3 text-right font-semibold text-white">
-                      {grandTotal.marginSum === null ? '—' : rate(grandTotal.marginSum)}
-                      {costTrackingEnabled && grandTotal.marginCoverage.total > 0 && (
+                      {grandTotal.tenderedMarginSum === null ? '—' : rate(grandTotal.tenderedMarginSum)}
+                      {costTrackingEnabled && grandTotal.tenderedMarginCoverage.total > 0 && (
                         <span className="ml-1.5 block whitespace-nowrap text-xs font-normal opacity-80">
-                          covers {grandTotal.marginCoverage.count} of {grandTotal.marginCoverage.total} items
+                          covers {grandTotal.tenderedMarginCoverage.count} of {grandTotal.tenderedMarginCoverage.total} items
                         </span>
                       )}
                     </td>
                     <td className="text-data nc-numeric border-t border-nc-border bg-nc-navy px-2 py-3 text-right font-semibold text-white">
-                      {grandTotal.marginPercent === null ? '—' : percent(grandTotal.marginPercent)}
+                      {grandTotal.tenderedMarginPercent === null ? '—' : percent(grandTotal.tenderedMarginPercent)}
                     </td>
                     {/* % complete/Authorized value: no grand-total figure of
                         their own — see renderSubtotalRow's own comment; the

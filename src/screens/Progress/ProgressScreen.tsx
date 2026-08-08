@@ -8,7 +8,7 @@ import { fetchPinnedItems, pinItem, unpinItem, type PinnedItem } from '../../lib
 import { fetchEffectiveStationRecords, fetchEffectiveProductionRecords, type EffectiveStationRow, type EffectiveProductionRow } from '../../lib/supabase/dashboard'
 import { buildProblemList } from '../../lib/calculations/overview'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
-import { margin as computeMargin } from '../../lib/calculations/margin'
+import { gateOnCostTracking, margin as computeMargin } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
 import { Button, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner } from '../../components/ui'
@@ -142,12 +142,15 @@ export function ProgressScreen() {
         .filter((row): row is { pin: PinnedItem; progress: ItemProgressRate } => row.progress !== undefined)
         .map((row) => ({
           ...row,
-          margin: contract.viewRates && contract.costTrackingEnabled
-            ? computeMargin(
-                row.progress.quantityToDate,
-                priceByItem.get(row.pin.itemId)?.costPrice ?? null,
-                priceByItem.get(row.pin.itemId)?.unitPrice ?? null,
-                priceByItem.get(row.pin.itemId)?.costBasis ?? null,
+          margin: contract.viewRates
+            ? gateOnCostTracking(
+                computeMargin(
+                  row.progress.quantityToDate,
+                  priceByItem.get(row.pin.itemId)?.costPrice ?? null,
+                  priceByItem.get(row.pin.itemId)?.unitPrice ?? null,
+                  priceByItem.get(row.pin.itemId)?.costBasis ?? null,
+                ),
+                contract.costTrackingEnabled,
               )
             : null,
         })),

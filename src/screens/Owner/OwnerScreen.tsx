@@ -7,7 +7,7 @@ import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase
 import { fetchPinnedItems, pinItem, unpinItem, type PinnedItem } from '../../lib/supabase/pinnedItems'
 import { buildProblemList } from '../../lib/calculations/overview'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
-import { margin as computeMargin } from '../../lib/calculations/margin'
+import { gateOnCostTracking, margin as computeMargin } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
 import { Button, NotificationBanner, Select, Spinner } from '../../components/ui'
@@ -94,12 +94,15 @@ export function OwnerScreen({ contract }: { contract: MyContract }) {
           ...row,
           // Absent, not zero, when there's no price — and omitted from the
           // block entirely (not blanked) for a seat without view_rates.
-          margin: contract.viewRates && contract.costTrackingEnabled
-            ? computeMargin(
-                row.progress.quantityToDate,
-                priceByItem.get(row.pin.itemId)?.costPrice ?? null,
-                priceByItem.get(row.pin.itemId)?.unitPrice ?? null,
-                priceByItem.get(row.pin.itemId)?.costBasis ?? null,
+          margin: contract.viewRates
+            ? gateOnCostTracking(
+                computeMargin(
+                  row.progress.quantityToDate,
+                  priceByItem.get(row.pin.itemId)?.costPrice ?? null,
+                  priceByItem.get(row.pin.itemId)?.unitPrice ?? null,
+                  priceByItem.get(row.pin.itemId)?.costBasis ?? null,
+                ),
+                contract.costTrackingEnabled,
               )
             : null,
         }))

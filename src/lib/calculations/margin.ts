@@ -1,6 +1,20 @@
 export type CostBasis = 'per_unit' | 'total'
 
 /**
+ * The one place "cost tracking is off ⇒ this figure is absent" lives (0042).
+ * Every cost- or margin-derived figure in this app is gated through this
+ * single check, whatever form the figure takes at the point of gating — a
+ * raw cost price about to feed a calculation, an already-computed margin, a
+ * pre-existing SQL figure (v_contract_month's own marginInPeriod), or one
+ * field of a larger object (an ItemPrice's costPrice, a RowFinancials'
+ * margin) — rather than each call site re-writing its own `enabled ? x :
+ * null` ternary with its own comment explaining why.
+ */
+export function gateOnCostTracking<T>(value: T | null, costTrackingEnabled: boolean): T | null {
+  return costTrackingEnabled ? value : null
+}
+
+/**
  * cost_price turned into a dollar figure — the one place this arithmetic
  * lives, so every caller applies the same rule (0023). A total is a flat
  * figure that doesn't scale with quantity — a subcontract quote is due

@@ -7,7 +7,7 @@ import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchContractMonths, fetchItemMonths, fetchItemProgressRate, type ContractMonth, type ItemMonth, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { fetchLastConfirmedAt } from '../../lib/supabase/quantityRecords'
 import { formatMonthLabel, monthDirection, monthKeyFromDate, monthKeyToPeriod, previousMonth, type Direction, type MonthKey } from '../../lib/calculations/overview'
-import { estimatedCost, margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
+import { estimatedCost, gateOnCostTracking, margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
 import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportFinanceWorkbook, type FinanceExportRow } from '../../lib/export/financeExport'
@@ -116,8 +116,8 @@ export function FinanceMonthScreen() {
   // Suppressed until cost tracking is deliberately on for this contract
   // (0042) — Value stays real regardless, it's price-derived, not
   // cost-derived.
-  const marginThisMonth = contract.costTrackingEnabled ? (currentContractMonth?.marginInPeriod ?? null) : null
-  const marginLastMonth = contract.costTrackingEnabled ? (previousContractMonth?.marginInPeriod ?? null) : null
+  const marginThisMonth = gateOnCostTracking(currentContractMonth?.marginInPeriod ?? null, contract.costTrackingEnabled)
+  const marginLastMonth = gateOnCostTracking(previousContractMonth?.marginInPeriod ?? null, contract.costTrackingEnabled)
 
   const availableMonths = useMemo(() => {
     const keys = new Set(itemMonths.map((m) => m.periodMonth))
@@ -147,7 +147,7 @@ export function FinanceMonthScreen() {
         // all derive from this one variable — nulled here, at the source,
         // when cost tracking is off for this contract (0042), rather than
         // at each of the derived figures below.
-        const cost = unitPriced && contract.costTrackingEnabled ? (price?.costPrice ?? null) : null
+        const cost = unitPriced ? gateOnCostTracking(price?.costPrice ?? null, contract.costTrackingEnabled) : null
         const costBasis = unitPriced ? (price?.costBasis ?? null) : null
         const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
         const quantityToDate = unitPriced ? (progress?.quantityToDate ?? 0) : null

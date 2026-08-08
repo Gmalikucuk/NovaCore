@@ -6,6 +6,7 @@ import type { ContractState } from '../../lib/supabase/contracts'
 import { loadContractSummary, type ContractSummary } from '../../lib/supabase/contractSummary'
 import { fetchViewPreferences, resetViewPreferences, saveViewPreferences } from '../../lib/supabase/viewPreferences'
 import { aggregateFinancials, rowFinancials } from '../../lib/calculations/bidSummary'
+import { gateOnCostTracking } from '../../lib/calculations/margin'
 import {
   buildAttention,
   contractCountsToward,
@@ -262,7 +263,10 @@ export function OverviewScreen() {
         // Cost/basis masked when this contract has cost tracking off
         // (0042) — unitPrice stays real, since valueEarned/valueTendered
         // are price-derived, not cost-derived.
-        const price = s.contract.costTrackingEnabled || rawPrice === undefined ? rawPrice : { ...rawPrice, costPrice: null, costBasis: null }
+        const price =
+          rawPrice === undefined
+            ? rawPrice
+            : { ...rawPrice, costPrice: gateOnCostTracking(rawPrice.costPrice, s.contract.costTrackingEnabled), costBasis: gateOnCostTracking(rawPrice.costBasis, s.contract.costTrackingEnabled) }
         rows.push(moneyMakerRow({ contractId: s.contract.id, contractLabel: label, contractState: s.contract.contractState, item, price, progress: progressByItem.get(item.id) }))
       }
     }
@@ -275,7 +279,7 @@ export function OverviewScreen() {
       if (prefs.moneyMakerSortKey === 'value') return r.valueTendered
       if (prefs.moneyMakerSortKey === 'quantityPercent') return r.quantityPercent
       if (prefs.moneyMakerSortKey === 'valueEarned') return r.valueEarned
-      return r.margin
+      return r.marginTendered
     }
     return [...allMoneyMakerRows].sort((a, b) => {
       const av = value(a)
@@ -359,7 +363,7 @@ export function OverviewScreen() {
     const map = new Map<string, ItemPrice>()
     for (const s of realSummaries) {
       for (const p of s.prices) {
-        map.set(p.itemId, s.contract.costTrackingEnabled ? p : { ...p, costPrice: null, costBasis: null })
+        map.set(p.itemId, { ...p, costPrice: gateOnCostTracking(p.costPrice, s.contract.costTrackingEnabled), costBasis: gateOnCostTracking(p.costBasis, s.contract.costTrackingEnabled) })
       }
     }
     return map
@@ -629,8 +633,8 @@ export function OverviewScreen() {
                             <div className="text-xs text-nc-text-muted">of {rate(r.valueTendered)}</div>
                           </TD>
                           {prefs.marginOn && (
-                            <TD align="right" className={`nc-numeric ${r.margin !== null && r.margin < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                              {rate(r.margin)}
+                            <TD align="right" className={`nc-numeric ${r.marginTendered !== null && r.marginTendered < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                              {rate(r.marginTendered)}
                             </TD>
                           )}
                         </TR>

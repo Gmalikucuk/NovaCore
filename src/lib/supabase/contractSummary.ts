@@ -2,7 +2,7 @@ import type { MyContract } from './contracts'
 import { fetchItems, type Item } from './items'
 import { fetchItemProgressRate, type ItemProgressRate } from './monthlyPeriods'
 import { fetchItemPrices, type ItemPrice } from './prices'
-import { margin, sumOrNull } from '../calculations/margin'
+import { gateOnCostTracking, margin, sumOrNull } from '../calculations/margin'
 
 export interface ContractSummary {
   contract: MyContract
@@ -50,10 +50,11 @@ export async function loadContractSummary(contract: MyContract): Promise<Contrac
   // propagation would already zero the RESULT out from a null cost, but
   // this reads more directly as "not computed" than "computed from a
   // costPrice that happens to be null."
-  const marginToDate = contract.costTrackingEnabled
-    ? sumOrNull(
-        progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
-      )
-    : null
+  const marginToDate = gateOnCostTracking(
+    sumOrNull(
+      progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
+    ),
+    contract.costTrackingEnabled,
+  )
   return { contract, valueToDate, marginToDate, items, progressRate, prices }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { estimatedCost, margin, marginPercent, sumOrNull } from './margin'
+import { estimatedCost, gateOnCostTracking, margin, marginPercent, sumOrNull } from './margin'
 
 describe('estimatedCost', () => {
   it('scales with quantity when per_unit', () => {
@@ -92,6 +92,23 @@ describe('marginPercent', () => {
     const m = margin(quantity, cost, sell, 'per_unit')!
     const revenue = quantity * sell
     expect(marginPercent(quantity, cost, sell, 'per_unit')).toBeCloseTo(m / revenue, 10)
+  })
+})
+
+describe('gateOnCostTracking', () => {
+  it('passes the value through when cost tracking is on', () => {
+    expect(gateOnCostTracking(2350, true)).toBe(2350)
+    expect(gateOnCostTracking(0, true)).toBe(0)
+  })
+
+  it('nulls the value when cost tracking is off, even a real 0', () => {
+    expect(gateOnCostTracking(2350, false)).toBeNull()
+    expect(gateOnCostTracking(0, false)).toBeNull()
+  })
+
+  it('a null value stays null either way', () => {
+    expect(gateOnCostTracking(null, true)).toBeNull()
+    expect(gateOnCostTracking(null, false)).toBeNull()
   })
 })
 

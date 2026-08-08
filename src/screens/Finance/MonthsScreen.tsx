@@ -6,6 +6,7 @@ import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchContractMonths, fetchItemMonths, type ContractMonth, type ItemMonth } from '../../lib/supabase/monthlyPeriods'
 import { fetchLastConfirmedAt } from '../../lib/supabase/quantityRecords'
 import { formatMonthLabel, monthKeyFromDate, monthKeyToPeriod } from '../../lib/calculations/overview'
+import { gateOnCostTracking } from '../../lib/calculations/margin'
 import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { rate } from '../../lib/format'
@@ -101,7 +102,7 @@ export function MonthsScreen() {
           // Suppressed until cost tracking is deliberately on for this
           // contract (0042) — Value stays real regardless, it's price-
           // derived, not cost-derived.
-          margin: contract.costTrackingEnabled ? (contractMonth?.marginInPeriod ?? null) : null,
+          margin: gateOnCostTracking(contractMonth?.marginInPeriod ?? null, contract.costTrackingEnabled),
         }
       })
   }, [itemMonths, contractMonths, nowMonthKey, contract.costTrackingEnabled])

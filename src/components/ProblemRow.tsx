@@ -1,6 +1,7 @@
 import { IconAlertTriangle, IconClockPause, IconFlag } from '@tabler/icons-react'
 import type { ItemPrice } from '../lib/supabase/prices'
 import type { ProblemItem } from '../lib/calculations/overview'
+import { gateOnCostTracking } from '../lib/calculations/margin'
 import { money, quantity as fmtQuantity } from '../lib/format'
 
 const PROBLEM_KIND_LABEL: Record<ProblemItem['kind'], string> = {
@@ -28,8 +29,8 @@ function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>, co
     // number, it's just wrong, so this stays silent rather than showing
     // one (0023). Suppressed entirely, regardless of basis, until cost
     // tracking is deliberately on for this Item's contract (0042).
-    const atCost =
-      costTrackingEnabled && price?.costPrice !== null && price?.costPrice !== undefined && price.costBasis === 'per_unit' ? ` — ${money(overage * price.costPrice)} at cost` : ''
+    const costPrice = gateOnCostTracking(price?.costPrice ?? null, costTrackingEnabled)
+    const atCost = costPrice !== null && price?.costBasis === 'per_unit' ? ` — ${money(overage * costPrice)} at cost` : ''
     return `${fmtQuantity(overage)} ${row.unit} over the Approximate Quantity${atCost}.`
   }
   // behind_rate — the classification still uses workingDaysRemaining
