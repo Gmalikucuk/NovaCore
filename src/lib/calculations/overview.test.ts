@@ -41,7 +41,6 @@ function row(overrides: Partial<ItemProgressRate>): ItemProgressRate {
     quantityLast30: 50,
     workingDaysLast30: 5,
     lastWorkDate: '2026-08-01',
-    quantityPerWorkingDay: 10,
     workingDaysRemaining: 10,
     isStalled: false,
     isOverQuantity: false,

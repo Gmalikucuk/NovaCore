@@ -119,10 +119,9 @@ export async function fetchContractMonths(contractId: string): Promise<ContractM
  * column doesn't need a schema change to stop being surfaced — see that
  * brief's report for the full list of who reads this view and why.
  *
- * quantityPerWorkingDay is dead in every production consumer as of the
- * same brief — computed here, read nowhere but overview.test.ts's fixture
- * data. Left in place pending a decision on the view as a whole, not
- * removed piecemeal.
+ * quantityPerWorkingDay was dead in every production consumer as of that
+ * same brief — flagged for removal there, actually removed here (0043),
+ * along with the view column itself.
  */
 export interface ItemProgressRate {
   itemId: string
@@ -138,7 +137,6 @@ export interface ItemProgressRate {
   quantityLast30: number
   workingDaysLast30: number | null
   lastWorkDate: string | null
-  quantityPerWorkingDay: number | null
   workingDaysRemaining: number | null
   isStalled: boolean
   isOverQuantity: boolean
@@ -158,7 +156,6 @@ interface RawItemProgressRateRow {
   quantity_last_30: string
   working_days_last_30: number | null
   last_work_date: string | null
-  quantity_per_working_day: string | null
   working_days_remaining: number | null
   is_stalled: boolean
   is_over_quantity: boolean
@@ -168,7 +165,7 @@ export async function fetchItemProgressRate(contractId: string): Promise<ItemPro
   const { data, error } = await supabase
     .from('v_item_progress_rate')
     .select(
-      'item_id, contract_id, item_number, description, unit, item_kind, approximate_quantity, quantity_to_date, proportion_complete, quantity_remaining, quantity_last_30, working_days_last_30, last_work_date, quantity_per_working_day, working_days_remaining, is_stalled, is_over_quantity',
+      'item_id, contract_id, item_number, description, unit, item_kind, approximate_quantity, quantity_to_date, proportion_complete, quantity_remaining, quantity_last_30, working_days_last_30, last_work_date, working_days_remaining, is_stalled, is_over_quantity',
     )
     .eq('contract_id', contractId)
   if (error) throw error
@@ -188,7 +185,6 @@ export async function fetchItemProgressRate(contractId: string): Promise<ItemPro
       quantityLast30: Number(r.quantity_last_30),
       workingDaysLast30: r.working_days_last_30,
       lastWorkDate: r.last_work_date,
-      quantityPerWorkingDay: r.quantity_per_working_day === null ? null : Number(r.quantity_per_working_day),
       workingDaysRemaining: r.working_days_remaining,
       isStalled: r.is_stalled,
       isOverQuantity: r.is_over_quantity,
@@ -217,7 +213,6 @@ export interface ItemProgress {
   authorizedValue: number | null
   quantityToDate: number
   proportionComplete: number | null
-  recordCount: number
   lastWorkDate: string | null
 }
 
@@ -234,7 +229,6 @@ interface RawItemProgressRow {
   authorized_value: string | null
   quantity_to_date: string
   proportion_complete: string | null
-  record_count: number
   last_work_date: string | null
 }
 
@@ -242,7 +236,7 @@ export async function fetchItemProgress(contractId: string): Promise<ItemProgres
   const { data, error } = await supabase
     .from('v_item_progress')
     .select(
-      'item_id, contract_id, item_number, description, unit, item_kind, approximate_quantity, percent_complete, provisional_sum, authorized_value, quantity_to_date, proportion_complete, record_count, last_work_date',
+      'item_id, contract_id, item_number, description, unit, item_kind, approximate_quantity, percent_complete, provisional_sum, authorized_value, quantity_to_date, proportion_complete, last_work_date',
     )
     .eq('contract_id', contractId)
   if (error) throw error
@@ -261,7 +255,6 @@ export async function fetchItemProgress(contractId: string): Promise<ItemProgres
       authorizedValue: r.authorized_value === null ? null : Number(r.authorized_value),
       quantityToDate: Number(r.quantity_to_date),
       proportionComplete: r.proportion_complete === null ? null : Number(r.proportion_complete),
-      recordCount: r.record_count,
       lastWorkDate: r.last_work_date,
     }
   })

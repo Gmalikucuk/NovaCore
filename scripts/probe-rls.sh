@@ -374,6 +374,31 @@ request GET "v_item_progress_rate?select=*&limit=1" "$QUANTITIES_TOKEN"
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
 check "quantities: v_item_progress_rate returns rows (no view_rates needed)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
 
+# 0043 — quantity_per_working_day and record_count dropped as dead columns.
+# PostgREST returns 400 (column does not exist) for a select naming a
+# column the view no longer has — that IS the proof the drop actually
+# reached the schema, not just that the app stopped asking for it.
+request GET "v_item_progress_rate?select=quantity_per_working_day&limit=1" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "400" ] && ok=1
+check "0043: v_item_progress_rate.quantity_per_working_day is gone" "400 (no such column)" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_progress?select=record_count&limit=1" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "400" ] && ok=1
+check "0043: v_item_progress.record_count is gone" "400 (no such column)" "$ok" "$STATUS $BODY_OUT"
+
+# Positive controls alongside the negative ones above — the drop-and-
+# recreate didn't take anything else with it. working_days_remaining in
+# particular: it's still rendered (overview.ts's classifyProblem), and its
+# own formula recomputes the last-30-days rate inline rather than reading
+# quantity_per_working_day, so it has to survive that column's removal.
+request GET "v_item_progress_rate?select=quantity_remaining,is_over_quantity,working_days_remaining&limit=1" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "quantities: v_item_progress_rate's other columns survive the drop" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_progress?select=quantity_to_date,proportion_complete,last_work_date&limit=1" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "quantities: v_item_progress's other columns survive the drop" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
 # =============================================================================
 # Progress estimate reconciliation (0010) — finance material even without a
 # price column: certified quantities and paid amounts reveal Unit Prices by
