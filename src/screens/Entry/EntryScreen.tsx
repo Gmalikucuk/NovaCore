@@ -17,7 +17,7 @@ import {
 } from '../../lib/supabase/quantityRecords'
 import { fetchItems, isApplicationRateItem, isAreaUnit, isUnitPriceItem, type Item } from '../../lib/supabase/items'
 import { fetchDerivationRules, type DerivationRule } from '../../lib/supabase/derivationRules'
-import { fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
+import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { getDeviceId } from '../../lib/deviceId'
 import { errorMessage } from '../../lib/errorMessage'
 import { formatDayLabel, todayLocalDateString } from '../../lib/dateFormat'
@@ -36,7 +36,7 @@ type ScreenMode = 'list' | 'picker' | 'form'
  * the day's list buries the one thing that matters (what's been entered
  * today) on the screen where vertical space is scarcest. The list leads;
  * Add is a single action that opens a recency-sorted, searchable picker
- * (fetchItemProgress's ordering, the same one this screen already used
+ * (fetchItemProgressRate's ordering, the same one this screen already used
  * inside its old always-open Select), then the form for whichever Item
  * was chosen.
  *
@@ -57,7 +57,7 @@ export function EntryScreen() {
 
   const [items, setItems] = useState<Item[]>([])
   const [locations, setLocations] = useState<string[]>([])
-  const [itemProgress, setItemProgress] = useState<ItemProgress[]>([])
+  const [itemProgress, setItemProgress] = useState<ItemProgressRate[]>([])
   const [rules, setRules] = useState<DerivationRule[]>([])
   const [derivationSourceRecords, setDerivationSourceRecords] = useState<Omit<QueuedQuantityRecord, 'pending' | 'lastError'>[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -119,10 +119,10 @@ export function EntryScreen() {
       .catch((err: unknown) => setLoadError(errorMessage(err)))
     // Drives the Add picker's recency sort only — offline or slow, the
     // picker still works, just unsorted.
-    fetchItemProgress(contract.id)
+    fetchItemProgressRate(contract.id)
       .then((rows) => setItemProgress(rows))
       .catch((err: unknown) => {
-        console.warn('fetchItemProgress failed (likely offline) — item picker will be unsorted:', err)
+        console.warn('fetchItemProgressRate failed (likely offline) — item picker will be unsorted:', err)
       })
     // Drives the derived-quantity convenience-fill only.
     fetchDerivationRules(contract.id)

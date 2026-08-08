@@ -14,7 +14,7 @@ import {
   updateQuantityRecordDraft,
   type Direction,
 } from '../../lib/supabase/quantityRecords'
-import { fetchItemMonths, fetchItemProgress, type ItemProgress } from '../../lib/supabase/monthlyPeriods'
+import { fetchItemMonths, fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase/monthlyPeriods'
 import { fetchDerivationRules, type DerivationRule } from '../../lib/supabase/derivationRules'
 import type { QueuedQuantityRecord } from '../../lib/db'
 import { getDeviceId } from '../../lib/deviceId'
@@ -62,7 +62,7 @@ export function QuantityRecordsScreen() {
   const [workDate, setWorkDate] = useState(todayLocalDateString())
   const [items, setItems] = useState<Item[]>([])
   const [locations, setLocations] = useState<string[]>([])
-  const [itemProgress, setItemProgress] = useState<ItemProgress[]>([])
+  const [itemProgress, setItemProgress] = useState<ItemProgressRate[]>([])
   const [rules, setRules] = useState<DerivationRule[]>([])
   const [allRecords, setAllRecords] = useState<DayRecord[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -106,10 +106,10 @@ export function QuantityRecordsScreen() {
       })
     // Drives the Add picker's recency sort only — a stale or failed fetch
     // still leaves a usable (just unsorted) picker, not a broken page.
-    fetchItemProgress(contract.id)
+    fetchItemProgressRate(contract.id)
       .then(setItemProgress)
       .catch(() => {
-        console.warn('fetchItemProgress failed — Add picker will be unsorted')
+        console.warn('fetchItemProgressRate failed — Add picker will be unsorted')
       })
     // Drives the derived-quantity convenience-fill only — a failed fetch
     // leaves every Item behaving as if it has no rule, never a page error.
@@ -148,7 +148,7 @@ export function QuantityRecordsScreen() {
   // Only Unit Price Items are enterable (GC 52.03 — Lump Sum/Provisional Sum
   // aren't recorded by quantity), sorted by recent activity on this
   // contract, not alphabetically — the same ordering the mobile Field Entry
-  // picker already uses (fetchItemProgress's lastWorkDate), reused verbatim
+  // picker already uses (fetchItemProgressRate's lastWorkDate), reused verbatim
   // rather than reinvented, including its own tie-break for never-recorded
   // Items. No manual pinning — recency tracks the work itself (milling one
   // week, paving the next) without anyone maintaining an order.

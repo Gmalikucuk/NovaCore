@@ -3,12 +3,13 @@ import { supabase } from '../supabase/client'
 import type { MyContract } from '../supabase/contracts'
 import { fetchItems, type Item } from '../supabase/items'
 import { fetchItemPrices } from '../supabase/prices'
-import { fetchItemMonths, fetchItemProgress } from '../supabase/monthlyPeriods'
+import { fetchItemMonths, fetchItemProgressRate } from '../supabase/monthlyPeriods'
 import { fetchContractQuantityRecords } from '../supabase/quantityRecords'
 import { fetchProgressEstimateReconciliation, type ProgressEstimateReconciliation } from '../supabase/progressEstimates'
 import { isEffective } from '../calculations/effectiveEntries'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../calculations/naturalSort'
 import { estimatedCost, margin as computeMargin } from '../calculations/margin'
+import { remainingDisplay } from '../calculations/trackerRemaining'
 import { station } from '../format'
 import { MONEY_FORMAT, PERCENT_FORMAT, pureDate, quantityFormat, roundMoney, styleHeaderCell, styleHeaderRow, triggerDownload } from './exportHelpers'
 
@@ -67,9 +68,11 @@ async function fetchProfileNames(ids: string[]): Promise<Map<string, string | nu
   return new Map((data ?? []).map((p) => [p.id as string, p.full_name as string | null]))
 }
 
-interface LoadedData {
+/** Exported for direct testing (see trackerExport.test.ts) — the shape buildTrackerSheet/buildSummarySheet need, hand-constructible without a network round trip. */
+export interface LoadedData {
   items: Item[]
-  progressByItem: Map<string, Awaited<ReturnType<typeof fetchItemProgress>>[number]>
+  /** Unit Price Items only (v_item_progress_rate's own scope) — Lump Sum/Provisional Sum figures (percentComplete/provisionalSum/authorizedValue) come straight off the Item itself below, never from this map. */
+  progressByItem: Map<string, Awaited<ReturnType<typeof fetchItemProgressRate>>[number]>
   priceByItem: Map<string, Awaited<ReturnType<typeof fetchItemPrices>>[number]>
   itemMonthByKey: Map<string, Awaited<ReturnType<typeof fetchItemMonths>>[number]>
   allRecords: Awaited<ReturnType<typeof fetchContractQuantityRecords>>
@@ -84,7 +87,7 @@ interface LoadedData {
 async function loadData(contract: MyContract): Promise<LoadedData> {
   const [items, progress, prices, itemMonths, allRecords, reconciliation] = await Promise.all([
     fetchItems(contract.id),
-    fetchItemProgress(contract.id),
+    fetchItemProgressRate(contract.id),
     contract.viewRates ? fetchItemPrices(contract.id) : Promise.resolve([]),
     fetchItemMonths(contract.id),
     // Same scale caveat as the Tracker screen's own use of this fetch (see
@@ -138,7 +141,8 @@ function sortedItemsBySection(items: Item[]) {
     }))
 }
 
-function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
+/** Exported for direct testing (see trackerExport.test.ts) — same reason buildTrackerWorkbook is separated from exportTrackerWorkbook: exercise the per-item figures without a network round trip. */
+export function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
   const { items, progressByItem, priceByItem, itemMonthByKey, reconciliation, periods, periodsWithData, dateRange } = data
   const sections = sortedItemsBySection(items)
 
@@ -262,7 +266,20 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
       const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
       const costToDate = unitPriced ? estimatedCost(quantityToDate ?? 0, cost, costBasis) : null
       const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice, costBasis) : null
-      const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
+      // Signed, unlike the screens' magnitude-plus-badge — Excel has no
+      // over-quantity styling, so a negative number here IS the "over"
+      // signal, read the same way the reference workbook already reads it.
+      // Same remainingDisplay() the screens use; only the sign convention
+      // differs at the very last step.
+      const remainingResult = unitPriced && itemProgress ? remainingDisplay(itemProgress) : null
+      const remaining = remainingResult ? (remainingResult.isOverQuantity ? -remainingResult.amount : remainingResult.amount) : null
+      // v_item_progress_rate carries no Lump Sum/Provisional Sum rows (it's
+      // scoped to unit_price, same as every other rate-view consumer) — a
+      // Lump Sum Item's proportion has to come from its own percentComplete
+      // directly, the same 0042-era formula v_item_progress itself used to
+      // compute (percent_complete / 100.0), not from this map.
+      const proportionComplete =
+        item.itemKind === 'lump_sum' ? (item.percentComplete != null ? item.percentComplete / 100 : null) : (itemProgress?.proportionComplete ?? null)
       const recon = reconciliation.get(item.itemNumber)
       const qtyFmt = quantityFormat(item.unit)
 
@@ -298,10 +315,10 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
       // simply hasn't been estimated yet. Both read "—", same as
       // Provisional Sum already does, until either kind has a real figure.
       const percentCell = row.getCell(c++)
-      if (isProvisionalSum || itemProgress?.proportionComplete == null) {
+      if (isProvisionalSum || proportionComplete == null) {
         percentCell.value = '—'
       } else {
-        percentCell.value = itemProgress.proportionComplete
+        percentCell.value = proportionComplete
         percentCell.numFmt = PERCENT_FORMAT
       }
 
@@ -329,10 +346,10 @@ function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
 
       if (contract.viewRates) {
         const authorizedCell = row.getCell(c++)
-        authorizedCell.value = isProvisionalSum ? roundMoney(itemProgress?.authorizedValue ?? 0) : '—'
+        authorizedCell.value = isProvisionalSum ? roundMoney(item.authorizedValue ?? 0) : '—'
         if (isProvisionalSum) authorizedCell.numFmt = MONEY_FORMAT
         const provisionalCell = row.getCell(c++)
-        provisionalCell.value = isProvisionalSum ? roundMoney(itemProgress?.provisionalSum ?? 0) : '—'
+        provisionalCell.value = isProvisionalSum ? roundMoney(item.provisionalSum ?? 0) : '—'
         if (isProvisionalSum) provisionalCell.numFmt = MONEY_FORMAT
         const valueCell = row.getCell(c++)
         valueCell.value = valueToDate !== null ? roundMoney(valueToDate) : '—'
@@ -394,7 +411,8 @@ function buildRecordsSheet(workbook: ExcelJS.Workbook, data: LoadedData) {
   })
 }
 
-function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
+/** Exported for direct testing (see trackerExport.test.ts) — same reason buildTrackerSheet is, and for the same "assert the export matches the screen" requirement. */
+export function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, data: LoadedData) {
   const { items, progressByItem, priceByItem } = data
   const sortedItems = [...items].sort((a, b) => compareItemCodes(a.itemNumber, b.itemNumber))
 
@@ -435,7 +453,10 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
     const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
     const costToDate = unitPriced ? estimatedCost(quantityToDate ?? 0, cost, costBasis) : null
     const marginToDate = unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice, costBasis) : null
-    const remaining = unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null
+    const remainingResult = unitPriced && itemProgress ? remainingDisplay(itemProgress) : null
+    const remaining = remainingResult ? (remainingResult.isOverQuantity ? -remainingResult.amount : remainingResult.amount) : null
+    const proportionComplete =
+      item.itemKind === 'lump_sum' ? (item.percentComplete != null ? item.percentComplete / 100 : null) : (itemProgress?.proportionComplete ?? null)
     const qtyFmt = quantityFormat(item.unit)
 
     const row = sheet.getRow(dataStartRowNum + i)
@@ -454,10 +475,10 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContract, dat
     // Same absent-vs-zero rule as the Tracker sheet above: a Lump Sum Item
     // with no percent_complete ever entered reads "—", not a false 0%.
     const percentCell = row.getCell(c++)
-    if (item.itemKind === 'provisional_sum' || itemProgress?.proportionComplete == null) {
+    if (item.itemKind === 'provisional_sum' || proportionComplete == null) {
       percentCell.value = '—'
     } else {
-      percentCell.value = itemProgress.proportionComplete
+      percentCell.value = proportionComplete
       percentCell.numFmt = PERCENT_FORMAT
     }
     if (contract.viewRates) {
