@@ -7,7 +7,7 @@ import { fetchItemProgressRate, type ItemProgressRate } from '../../lib/supabase
 import { fetchPinnedItems, pinItem, unpinItem, type PinnedItem } from '../../lib/supabase/pinnedItems'
 import { buildProblemList } from '../../lib/calculations/overview'
 import { compareItemCodes } from '../../lib/calculations/naturalSort'
-import { gateOnCostTracking, margin as computeMargin } from '../../lib/calculations/margin'
+import { costTrackingVisible, gateOnCostTracking, margin as computeMargin } from '../../lib/calculations/margin'
 import { errorMessage } from '../../lib/errorMessage'
 import { money, percent, quantity as fmtQuantity } from '../../lib/format'
 import { Button, NotificationBanner, Select, Spinner } from '../../components/ui'
@@ -102,12 +102,12 @@ export function OwnerScreen({ contract }: { contract: MyContract }) {
                   priceByItem.get(row.pin.itemId)?.unitPrice ?? null,
                   priceByItem.get(row.pin.itemId)?.costBasis ?? null,
                 ),
-                contract.costTrackingEnabled,
+                costTrackingVisible({ costTrackingEnabled: contract.costTrackingEnabled, setCost: contract.setCost }),
               )
             : null,
         }))
         .sort((a, b) => compareItemCodes(a.progress.itemNumber, b.progress.itemNumber)),
-    [pins, progressByItem, priceByItem, contract.viewRates, contract.costTrackingEnabled],
+    [pins, progressByItem, priceByItem, contract.viewRates, contract.costTrackingEnabled, contract.setCost],
   )
 
   // Over-quantity first — that's what costs money today — then stalled.

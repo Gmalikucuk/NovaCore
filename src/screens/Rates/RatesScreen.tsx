@@ -6,7 +6,7 @@ import { updateTenderPrice, updateCostTrackingEnabled } from '../../lib/supabase
 import { fetchItems, updateItemAuthorizedValue, updateItemPercentComplete, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, upsertItemPrice, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchItemProgressRate } from '../../lib/supabase/monthlyPeriods'
-import { gateOnCostTracking, type CostBasis } from '../../lib/calculations/margin'
+import { costTrackingVisible, gateOnCostTracking, type CostBasis } from '../../lib/calculations/margin'
 import { aggregateFinancials, marginBands, reconcileTenderPrice, rowFinancials, type MarginBand, type RowFinancials } from '../../lib/calculations/bidSummary'
 import { measuredRollup, unmeasuredRollup } from '../../lib/calculations/projectedActual'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calculations/naturalSort'
@@ -308,17 +308,21 @@ export function RatesScreen() {
           unitPrice,
         })
         // Margin/Margin % are suppressed until cost tracking is deliberately
-        // turned on (0042) — Unit cost/Ext. cost stay real regardless, since
-        // those are the entry surface itself, not a derived claim. Nulled
-        // here, at the one place every row's financials are built, rather
-        // than at each render site — every consumer downstream (the row
-        // cell, section subtotals, the grand total, the tercile bands) sees
-        // "no margin" through the exact same absent-reads-as-em-dash path
-        // it already uses for a Provisional Sum row's own null margin.
+        // turned on (0042), OR shown regardless to the set_cost holder
+        // typing the figures in — the same exemption v_item_prices_visible
+        // already makes at the database layer (0044), checked here the
+        // same way so Margin doesn't read absent right next to a real Unit
+        // cost/Ext. cost for that exact seat. Nulled here, at the one place
+        // every row's financials are built, rather than at each render
+        // site — every consumer downstream (the row cell, section
+        // subtotals, the grand total, the tercile bands) sees "no margin"
+        // through the exact same absent-reads-as-em-dash path it already
+        // uses for a Provisional Sum row's own null margin.
+        const marginVisible = costTrackingVisible({ costTrackingEnabled, setCost: contract.setCost })
         const financials = {
           ...rawFinancials,
-          tenderedMargin: gateOnCostTracking(rawFinancials.tenderedMargin, costTrackingEnabled),
-          tenderedMarginPercent: gateOnCostTracking(rawFinancials.tenderedMarginPercent, costTrackingEnabled),
+          tenderedMargin: gateOnCostTracking(rawFinancials.tenderedMargin, marginVisible),
+          tenderedMarginPercent: gateOnCostTracking(rawFinancials.tenderedMarginPercent, marginVisible),
         }
         // A Provisional Sum Item is "priced" the moment Schedule 7's own
         // allowance is on the Item — nothing is ever entered for it here.
@@ -327,7 +331,7 @@ export function RatesScreen() {
         const priced = item.itemKind === 'provisional_sum' ? item.provisionalSum !== null : financials.extCost !== null && financials.extAmount !== null
         return { item, costPrice, costBasis, unitPrice, quantityToDate: quantityByItem.get(item.id) ?? 0, financials, priced }
       }),
-    [items, prices, quantityByItem, costTrackingEnabled],
+    [items, prices, quantityByItem, costTrackingEnabled, contract.setCost],
   )
 
   const rows = useMemo<IndexedRow[]>(() => {
@@ -910,19 +914,22 @@ export function RatesScreen() {
           </NotificationBanner>
 
           {/* The cost-tracking switch itself (0042) — the one control that
-              decides whether Margin/Est. cost render anywhere on this
-              contract outside the entry columns just below. Unit cost/Ext.
-              cost stay real and enterable regardless of this toggle; only
-              what's DERIVED from them (here and everywhere else in
-              NovaCore) depends on it. */}
+              decides whether tendered margin/Est. cost render anywhere on
+              this contract outside the entry columns just below, for seats
+              who don't hold the cost-entry rights. canEdit itself requires
+              set_cost, so everyone who sees this banner ALREADY sees real
+              cost/margin regardless of the toggle (the entry-surface
+              exemption, 0044) — the copy below has to say that plainly,
+              not "hidden until turned on," which would be wrong for the
+              exact reader looking at it. */}
           {canEdit && (
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-nc-border bg-white px-4 py-3">
               <div>
                 <p className="text-sm font-medium text-nc-text">Cost tracking is {costTrackingEnabled ? 'on' : 'off'} for this contract.</p>
                 <p className="text-xs text-nc-text-muted">
                   {costTrackingEnabled
-                    ? 'Margin and Est. cost figures show here and elsewhere in NovaCore, computed from the costs entered below.'
-                    : 'Unit cost and Ext. cost stay enterable below. Margin and Est. cost figures stay hidden everywhere in NovaCore until this is turned on.'}
+                    ? 'Tendered margin and Est. cost figures show here and elsewhere in NovaCore, computed from the costs entered below.'
+                    : 'Unit cost, Ext. cost, and tendered margin stay visible to you as the person entering them — here and everywhere else in NovaCore. They stay hidden from every other seat until this is turned on.'}
                 </p>
                 {costTrackingError && <p className="mt-1 text-xs text-nc-danger-text">{costTrackingError}</p>}
               </div>
@@ -944,7 +951,7 @@ export function RatesScreen() {
           )}
           {bandsActive && (
             <NotificationBanner tone="info" className="mb-4">
-              Margin % below is banded against the bottom/top third of this contract's own priced Items — relative to {contract.name}, not a fixed threshold. Rows with no cost show no band.
+              Tendered margin % below is banded against the bottom/top third of this contract's own priced Items — relative to {contract.name}, not a fixed threshold. Rows with no cost show no band.
             </NotificationBanner>
           )}
 
@@ -1002,10 +1009,10 @@ export function RatesScreen() {
                       Unit price
                     </TH>
                     {sortableHeader('extAmount', 'Extended amount', 'right')}
-                    <TH align="right" compact>
+                    <TH align="right" compact title="Tendered margin — at Approximate Quantity, the whole scope as bid, not quantity to date">
                       Margin
                     </TH>
-                    <TH align="right" compact>
+                    <TH align="right" compact title="Tendered margin — at Approximate Quantity, the whole scope as bid, not quantity to date">
                       Margin %
                     </TH>
                     {showEarnedColumns && (

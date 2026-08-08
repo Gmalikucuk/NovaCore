@@ -8,7 +8,7 @@ import { fetchContractQuantityRecords } from '../supabase/quantityRecords'
 import { fetchProgressEstimateReconciliation, type ProgressEstimateReconciliation } from '../supabase/progressEstimates'
 import { isEffective } from '../calculations/effectiveEntries'
 import { compareItemCodes, sectionLabel, sectionPrefix } from '../calculations/naturalSort'
-import { estimatedCost, gateOnCostTracking, margin as computeMargin } from '../calculations/margin'
+import { costTrackingVisible, estimatedCost, gateOnCostTracking, margin as computeMargin } from '../calculations/margin'
 import { remainingDisplay } from '../calculations/trackerRemaining'
 import { station } from '../format'
 import { MONEY_FORMAT, PERCENT_FORMAT, pureDate, quantityFormat, roundMoney, styleHeaderCell, styleHeaderRow, triggerDownload } from './exportHelpers'
@@ -260,7 +260,7 @@ export function buildTrackerSheet(workbook: ExcelJS.Workbook, contract: MyContra
       // Suppressed until cost tracking is deliberately on for this
       // contract (0042) — costToDate/marginToDate cascade from this one
       // variable, same as FinanceMonthScreen's own gate.
-      const cost = unitPriced ? gateOnCostTracking(price?.costPrice ?? null, contract.costTrackingEnabled) : null
+      const cost = unitPriced ? gateOnCostTracking(price?.costPrice ?? null, costTrackingVisible(contract)) : null
       const costBasis = unitPriced ? (price?.costBasis ?? null) : null
       const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
       const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null
@@ -447,7 +447,7 @@ export function buildSummarySheet(workbook: ExcelJS.Workbook, contract: MyContra
     const itemProgress = progressByItem.get(item.id)
     const price = priceByItem.get(item.id)
     const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
-    const cost = unitPriced ? gateOnCostTracking(price?.costPrice ?? null, contract.costTrackingEnabled) : null
+    const cost = unitPriced ? gateOnCostTracking(price?.costPrice ?? null, costTrackingVisible(contract)) : null
     const costBasis = unitPriced ? (price?.costBasis ?? null) : null
     const quantityToDate = unitPriced ? (itemProgress?.quantityToDate ?? 0) : null
     const valueToDate = unitPriced && unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null

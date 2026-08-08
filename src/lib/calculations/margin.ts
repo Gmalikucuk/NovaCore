@@ -1,17 +1,43 @@
 export type CostBasis = 'per_unit' | 'total'
 
 /**
- * The one place "cost tracking is off ⇒ this figure is absent" lives (0042).
- * Every cost- or margin-derived figure in this app is gated through this
- * single check, whatever form the figure takes at the point of gating — a
- * raw cost price about to feed a calculation, an already-computed margin, a
- * pre-existing SQL figure (v_contract_month's own marginInPeriod), or one
- * field of a larger object (an ItemPrice's costPrice, a RowFinancials'
- * margin) — rather than each call site re-writing its own `enabled ? x :
- * null` ternary with its own comment explaining why.
+ * Whether cost- or margin-derived figures should render for this seat on
+ * this contract — cost tracking deliberately on, OR the caller holds
+ * set_cost, the entry surface (0044). A Finance user typing a cost figure
+ * in must keep seeing it regardless of whether the display toggle happens
+ * to be on for everyone else — the database itself already makes this
+ * exact exemption (v_item_prices_visible's own mask condition is
+ * cost_tracking_enabled OR has_right(contract_id, 'set_cost')), so the
+ * client has to check the same two things, not one, or a set_cost holder
+ * would see real cost/Ext. cost on Rates and a nulled-out Margin sitting
+ * right next to it — nothing wrong with the inputs, just the client
+ * disagreeing with what the database already decided to let through for
+ * that exact seat.
  */
-export function gateOnCostTracking<T>(value: T | null, costTrackingEnabled: boolean): T | null {
-  return costTrackingEnabled ? value : null
+export function costTrackingVisible(contract: { costTrackingEnabled: boolean; setCost: boolean }): boolean {
+  return contract.costTrackingEnabled || contract.setCost
+}
+
+/**
+ * The one shape "this figure is absent unless cost is visible" takes,
+ * everywhere in the app — a raw cost price about to feed a calculation, an
+ * already-computed margin, a pre-existing SQL figure (v_contract_month's
+ * own marginInPeriod), or one field of a larger object (an ItemPrice's
+ * costPrice, a RowFinancials' margin) — rather than each call site
+ * re-writing its own `visible ? x : null` ternary with its own comment
+ * explaining why.
+ *
+ * Belt-and-braces, not the wall (0044) — v_item_prices_visible is the real
+ * enforcement; cost arrives from the database already null when it should
+ * be. This is what makes a figure the database never computed itself (a
+ * client-derived margin, a locally summed total) go absent through the
+ * exact same em-dash convention, rather than the two ever reading
+ * differently for the same seat. Do not remove this as redundant just
+ * because the database already enforces the underlying rule — a
+ * client-derived figure has nothing upstream to inherit absence from.
+ */
+export function gateOnCostTracking<T>(value: T | null, visible: boolean): T | null {
+  return visible ? value : null
 }
 
 /**

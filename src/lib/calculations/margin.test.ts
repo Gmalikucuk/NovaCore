@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { estimatedCost, gateOnCostTracking, margin, marginPercent, sumOrNull } from './margin'
+import { costTrackingVisible, estimatedCost, gateOnCostTracking, margin, marginPercent, sumOrNull } from './margin'
 
 describe('estimatedCost', () => {
   it('scales with quantity when per_unit', () => {
@@ -92,6 +92,21 @@ describe('marginPercent', () => {
     const m = margin(quantity, cost, sell, 'per_unit')!
     const revenue = quantity * sell
     expect(marginPercent(quantity, cost, sell, 'per_unit')).toBeCloseTo(m / revenue, 10)
+  })
+})
+
+describe('costTrackingVisible', () => {
+  it('is visible when cost tracking is on, regardless of set_cost', () => {
+    expect(costTrackingVisible({ costTrackingEnabled: true, setCost: false })).toBe(true)
+    expect(costTrackingVisible({ costTrackingEnabled: true, setCost: true })).toBe(true)
+  })
+
+  it('is visible when tracking is off but the seat holds set_cost — the entry surface exemption', () => {
+    expect(costTrackingVisible({ costTrackingEnabled: false, setCost: true })).toBe(true)
+  })
+
+  it('is not visible when tracking is off and the seat holds no set_cost', () => {
+    expect(costTrackingVisible({ costTrackingEnabled: false, setCost: false })).toBe(false)
   })
 })
 

@@ -6,7 +6,7 @@ import type { ContractState } from '../../lib/supabase/contracts'
 import { loadContractSummary, type ContractSummary } from '../../lib/supabase/contractSummary'
 import { fetchViewPreferences, resetViewPreferences, saveViewPreferences } from '../../lib/supabase/viewPreferences'
 import { aggregateFinancials, rowFinancials } from '../../lib/calculations/bidSummary'
-import { gateOnCostTracking } from '../../lib/calculations/margin'
+import { costTrackingVisible, gateOnCostTracking } from '../../lib/calculations/margin'
 import {
   buildAttention,
   contractCountsToward,
@@ -260,13 +260,15 @@ export function OverviewScreen() {
       const label = contractLabel(s.contract)
       for (const item of s.items) {
         const rawPrice = priceByItem.get(item.id)
-        // Cost/basis masked when this contract has cost tracking off
-        // (0042) — unitPrice stays real, since valueEarned/valueTendered
-        // are price-derived, not cost-derived.
+        // Cost/basis masked when this contract has cost tracking off and
+        // the seat holds no set_cost there (0042/0044) — unitPrice stays
+        // real, since valueEarned/valueTendered are price-derived, not
+        // cost-derived.
+        const priceVisible = costTrackingVisible(s.contract)
         const price =
           rawPrice === undefined
             ? rawPrice
-            : { ...rawPrice, costPrice: gateOnCostTracking(rawPrice.costPrice, s.contract.costTrackingEnabled), costBasis: gateOnCostTracking(rawPrice.costBasis, s.contract.costTrackingEnabled) }
+            : { ...rawPrice, costPrice: gateOnCostTracking(rawPrice.costPrice, priceVisible), costBasis: gateOnCostTracking(rawPrice.costBasis, priceVisible) }
         rows.push(moneyMakerRow({ contractId: s.contract.id, contractLabel: label, contractState: s.contract.contractState, item, price, progress: progressByItem.get(item.id) }))
       }
     }
@@ -346,7 +348,12 @@ export function OverviewScreen() {
   )
   const taggedProblems = useMemo(() => {
     const tagged = attentionByContract.flatMap(({ summary, result }) =>
-      result.problems.map((problem) => ({ problem, contractLabel: contractLabel(summary.contract), costTrackingEnabled: summary.contract.costTrackingEnabled })),
+      result.problems.map((problem) => ({
+        problem,
+        contractLabel: contractLabel(summary.contract),
+        costTrackingEnabled: summary.contract.costTrackingEnabled,
+        setCost: summary.contract.setCost,
+      })),
     )
     return tagged.slice().sort((a, b) => PROBLEM_ORDER[a.problem.kind] - PROBLEM_ORDER[b.problem.kind])
   }, [attentionByContract])
@@ -358,12 +365,14 @@ export function OverviewScreen() {
   // Feeds overQuantityValueAboveSchedule (unitPrice only — untouched by
   // 0042) and ProblemRow's own "at cost" sentence (costPrice — masked here
   // per each item's own contract, since this map merges Items across
-  // several contracts that may not all have cost tracking on).
+  // several contracts that may not all have cost tracking on, or where the
+  // seat may hold set_cost on some and not others).
   const priceByItem = useMemo(() => {
     const map = new Map<string, ItemPrice>()
     for (const s of realSummaries) {
+      const priceVisible = costTrackingVisible(s.contract)
       for (const p of s.prices) {
-        map.set(p.itemId, { ...p, costPrice: gateOnCostTracking(p.costPrice, s.contract.costTrackingEnabled), costBasis: gateOnCostTracking(p.costBasis, s.contract.costTrackingEnabled) })
+        map.set(p.itemId, { ...p, costPrice: gateOnCostTracking(p.costPrice, priceVisible), costBasis: gateOnCostTracking(p.costBasis, priceVisible) })
       }
     }
     return map
@@ -444,8 +453,8 @@ export function OverviewScreen() {
 
               {prefs.marginOn && (
                 <NotificationBanner tone="info" className="mb-3">
-                  Margin reflects cost entered on {marginCoverage.costCoverage.count} of {marginCoverage.costCoverage.total} cost-applicable Items across contracts you can price — most
-                  Items have no cost recorded yet, so treat this as a partial read, not the whole picture.
+                  Tendered margin (below, and in Money makers further down) reflects cost entered on {marginCoverage.costCoverage.count} of {marginCoverage.costCoverage.total} cost-applicable
+                  Items across contracts you can price — most Items have no cost recorded yet, so treat this as a partial read, not the whole picture.
                 </NotificationBanner>
               )}
 
@@ -481,7 +490,7 @@ export function OverviewScreen() {
                         </span>
                       </TH>
                     )}
-                    {prefs.marginOn && <TH align="right">Est. margin</TH>}
+                    {prefs.marginOn && <TH align="right">Est. margin to date</TH>}
                     <TH />
                   </TR>
                 </THead>
@@ -599,7 +608,7 @@ export function OverviewScreen() {
                             <SortIndicator active={prefs.moneyMakerSortKey === 'valueEarned' || prefs.moneyMakerSortKey === 'value'} dir={prefs.moneyMakerSortDir} />
                           </span>
                         </TH>
-                        {prefs.marginOn && <TH align="right">Margin</TH>}
+                        {prefs.marginOn && <TH align="right">Tendered margin</TH>}
                       </TR>
                     </THead>
                     <TBody>
@@ -704,12 +713,13 @@ export function OverviewScreen() {
                   <div>
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-nc-text-subtle">Behind rate or stalled</h3>
                     <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
-                      {visibleProblems.map(({ problem, contractLabel: label, costTrackingEnabled: problemCostTrackingEnabled }) => (
+                      {visibleProblems.map(({ problem, contractLabel: label, costTrackingEnabled: problemCostTrackingEnabled, setCost: problemSetCost }) => (
                         <ProblemRow
                           key={`${label}-${problem.kind}-${problem.row.itemId}`}
                           problem={problem}
                           priceByItem={priceByItem}
                           costTrackingEnabled={problemCostTrackingEnabled}
+                          setCost={problemSetCost}
                           contractLabel={label}
                         />
                       ))}

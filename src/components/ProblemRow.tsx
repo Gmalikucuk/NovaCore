@@ -1,7 +1,7 @@
 import { IconAlertTriangle, IconClockPause, IconFlag } from '@tabler/icons-react'
 import type { ItemPrice } from '../lib/supabase/prices'
 import type { ProblemItem } from '../lib/calculations/overview'
-import { gateOnCostTracking } from '../lib/calculations/margin'
+import { costTrackingVisible, gateOnCostTracking } from '../lib/calculations/margin'
 import { money, quantity as fmtQuantity } from '../lib/format'
 
 const PROBLEM_KIND_LABEL: Record<ProblemItem['kind'], string> = {
@@ -16,7 +16,7 @@ function ProblemIcon({ kind }: { kind: ProblemItem['kind'] }) {
   return <IconFlag size={16} stroke={1.75} className="text-nc-info-text" />
 }
 
-function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>, costTrackingEnabled: boolean): string {
+function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>, costTrackingEnabled: boolean, setCost: boolean): string {
   const { kind, row } = p
   if (kind === 'stalled') {
     return row.lastWorkDate ? `No activity since ${row.lastWorkDate} — not finished.` : 'No confirmed activity yet — not finished.'
@@ -27,9 +27,10 @@ function problemSentence(p: ProblemItem, priceByItem: Map<string, ItemPrice>, co
     // A per-unit rate turns the overage into a dollar figure directly. A
     // total cost has no such reading — "overage x total" isn't a real
     // number, it's just wrong, so this stays silent rather than showing
-    // one (0023). Suppressed entirely, regardless of basis, until cost
-    // tracking is deliberately on for this Item's contract (0042).
-    const costPrice = gateOnCostTracking(price?.costPrice ?? null, costTrackingEnabled)
+    // one (0023). Suppressed until cost tracking is deliberately on for
+    // this Item's contract, or the seat holds set_cost — the entry surface
+    // (0042/0044).
+    const costPrice = gateOnCostTracking(price?.costPrice ?? null, costTrackingVisible({ costTrackingEnabled, setCost }))
     const atCost = costPrice !== null && price?.costBasis === 'per_unit' ? ` — ${money(overage * costPrice)} at cost` : ''
     return `${fmtQuantity(overage)} ${row.unit} over the Approximate Quantity${atCost}.`
   }
@@ -55,12 +56,15 @@ export function ProblemRow({
   problem,
   priceByItem,
   costTrackingEnabled,
+  setCost,
   contractLabel,
 }: {
   problem: ProblemItem
   priceByItem: Map<string, ItemPrice>
   /** Whether the "at cost" overage figure may show at all, for this problem's own contract (0042) — required, not defaulted, so a new call site can't silently inherit "on." */
   costTrackingEnabled: boolean
+  /** The entry-surface exemption (0044) — a seat holding set_cost on this problem's own contract sees the "at cost" figure regardless of costTrackingEnabled, matching what the database already lets through. Required, same reasoning as costTrackingEnabled. */
+  setCost: boolean
   contractLabel?: string
 }) {
   return (
@@ -71,7 +75,7 @@ export function ProblemRow({
           <span className="nc-numeric font-semibold text-nc-text">{problem.row.itemNumber}</span> <span className="text-nc-text-muted">{problem.row.description}</span>
           {contractLabel && <span className="ml-2 text-xs text-nc-text-subtle">· {contractLabel}</span>}
         </p>
-        <p className="text-sm text-nc-text-muted">{problemSentence(problem, priceByItem, costTrackingEnabled)}</p>
+        <p className="text-sm text-nc-text-muted">{problemSentence(problem, priceByItem, costTrackingEnabled, setCost)}</p>
       </div>
       <span className="shrink-0 rounded-full bg-nc-secondary px-2 py-0.5 text-xs font-medium text-nc-text-muted">{PROBLEM_KIND_LABEL[problem.kind]}</span>
     </div>

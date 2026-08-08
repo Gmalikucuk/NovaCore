@@ -2,7 +2,7 @@ import type { MyContract } from './contracts'
 import { fetchItems, type Item } from './items'
 import { fetchItemProgressRate, type ItemProgressRate } from './monthlyPeriods'
 import { fetchItemPrices, type ItemPrice } from './prices'
-import { gateOnCostTracking, margin, sumOrNull } from '../calculations/margin'
+import { costTrackingVisible, gateOnCostTracking, margin, sumOrNull } from '../calculations/margin'
 
 export interface ContractSummary {
   contract: MyContract
@@ -54,7 +54,7 @@ export async function loadContractSummary(contract: MyContract): Promise<Contrac
     sumOrNull(
       progressRate.map((r) => margin(r.quantityToDate, priceByItem.get(r.itemId)?.costPrice ?? null, priceByItem.get(r.itemId)?.unitPrice ?? null, priceByItem.get(r.itemId)?.costBasis ?? null)),
     ),
-    contract.costTrackingEnabled,
+    costTrackingVisible(contract),
   )
   return { contract, valueToDate, marginToDate, items, progressRate, prices }
 }
