@@ -111,17 +111,32 @@ function PercentDisplay({ value }: { value: number | null }) {
 // readable element. Deliberately NOT used for Ext. cost — cost coverage is
 // partial and permanent, so a bar chart there would imply a comparability
 // the data doesn't have. Anchored to the RIGHT, growing leftward, so it
-// always sits directly behind the right-aligned figure it describes. w-full
-// here (not a pixel constant — see MoneyDisplay above) is what keeps the
-// bar's own 0-100% scale resolving against the column's actual width,
-// never past it.
+// always sits directly behind the right-aligned figure it describes.
+//
+// Positioned relative to the TD itself (each call site below sets
+// `relative` on that TD's own className), not an inner wrapper span — a
+// wrapper is only ever as tall as its own text content, which sits SHORTER
+// than the row the moment a sibling cell (the Item identity column, most
+// often, running two lines) is taller: a table row's real rendered height
+// is set by its tallest cell, not this one. Anchoring to the TD instead of
+// a wrapper guarantees the bar always matches the row's actual height,
+// because every cell in a row shares that same height by construction —
+// this is what fixes the bar reading as a short, floating block rather
+// than filling the row it describes.
+//
+// `relative` on the number span isn't a positioning offset (it has none) —
+// it's what makes the number a POSITIONED sibling too, so painting order
+// resolves by DOM order between two positioned elements (number after bar,
+// so number paints on top) instead of the default rule that would put the
+// bar — position: absolute — above ordinary in-flow content regardless of
+// DOM order.
 function ExtAmountCell({ value, maxValue }: { value: number | null; maxValue: number }) {
   const pct = value !== null && maxValue > 0 && value > 0 ? (value / maxValue) * 100 : 0
   return (
-    <span className="relative inline-block w-full py-2">
+    <>
       {pct > 0 && <span className="absolute inset-y-0 right-0 rounded-sm bg-nc-accent/15" style={{ width: `${pct}%` }} aria-hidden="true" />}
-      <span className="nc-numeric relative block text-right">{value === null ? '—' : rate(value)}</span>
-    </span>
+      <span className="nc-numeric relative block py-2 text-right">{value === null ? '—' : rate(value)}</span>
+    </>
   )
 }
 
@@ -212,11 +227,12 @@ function ColumnsControl({ columns, costVisible, onToggle }: { columns: RatesColu
 const PREFS_SCOPE = 'rates_columns'
 
 /**
- * Item identity — description, item number, unit, Approximate Quantity —
- * once, on its own line, exactly the pattern the progress claim screen
- * shipped first (that screen is this one's own reference, per the redesign
- * brief). Not repeated in every numeric cell; Approximate Quantity no
- * longer has a column of its own.
+ * Item identity — description and item number, nothing else. Unit of
+ * measure and Approximate Quantity used to live on this line; both moved
+ * to their own column (see QuantityCell) once that column existed to hold
+ * them — the unit qualifies the quantity figure, so it belongs beside that
+ * number once a number is on screen, not off in a second location a reader
+ * has to cross-reference (add-quantity-column follow-up).
  *
  * Truncates to w-full, not a pixel constant — this is the flexible column
  * (see COL_W's own comment), so its real width moves with the viewport and
@@ -224,10 +240,10 @@ const PREFS_SCOPE = 'rates_columns'
  * a wide screen or, worse, silently stop matching what table-layout: fixed
  * actually rendered.
  *
- * A Lump Sum/Provisional Sum Item has no unit — a bare "· lump sum" in that
- * slot read as if the kind were a unit of measure, the same slot every
- * other row uses for a real one. A small tag instead: still one glance to
- * see "no rate applies here," but visibly a category, not a unit.
+ * A Lump Sum/Provisional Sum Item still gets its kind tag here — the one
+ * thing about an Item's identity that isn't a quantity or a unit, and the
+ * one place left that says "no rate applies here" without a reader having
+ * to first notice an em-dash in the quantity column.
  */
 function ItemIdentity({ item }: { item: Item }) {
   return (
@@ -237,11 +253,6 @@ function ItemIdentity({ item }: { item: Item }) {
       </div>
       <div className="mt-0.5 flex items-center gap-1.5 text-xs text-nc-text-muted">
         <span>{item.itemNumber}</span>
-        {item.itemKind === 'unit_price' && (
-          <span>
-            · {item.unit} · {fmtQuantity(item.approximateQuantity)} approx.
-          </span>
-        )}
         {item.itemKind !== 'unit_price' && (
           <span className="inline-flex items-center rounded-full bg-nc-neutral-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-nc-neutral-text">
             {item.itemKind === 'lump_sum' ? 'Lump sum' : 'Provisional sum'}
@@ -249,6 +260,24 @@ function ItemIdentity({ item }: { item: Item }) {
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * Approximate quantity — the multiplicand that used to live only in the
+ * identity line, now its own column so Extended amount (quantity × Unit
+ * price) reads across the row instead of requiring a lookup two columns
+ * away. Unit of measure sits right beside the figure it qualifies, muted
+ * so the number stays the primary read. Lump Sum/Provisional Sum Items
+ * have no meaningful quantity — em-dash, never 0 or 1 (a real recorded
+ * zero and "doesn't apply" must never look the same).
+ */
+function QuantityCell({ item }: { item: Item }) {
+  if (item.itemKind !== 'unit_price') return <DashCell />
+  return (
+    <span className="inline-block w-full py-2 text-right">
+      <span className="nc-numeric">{fmtQuantity(item.approximateQuantity)}</span> <span className="text-xs text-nc-text-muted">{item.unit}</span>
+    </span>
   )
 }
 
@@ -663,7 +692,7 @@ export function RatesScreen() {
     }
   }
 
-  const colCount = 3 + (Object.values(columns).filter(Boolean).length)
+  const colCount = 4 + (Object.values(columns).filter(Boolean).length)
 
   // Column-major tab order down whichever price-family columns are actually
   // shown — Unit cost (when visible) fills the first block, Unit price
@@ -714,7 +743,7 @@ export function RatesScreen() {
   // unconstrained is standard fixed-layout behavior, not a special case —
   // the constrained columns keep their pixel caps (never grow, so no
   // overflow risk returns) and identity takes the rest.
-  const COL_W = { unitPrice: 100, extAmount: 120, unitCost: 100, extCost: 120, margin: 110, marginPercent: 85, percentComplete: 95, authorizedValue: 120 }
+  const COL_W = { quantity: 150, unitPrice: 100, extAmount: 120, unitCost: 100, extCost: 120, margin: 110, marginPercent: 85, percentComplete: 95, authorizedValue: 120 }
 
   function renderPanel(row: IndexedRow): ReactNode {
     const { item } = row
@@ -871,6 +900,13 @@ export function RatesScreen() {
             <ItemIdentity item={item} />
           </TD>
 
+          {/* Approximate quantity — always shown; the multiplicand that
+              used to live only in the identity line. Em-dash for Lump
+              Sum/Provisional Sum, never 0 (QuantityCell's own rule). */}
+          <TD align="right" dense compact className="align-top">
+            <QuantityCell item={item} />
+          </TD>
+
           {/* Unit price — always shown; the one input the entry persona
               needs. */}
           <TD align="right" dense compact className="align-top" onClick={(e) => e.stopPropagation()}>
@@ -884,8 +920,11 @@ export function RatesScreen() {
 
           {/* Extended amount — always shown; derived for Unit Price, IS the
               editable lump sum price for Lump Sum, sourced from Schedule
-              7's own Provisional Sum allowance for Provisional Sum. */}
-          <TD align="right" dense compact className="align-top" onClick={(e) => e.stopPropagation()}>
+              7's own Provisional Sum allowance for Provisional Sum.
+              `relative` here (not on an inner wrapper) is what makes the
+              magnitude bar inside ExtAmountCell size itself against the
+              row's own rendered height — see that component's comment. */}
+          <TD align="right" dense compact className="relative align-top" onClick={(e) => e.stopPropagation()}>
             {item.itemKind === 'lump_sum' ? (
               canEdit ? priceInput : <ExtAmountCell value={row.financials.extAmount} maxValue={maxExtAmount} />
             ) : (
@@ -964,7 +1003,7 @@ export function RatesScreen() {
     const agg = aggregateFinancials(rowsInGroup.map((r) => ({ itemKind: r.item.itemKind, financials: r.financials })))
     return (
       <TR key={key} className="bg-nc-secondary font-semibold">
-        <TD colSpan={2} compact className="text-data align-middle text-nc-text">
+        <TD colSpan={3} compact className="text-data align-middle text-nc-text">
           {label}
         </TD>
         <TD align="right" compact className="nc-numeric align-middle">
@@ -1053,10 +1092,16 @@ export function RatesScreen() {
               </Button>
             </div>
           )}
+          {/* A full-width block for "nothing here is editable" outweighs
+              what it's saying — on a screen where NOTHING can be typed
+              into, this is a standing fact, not a status update, the same
+              category the sandbox banner's own 'quiet' variant exists for
+              (see that component's comment). Still unmissable, no longer
+              competing with the numbers for attention. */}
           {!canEdit && (
-            <NotificationBanner tone="info" className="mb-4">
-              These figures are read-only for you on this contract. If you need to enter them, ask whoever manages rights on this contract.
-            </NotificationBanner>
+            <p className="mb-4 inline-flex max-w-full items-center gap-1.5 rounded-md bg-nc-info-bg px-2.5 py-1 text-xs text-nc-info-text">
+              Read-only for you on this contract — ask whoever manages rights here if you need to enter figures.
+            </p>
           )}
           {bandsActive && columns.marginPercent && (
             <NotificationBanner tone="info" className="mb-4">
@@ -1090,6 +1135,9 @@ export function RatesScreen() {
                     )}
                     <TR>
                       {sortableHeader('itemNumber', 'Item', undefined)}
+                      <TH align="right" compact style={{ width: COL_W.quantity }}>
+                        Approximate quantity
+                      </TH>
                       <TH align="right" compact style={{ width: COL_W.unitPrice }}>
                         Unit price
                       </TH>
