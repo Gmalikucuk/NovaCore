@@ -24,7 +24,6 @@ import {
   claimFieldForKind,
   percentOfApproximate,
   proposeClaimedFromRecords,
-  quantityToDate,
   tenderedExtendedAmount,
   type ProposedClaim,
 } from '../../lib/calculations/progressEstimates'
@@ -117,7 +116,14 @@ function ClaimLine({
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const thisPeriodParsed = parseNum(thisPeriodDraft)
-  const toDate = quantityToDate(line.previousQuantity, thisPeriodParsed)
+  // Quantity to date is a running total that exists independent of whether
+  // this period has been typed yet — previousQuantity alone, before any
+  // entry, then previousQuantity + this period live as it's typed.
+  // quantityToDate() (the calc module's own version) is deliberately
+  // stricter for the STORED figure elsewhere (null whenever claimed_
+  // quantity itself is unknown) — this is a live preview, a different
+  // question: "how much is on record right now."
+  const toDate = line.previousQuantity === null && thisPeriodParsed === null ? null : (line.previousQuantity ?? 0) + (thisPeriodParsed ?? 0)
   const liveValue = thisPeriodParsed === null || unitPrice === null ? null : thisPeriodParsed * unitPrice
   const tendered = tenderedExtendedAmount(line.approximateQuantity, unitPrice)
 
