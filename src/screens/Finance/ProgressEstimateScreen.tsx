@@ -66,7 +66,7 @@ function ItemIdentity({ line }: { line: ProgressEstimateItem }) {
       <div className="max-w-[320px] truncate text-sm text-nc-text" title={line.description}>
         {line.description}
       </div>
-      <div className="mt-0.5 text-xs text-nc-text-muted">
+      <div className="mt-0.5 max-w-[320px] text-xs text-nc-text-muted">
         {line.itemNumber} · {kindLabel}
         {line.itemKind === 'unit_price' && <> · {fmtQuantity(line.approximateQuantity)} approx.</>}
         {overrun}
@@ -163,7 +163,7 @@ function ClaimLine({
           <ItemIdentity line={line} />
         </TD>
         <TD align="right" className="nc-numeric align-top">
-          {toDate === null ? '—' : fmtQuantity(toDate, line.unit)}
+          {toDate === null ? '—' : fmtQuantity(toDate)}
         </TD>
         <TD align="right" className="align-top" onClick={(e) => e.stopPropagation()}>
           {canWrite && isDraft ? (
@@ -178,7 +178,7 @@ function ClaimLine({
               onBlur={() => void commitThisPeriod()}
             />
           ) : (
-            <span className="nc-numeric">{line.claimedQuantity === null ? '—' : fmtQuantity(line.claimedQuantity, line.unit)}</span>
+            <span className="nc-numeric">{line.claimedQuantity === null ? '—' : fmtQuantity(line.claimedQuantity)}</span>
           )}
           {saveError && <p className="mt-1 text-xs text-nc-danger-text">{saveError}</p>}
         </TD>
@@ -535,13 +535,19 @@ export function ProgressEstimateScreen() {
           {filteredLines.length === 0 ? (
             <EmptyState title="No items match this filter." description="Try a different filter above." />
           ) : (
-            <Table>
+            <Table style={{ tableLayout: 'fixed' }}>
               <THead>
                 <TR>
-                  <TH>Item</TH>
-                  <TH align="right">Quantity to date</TH>
-                  <TH align="right">This period</TH>
-                  <TH align="right">Value</TH>
+                  <TH style={{ width: '46%' }}>Item</TH>
+                  <TH align="right" style={{ width: '20%' }}>
+                    Quantity to date
+                  </TH>
+                  <TH align="right" style={{ width: '18%' }}>
+                    This period
+                  </TH>
+                  <TH align="right" style={{ width: '16%' }}>
+                    Value
+                  </TH>
                 </TR>
               </THead>
               <TBody>
