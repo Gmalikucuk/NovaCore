@@ -82,16 +82,22 @@ export function variance(claimed: number | null, certified: number | null): numb
 
 /**
  * Quantity to date — previous plus current, computed, never stored (§1).
+ * Null only when BOTH sides are unknown — nothing on record at all.
  * previousQuantity's own null means "no prior claim exists" (0046's
  * previous_quantity is only ever null for that reason, by construction —
- * see the column comment), so it contributes 0, not "unknown." claimed
- * being null is the genuinely unknown case — this period's figure hasn't
- * been entered yet — and stays null rather than silently reading as
- * "nothing claimed this period," which would be a different, wrong fact.
+ * see the column comment) and contributes 0; claimedQuantity null means
+ * "nothing typed this period yet" and *also* contributes 0 — the running
+ * total up to the prior period is still a real, known fact even when this
+ * period hasn't been entered. Getting this wrong previously lost real
+ * progress: an Item with a nonzero previousQuantity but nothing claimed in
+ * a given period fed a null into fetchPriorClaimQuantities, so the next
+ * claim's own previousQuantity — carried forward once at creation and
+ * frozen from then on — silently reset to null instead of preserving the
+ * running total.
  */
 export function quantityToDate(previousQuantity: number | null, claimedQuantity: number | null): number | null {
-  if (claimedQuantity === null) return null
-  return (previousQuantity ?? 0) + claimedQuantity
+  if (previousQuantity === null && claimedQuantity === null) return null
+  return (previousQuantity ?? 0) + (claimedQuantity ?? 0)
 }
 
 /**

@@ -380,8 +380,13 @@ interface SandboxBannerProps {
    * Confirm, mobile Field entry — re-visited all day doing data entry, so
    * the same danger tone without the extra weight reads as unmissable
    * without reading as more alarm than the situation warrants on repeat.
+   * 'quiet': a screen a reader (not a data-enterer) returns to and reads
+   * closely — the progress claim screen is the first of these. Still the
+   * same tone and still unmissable, but a compact inline note instead of a
+   * full-width block, since "permanently true" doesn't need to compete with
+   * the numbers on a screen someone is trying to reconcile.
    */
-  variant?: 'reading' | 'working'
+  variant?: 'reading' | 'working' | 'quiet'
 }
 
 export function SandboxBanner({ contract, variant = 'reading' }: SandboxBannerProps) {
@@ -390,6 +395,13 @@ export function SandboxBanner({ contract, variant = 'reading' }: SandboxBannerPr
   // the wrong tone for "this is deliberately not real," even though it
   // still needs to stay unmissable (kept font-medium in 'reading' contexts
   // for exactly that reason).
+  if (variant === 'quiet') {
+    return (
+      <p className="mb-4 inline-flex max-w-full items-center gap-1.5 rounded-md bg-nc-warning-bg px-2.5 py-1 text-xs text-nc-warning-text">
+        Sandbox contract — {contract.name} is not real; Unit Prices are invented, not tendered figures.
+      </p>
+    )
+  }
   return (
     <NotificationBanner tone="warning" className={`mb-4 ${variant === 'reading' ? 'font-medium' : ''}`}>
       This is a sandbox contract for exercising every screen state — {contract.name} is not a real contract, and its Unit Prices are invented, not tendered figures.

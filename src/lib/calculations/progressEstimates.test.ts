@@ -96,8 +96,8 @@ describe('quantityToDate', () => {
     expect(quantityToDate(null, 50)).toBe(50)
   })
 
-  it('is null when current is unknown, even with a real previous', () => {
-    expect(quantityToDate(100, null)).toBeNull()
+  it('is the known previous alone when current is unknown — the running total carries forward even when this period has not been entered', () => {
+    expect(quantityToDate(100, null)).toBe(100)
   })
 
   it('is null when both are unknown', () => {

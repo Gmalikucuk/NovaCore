@@ -207,7 +207,7 @@ export function Sidebar() {
                     </NavLink>
                     <NavLink to="/progress-estimates" className={navLinkClass}>
                       <IconFileInvoice size={18} stroke={1.75} />
-                      Progress estimates
+                      Progress claims
                     </NavLink>
                   </div>
                 </div>

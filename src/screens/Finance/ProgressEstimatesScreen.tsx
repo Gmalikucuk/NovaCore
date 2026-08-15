@@ -155,8 +155,8 @@ export function ProgressEstimatesScreen() {
   if (status === 'ready' && !canView) {
     return (
       <div>
-        <PageHeader title="Progress estimates" subtitle={contract.name} />
-        <EmptyState icon={<IconFileInvoice size={32} stroke={1.5} />} title="You don't have permission to view progress estimates on this contract." />
+        <PageHeader title="Progress claims" subtitle={contract.name} />
+        <EmptyState icon={<IconFileInvoice size={32} stroke={1.5} />} title="You don't have permission to view progress claims on this contract." />
       </div>
     )
   }
@@ -164,12 +164,12 @@ export function ProgressEstimatesScreen() {
   return (
     <div>
       <PageHeader
-        title="Progress estimates"
+        title="Progress claims"
         subtitle={contract.name}
         actions={
           canPrepare ? (
             <Button type="button" variant={showNewForm ? 'secondary' : 'primary'} onClick={() => setShowNewForm((v) => !v)}>
-              {showNewForm ? 'Cancel' : 'New estimate'}
+              {showNewForm ? 'Cancel' : 'New claim'}
             </Button>
           ) : undefined
         }
@@ -230,7 +230,7 @@ export function ProgressEstimatesScreen() {
 
           {showNewForm && (
             <div className="mb-6 rounded-lg border border-nc-border bg-white p-4">
-              <h2 className="mb-3 text-sm font-semibold text-nc-text">New estimate</h2>
+              <h2 className="mb-3 text-sm font-semibold text-nc-text">New claim</h2>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <label className="text-xs text-nc-text-muted">
                   Period start
@@ -256,7 +256,7 @@ export function ProgressEstimatesScreen() {
               )}
               <div className="mt-3">
                 <Button type="button" disabled={creating || !periodStart || !periodEnd} onClick={() => void handleCreate()}>
-                  {creating ? 'Creating…' : 'Create estimate'}
+                  {creating ? 'Creating…' : 'Create claim'}
                 </Button>
               </div>
             </div>
@@ -265,8 +265,8 @@ export function ProgressEstimatesScreen() {
           {sortedEstimates.length === 0 ? (
             <EmptyState
               icon={<IconFileInvoice size={32} stroke={1.5} />}
-              title="No progress estimates yet."
-              description={canPrepare ? 'Start one with "New estimate" above.' : 'None have been created on this contract yet.'}
+              title="No progress claims yet."
+              description={canPrepare ? 'Start one with "New claim" above.' : 'None have been created on this contract yet.'}
             />
           ) : (
             <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">

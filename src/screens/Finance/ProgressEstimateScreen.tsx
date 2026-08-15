@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
-import { IconArrowLeft } from '@tabler/icons-react'
+import { IconArrowLeft, IconChevronDown } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchEffectiveProductionRecords } from '../../lib/supabase/dashboard'
 import {
@@ -24,16 +24,51 @@ import {
   claimFieldForKind,
   percentOfApproximate,
   proposeClaimedFromRecords,
+  quantityToDate,
   tenderedExtendedAmount,
   type ProposedClaim,
 } from '../../lib/calculations/progressEstimates'
 import { formatDayLabel } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
-import { quantity as fmtQuantity, money as fmtMoney, rate as fmtRate } from '../../lib/format'
+import { quantity as fmtQuantity, rate as fmtRate } from '../../lib/format'
 import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 const STATUS_OPTIONS: ProgressEstimateStatus[] = ['draft', 'submitted', 'received', 'reconciled']
 const STATUS_LABEL: Record<ProgressEstimateStatus, string> = { draft: 'Draft', submitted: 'Submitted', received: 'Received', reconciled: 'Reconciled' }
+// Same mapping as the list screen's STATUS_TONE_CLASS — duplicated rather
+// than shared, matching STATUS_LABEL's own precedent above.
+const STATUS_TONE_CLASS: Record<ProgressEstimateStatus, string> = {
+  draft: 'bg-nc-warning-bg text-nc-warning-text',
+  submitted: 'bg-nc-info-bg text-nc-info-text',
+  received: 'bg-nc-ready-bg text-nc-ready-text',
+  reconciled: 'bg-nc-success-bg text-nc-success-text',
+}
+
+/**
+ * Status as a pill in the header, beside the period — the control IS the
+ * pill (a styled <select>), not a badge next to a separate dropdown. One
+ * fact, one control, no bordered card of its own.
+ */
+function StatusPill({ status, onChange, disabled }: { status: ProgressEstimateStatus; onChange: (next: ProgressEstimateStatus) => void; disabled: boolean }) {
+  return (
+    <span className="relative inline-flex items-center">
+      <select
+        aria-label="Status"
+        value={status}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value as ProgressEstimateStatus)}
+        className={`appearance-none rounded-full border-0 py-0.5 pl-2.5 pr-6 text-xs font-medium disabled:cursor-not-allowed ${disabled ? '' : 'cursor-pointer'} ${STATUS_TONE_CLASS[status]}`}
+      >
+        {STATUS_OPTIONS.map((s) => (
+          <option key={s} value={s}>
+            {STATUS_LABEL[s]}
+          </option>
+        ))}
+      </select>
+      {!disabled && <IconChevronDown size={12} stroke={2} className="pointer-events-none absolute right-2" />}
+    </span>
+  )
+}
 
 const PREFS_SCOPE = 'progress_estimate_detail'
 type LineFilter = 'all' | 'claimed' | 'not_started'
@@ -116,14 +151,9 @@ function ClaimLine({
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const thisPeriodParsed = parseNum(thisPeriodDraft)
-  // Quantity to date is a running total that exists independent of whether
-  // this period has been typed yet — previousQuantity alone, before any
-  // entry, then previousQuantity + this period live as it's typed.
-  // quantityToDate() (the calc module's own version) is deliberately
-  // stricter for the STORED figure elsewhere (null whenever claimed_
-  // quantity itself is unknown) — this is a live preview, a different
-  // question: "how much is on record right now."
-  const toDate = line.previousQuantity === null && thisPeriodParsed === null ? null : (line.previousQuantity ?? 0) + (thisPeriodParsed ?? 0)
+  // Live preview of the running total — previousQuantity alone before any
+  // entry this period, then previousQuantity + this period as it's typed.
+  const toDate = quantityToDate(line.previousQuantity, thisPeriodParsed)
   const liveValue = thisPeriodParsed === null || unitPrice === null ? null : thisPeriodParsed * unitPrice
   const tendered = tenderedExtendedAmount(line.approximateQuantity, unitPrice)
 
@@ -183,7 +213,7 @@ function ClaimLine({
           {saveError && <p className="mt-1 text-xs text-nc-danger-text">{saveError}</p>}
         </TD>
         <TD align="right" className="nc-numeric align-top">
-          {fmtMoney(liveValue)}
+          {fmtRate(liveValue)}
         </TD>
       </TR>
       {expanded && (
@@ -229,7 +259,7 @@ function ClaimLine({
               </div>
               <div className="text-xs text-nc-text-muted">
                 Tendered extended amount
-                <div className="nc-numeric mt-1 text-sm text-nc-text">{fmtMoney(tendered)}</div>
+                <div className="nc-numeric mt-1 text-sm text-nc-text">{fmtRate(tendered)}</div>
               </div>
             </div>
           </TD>
@@ -286,7 +316,7 @@ function OtherLine({ line, isDraft, canWrite, onChanged }: { line: ProgressEstim
             onBlur={() => void commit()}
           />
         ) : (
-          <span className="nc-numeric">{claimedValue === null ? '—' : field === 'percent' ? `${claimedValue.toFixed(1)}%` : fmtMoney(claimedValue)}</span>
+          <span className="nc-numeric">{claimedValue === null ? '—' : field === 'percent' ? `${claimedValue.toFixed(1)}%` : fmtRate(claimedValue)}</span>
         )}
         {saveError && <p className="mt-1 text-xs text-nc-danger-text">{saveError}</p>}
       </TD>
@@ -407,6 +437,20 @@ export function ProgressEstimateScreen() {
     return unitPriceLines.filter((l) => (l.previousQuantity ?? 0) === 0 && l.claimedQuantity === null)
   }, [unitPriceLines, filter])
 
+  // The committed figure, not a live re-derivation from whatever's mid-edit
+  // in each row — the same source v_progress_estimate_summary's gross_claim
+  // sums from, so on the "all items" filter (no LS/PS lines) this total and
+  // the Gross claim card below are two independent computations of the same
+  // number. If they ever disagree, that's a real bug to see, not to hide by
+  // only ever showing one of the two figures. Null (renders as —) when
+  // nothing in the filtered set has been claimed yet — a total of nothing
+  // claimed is not the same fact as a total of exactly $0 claimed.
+  const filteredValueTotal = useMemo(() => {
+    const known = filteredLines.filter((l) => l.claimedValue !== null)
+    if (known.length === 0) return null
+    return known.reduce((sum, l) => sum + (l.claimedValue ?? 0), 0)
+  }, [filteredLines])
+
   // The records-derived proposal for THIS estimate's period, unit_price
   // Items only — offered in the expanded panel, never written
   // automatically (see proposeClaimedFromRecords' own doc comment).
@@ -473,8 +517,8 @@ export function ProgressEstimateScreen() {
   if (status === 'ready' && !canView) {
     return (
       <div>
-        <PageHeader title="Progress estimate" subtitle={contract.name} />
-        <EmptyState title="You don't have permission to view progress estimates on this contract." />
+        <PageHeader title="Progress claim" subtitle={contract.name} />
+        <EmptyState title="You don't have permission to view progress claims on this contract." />
       </div>
     )
   }
@@ -482,8 +526,20 @@ export function ProgressEstimateScreen() {
   return (
     <div>
       <PageHeader
-        title="Progress estimate"
-        subtitle={estimate ? `${contract.name} · ${formatDayLabel(estimate.periodStart)} → ${formatDayLabel(estimate.periodEnd)}` : contract.name}
+        title="Progress claim"
+        subtitle={
+          estimate ? (
+            <span className="flex flex-wrap items-center gap-2">
+              <span>
+                {contract.name} · {formatDayLabel(estimate.periodStart)} → {formatDayLabel(estimate.periodEnd)}
+              </span>
+              <StatusPill status={estimate.status} onChange={(next) => void handleStatusChange(next)} disabled={!canWrite || statusSaving} />
+              {!isDraft && <span className="text-nc-text-subtle">Claimed figures are frozen.</span>}
+            </span>
+          ) : (
+            contract.name
+          )
+        }
         actions={
           <Button type="button" variant="ghost" onClick={() => navigate('/progress-estimates')}>
             <IconArrowLeft size={16} stroke={2} className="mr-1 inline" />
@@ -492,7 +548,7 @@ export function ProgressEstimateScreen() {
         }
       />
 
-      <SandboxBanner contract={contract} />
+      <SandboxBanner contract={contract} variant="quiet" />
 
       {status === 'loading' && (
         <div className="flex items-center gap-2 py-8 text-nc-text-muted">
@@ -509,20 +565,6 @@ export function ProgressEstimateScreen() {
               {actionError}
             </NotificationBanner>
           )}
-
-          <div className="mb-6 flex flex-wrap items-center gap-4 rounded-lg border border-nc-border bg-white p-4">
-            <label className="text-xs text-nc-text-muted">
-              Status
-              <Select className="mt-1" value={estimate.status} disabled={!canWrite || statusSaving} onChange={(e) => void handleStatusChange(e.target.value as ProgressEstimateStatus)}>
-                {STATUS_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    {STATUS_LABEL[s]}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            {!isDraft && <p className="text-xs text-nc-text-muted">Claimed figures are frozen — this estimate is no longer a draft.</p>}
-          </div>
 
           <div className="mb-4 flex gap-2" role="group" aria-label="Line filter">
             {(['all', 'claimed', 'not_started'] as LineFilter[]).map((f) => (
@@ -566,6 +608,16 @@ export function ProgressEstimateScreen() {
                   />
                 ))}
               </TBody>
+              <tfoot>
+                <TR className="border-t-2 border-nc-border bg-nc-secondary font-semibold">
+                  <TD colSpan={3} align="right">
+                    Total
+                  </TD>
+                  <TD align="right" className="nc-numeric">
+                    {fmtRate(filteredValueTotal)}
+                  </TD>
+                </TR>
+              </tfoot>
             </Table>
           )}
 
@@ -591,7 +643,7 @@ export function ProgressEstimateScreen() {
           {canWrite && itemsNotYetAdded.length > 0 && (
             <div className="mt-6 rounded-lg border border-nc-border bg-white p-4">
               <h2 className="mb-3 text-sm font-semibold text-nc-text">Add a line by hand</h2>
-              <p className="mb-3 text-xs text-nc-text-muted">For a Lump Sum or Provisional Sum Item, or a unit_price Item this estimate was created without (added to the contract afterward).</p>
+              <p className="mb-3 text-xs text-nc-text-muted">For a Lump Sum or Provisional Sum Item, or a unit_price Item this claim was created without (added to the contract afterward).</p>
               <div className="flex flex-wrap items-end gap-3">
                 <label className="text-xs text-nc-text-muted">
                   Item
@@ -618,13 +670,13 @@ export function ProgressEstimateScreen() {
           )}
 
           <div className="mt-8 grid grid-cols-4 gap-4">
-            <StatCard label="Gross claim" value={fmtMoney(summary?.grossClaim ?? null)} />
-            <StatCard label={`Holdback${summary?.holdbackPercent !== null && summary?.holdbackPercent !== undefined ? ` (${summary.holdbackPercent}%)` : ''}`} value={fmtMoney(summary?.holdbackAmount ?? null)} />
-            <StatCard label={`GST${summary?.gstPercent !== null && summary?.gstPercent !== undefined ? ` (${summary.gstPercent}%)` : ''}`} value={fmtMoney(summary?.gstAmount ?? null)} />
-            <StatCard label="Amount to invoice" value={fmtMoney(summary?.totalInvoiced ?? null)} />
+            <StatCard label="Gross claim" value={fmtRate(summary?.grossClaim ?? null)} />
+            <StatCard label={`Holdback${summary?.holdbackPercent !== null && summary?.holdbackPercent !== undefined ? ` (${summary.holdbackPercent}%)` : ''}`} value={fmtRate(summary?.holdbackAmount ?? null)} />
+            <StatCard label={`GST${summary?.gstPercent !== null && summary?.gstPercent !== undefined ? ` (${summary.gstPercent}%)` : ''}`} value={fmtRate(summary?.gstAmount ?? null)} />
+            <StatCard label="Amount to invoice" value={fmtRate(summary?.totalInvoiced ?? null)} />
           </div>
           <div className="mt-4">
-            <StatCard label="Holdback retained to date" value={fmtMoney(retainedToDate)} sub="Earned, and withheld from every progress payment so far — money Keywest has not yet been paid." />
+            <StatCard label="Holdback retained to date" value={fmtRate(retainedToDate)} sub="Earned, and withheld from every progress payment so far — money Keywest has not yet been paid." />
           </div>
         </>
       )}
