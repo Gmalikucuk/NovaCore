@@ -130,8 +130,18 @@ function PercentDisplay({ value }: { value: number | null }) {
 // so number paints on top) instead of the default rule that would put the
 // bar — position: absolute — above ordinary in-flow content regardless of
 // DOM order.
+// BAR_MIN_PCT: below this, the bar is a sub-pixel sliver, not a bar — and
+// because every row's bar shares the exact same right-aligned edge (the
+// column boundary), a contract's worth of sub-2px slivers reads as one
+// continuous vertical rule running the table's full height, as if it were
+// a border between two tables. A row that small relative to the max is
+// legitimately closer to "no bar" than "a bar" — rendering nothing here is
+// more honest than a sliver nobody can actually see as a bar.
+const BAR_MIN_PCT = 3
+
 function ExtAmountCell({ value, maxValue }: { value: number | null; maxValue: number }) {
-  const pct = value !== null && maxValue > 0 && value > 0 ? (value / maxValue) * 100 : 0
+  const rawPct = value !== null && maxValue > 0 && value > 0 ? (value / maxValue) * 100 : 0
+  const pct = rawPct >= BAR_MIN_PCT ? rawPct : 0
   return (
     <>
       {pct > 0 && <span className="absolute inset-y-0 right-0 rounded-sm bg-nc-accent/15" style={{ width: `${pct}%` }} aria-hidden="true" />}
@@ -726,7 +736,14 @@ export function RatesScreen() {
   // MoneyDisplay/ExtAmountCell/the Input elements below) rather than a
   // second, independently-tracked pixel constant, so there is exactly one
   // place these ratios live.
-  const COL_W = { quantity: 150, unitPrice: 100, extAmount: 120, unitCost: 100, extCost: 120, margin: 110, marginPercent: 85, percentComplete: 95, authorizedValue: 120 }
+  //
+  // Wider than the first pass at this (quantity 150→160, unitPrice
+  // 100→115, extAmount 120→140, unitCost 100→115, extCost 120→140, margin
+  // 110→125, marginPercent 85→95, percentComplete 95→105, authorizedValue
+  // 120→135) — freed by narrowing identity below. The numbers are what
+  // gets scanned down a column of forty-odd rows; they earned the room
+  // identity gave up.
+  const COL_W = { quantity: 160, unitPrice: 115, extAmount: 140, unitCost: 115, extCost: 140, margin: 125, marginPercent: 95, percentComplete: 105, authorizedValue: 135 }
 
   // identity USED to be the flexible column, absorbing whatever the fixed
   // columns didn't — correct the first time (fills a viewport-width table
@@ -735,16 +752,24 @@ export function RatesScreen() {
   // Sum label ended up sitting in a description column wider than most
   // monitors' reading columns.
   //
-  // Now: identity gets an explicit target width too, computed once per
+  // IDENTITY_MAX_W was then set to 420 — an improvement, but still sized
+  // for comfort rather than content: a short description (most of them)
+  // left visible dead space before the numeric columns began, and that gap
+  // read as more awkward once the numeric side got wide (many columns on)
+  // rather than less. Identity is what gets READ — matching an Item
+  // number to a description takes one look, not a wide column — so it's
+  // sized to fit typical descriptions with truncate+title picking up the
+  // rare long one, not to avoid ever truncating. 300px comfortably fits
+  // the longest descriptions on the demo contract ("Provisional Sum for
+  // Site Modifications", "Supply and Install New 690 mm...") without
+  // truncating; identity gets an explicit target width, computed once per
   // render — whatever's needed to bring the table up toward TABLE_TARGET_W,
   // capped at IDENTITY_MAX_W so it never "breathes" into a stretch again.
-  // On the default four columns (370px of fixed columns) that caps identity
-  // at its own maximum, since 1360-370 is nowhere near it; on every column
-  // (1000px fixed) identity comes out to exactly 360px, landing the whole
-  // table exactly at TABLE_TARGET_W.
   //
-  // tableWidthPx (the sum of all this) becomes a max-width on the table's
-  // own wrapper, in actual pixels — a plain CSS max-width is unconditionally
+  // tableWidthPx (the sum of all this) becomes a max-width on the WHOLE
+  // screen's own outer wrapper (see the return statement below) — not just
+  // the table's — so banners, table, and totals cards all measure the same
+  // width, in actual pixels. A plain CSS max-width is unconditionally
   // reliable, unlike a table's own `width` under table-layout: fixed (a
   // `width: min(1360px, 100%)` directly on the table measured, live, as
   // staying at the literal 1360px regardless of the wrapper's real size —
@@ -758,7 +783,7 @@ export function RatesScreen() {
   // no page-level overflow, and no measurement of the viewport required at
   // all, in JS or CSS.
   const IDENTITY_MIN_W = 220
-  const IDENTITY_MAX_W = 420
+  const IDENTITY_MAX_W = 300
   const TABLE_TARGET_W = 1360
   const fixedColumnsW =
     COL_W.quantity +
@@ -1077,7 +1102,14 @@ export function RatesScreen() {
   const subtitle = `${contract.name}${status === 'ready' ? ` · ${rows.length} Items` : ''}`
 
   return (
-    <div>
+    // tableWidthPx now caps the WHOLE screen, not just the table — title,
+    // banners, table, and totals cards all share this one measure so they
+    // share one left and right edge, mx-auto centering the block as a
+    // single unit. Previously only the table carried this cap, nested
+    // inside the wider (platform-capped, up to 1400px) content area — that
+    // put the table's own edges well inside the banners' and cards' edges,
+    // reading as three unrelated widths on one screen rather than one.
+    <div style={{ maxWidth: tableWidthPx, marginLeft: 'auto', marginRight: 'auto' }}>
       <PageHeader
         title="Rates"
         subtitle={subtitle}
@@ -1151,30 +1183,19 @@ export function RatesScreen() {
               <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
             ) : (
               <>
-                {/* The outer div carries the cap — a plain CSS max-width,
-                    unconditionally reliable, unlike a table's own `width`
-                    under table-layout: fixed (see pctW's own comment).
-                    mx-auto centers it whenever the available column is
-                    wider than tableWidthPx; when it's narrower, max-width
-                    constrains the div down to fit, and the table inside
-                    (width: 100%, percentage columns) scales every column
-                    down together in step, so nothing here can overflow
-                    regardless of viewport or how many columns are on. */}
-                {/* width: '100%' alongside maxWidth, not maxWidth alone —
-                    the Table component's own wrapper has overflow-x-auto
-                    (every Table on the platform does), and a percentage
-                    width on a descendant of a scrolling box with no
-                    explicit width of its own is a known circular case:
-                    measured live, the table's 100% resolved against its
-                    own scrollable CONTENT size (~1821px, wider than any
-                    column's own content needed) rather than the visible
-                    1156px box — a feedback loop where the auto-overflow
-                    box's used width came from its content, and the
-                    content's own 100% came from the box. An explicit
-                    width here gives every descendant a genuinely
-                    definite, non-circular number to resolve percentages
-                    against, breaking the loop. */}
-                <div style={{ width: '100%', maxWidth: tableWidthPx, marginLeft: 'auto', marginRight: 'auto' }}>
+                {/* No max-width or centering here — the screen-level wrapper
+                    above already caps the whole page to tableWidthPx, so
+                    the table just fills 100% of that rather than being a
+                    second, independently-centered box nested inside it
+                    (which read as a table floating inside a wider banner
+                    column). Table's own `<table>` element under this needs
+                    an explicit width:100% (not just table-layout: fixed) to
+                    resolve its percentage columns against a definite
+                    number — see ui.tsx's Table component, whose min-w-max
+                    used to silently win over width:100% the moment
+                    content's natural size exceeded the container; fixed
+                    there, not worked around here. */}
+                <div style={{ width: '100%' }}>
                   <Table maxHeight="calc(100vh - 280px)" style={{ tableLayout: 'fixed', width: '100%' }}>
                     <THead className="sticky top-0 z-10">
                       {failedItemIds.size > 0 && (
