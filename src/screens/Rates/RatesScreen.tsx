@@ -80,16 +80,21 @@ function focusCell(row: number, field: EditableField) {
 // kind the column doesn't apply to — carries the same py-2 so a row's
 // height never depends on which of those three it happens to be this
 // render. Matches Input's own vertical padding exactly (FIELD_BASE).
-function MoneyDisplay({ value, width }: { value: number | null; width: number }) {
-  return (
-    <span className="nc-numeric inline-block py-2 text-right" style={{ width }}>
-      {value === null ? '—' : rate(value)}
-    </span>
-  )
+//
+// w-full, not a literal pixel width — the actual rendered width of every
+// cell in a column is set ONCE, on that column's <TH>, by table-layout:
+// fixed. A second, independently-maintained pixel constant here was how
+// the extended-amount bar ended up scaled against a number that no longer
+// matched the column's real width and bled past the table border: two
+// sources of truth for the same measurement, free to drift apart the next
+// time either one changes without the other. w-full has exactly one source
+// (the TH), so it can't.
+function MoneyDisplay({ value }: { value: number | null }) {
+  return <span className="nc-numeric inline-block w-full py-2 text-right">{value === null ? '—' : rate(value)}</span>
 }
-function DashCell({ width, title }: { width: number; title?: string }) {
+function DashCell({ title }: { title?: string }) {
   return (
-    <span className="inline-block py-2 text-right text-nc-text-muted" style={{ width }} title={title}>
+    <span className="inline-block w-full py-2 text-right text-nc-text-muted" title={title}>
       —
     </span>
   )
@@ -97,12 +102,8 @@ function DashCell({ width, title }: { width: number; title?: string }) {
 // percent_complete's own read-only display — one decimal, stored 0-100 (not
 // format.ts's percent(), which expects a 0-1 ratio and would misread this
 // value by a factor of 100).
-function PercentDisplay({ value, width }: { value: number | null; width: number }) {
-  return (
-    <span className="nc-numeric inline-block py-2 text-right" style={{ width }}>
-      {value === null ? '—' : `${value.toFixed(1)}%`}
-    </span>
-  )
+function PercentDisplay({ value }: { value: number | null }) {
+  return <span className="nc-numeric inline-block w-full py-2 text-right">{value === null ? '—' : `${value.toFixed(1)}%`}</span>
 }
 
 // The Pareto view: a background bar scaled against the largest Ext. amount
@@ -110,11 +111,14 @@ function PercentDisplay({ value, width }: { value: number | null; width: number 
 // readable element. Deliberately NOT used for Ext. cost — cost coverage is
 // partial and permanent, so a bar chart there would imply a comparability
 // the data doesn't have. Anchored to the RIGHT, growing leftward, so it
-// always sits directly behind the right-aligned figure it describes.
-function ExtAmountCell({ value, width, maxValue }: { value: number | null; width: number; maxValue: number }) {
+// always sits directly behind the right-aligned figure it describes. w-full
+// here (not a pixel constant — see MoneyDisplay above) is what keeps the
+// bar's own 0-100% scale resolving against the column's actual width,
+// never past it.
+function ExtAmountCell({ value, maxValue }: { value: number | null; maxValue: number }) {
   const pct = value !== null && maxValue > 0 && value > 0 ? (value / maxValue) * 100 : 0
   return (
-    <span className="relative inline-block py-2" style={{ width }}>
+    <span className="relative inline-block w-full py-2">
       {pct > 0 && <span className="absolute inset-y-0 right-0 rounded-sm bg-nc-accent/15" style={{ width: `${pct}%` }} aria-hidden="true" />}
       <span className="nc-numeric relative block text-right">{value === null ? '—' : rate(value)}</span>
     </span>
@@ -126,15 +130,6 @@ const BAND_TONE: Record<MarginBand, string> = {
   neutral: '',
   above: 'bg-nc-success-bg text-nc-success-text',
 }
-
-// Trimmed from the pre-redesign constants (100/140) to leave headroom now
-// that every optional column can be on at once — verified at 1440px with
-// every column enabled, not just the default three (see the redesign brief's
-// own overflow constraint).
-const UNIT_W = 90
-const EXT_W = 115
-const PCT_W = 80
-const IDENTITY_MAX_W = 240
 
 type SortKey = 'itemNumber' | 'extAmount'
 
@@ -222,17 +217,36 @@ const PREFS_SCOPE = 'rates_columns'
  * shipped first (that screen is this one's own reference, per the redesign
  * brief). Not repeated in every numeric cell; Approximate Quantity no
  * longer has a column of its own.
+ *
+ * Truncates to w-full, not a pixel constant — this is the flexible column
+ * (see COL_W's own comment), so its real width moves with the viewport and
+ * the active column set; a fixed max-width here would either clip early on
+ * a wide screen or, worse, silently stop matching what table-layout: fixed
+ * actually rendered.
+ *
+ * A Lump Sum/Provisional Sum Item has no unit — a bare "· lump sum" in that
+ * slot read as if the kind were a unit of measure, the same slot every
+ * other row uses for a real one. A small tag instead: still one glance to
+ * see "no rate applies here," but visibly a category, not a unit.
  */
 function ItemIdentity({ item }: { item: Item }) {
-  const kindLabel = item.itemKind === 'lump_sum' ? 'lump sum' : item.itemKind === 'provisional_sum' ? 'provisional sum' : item.unit
   return (
     <div>
-      <div className={`truncate text-sm text-nc-text`} style={{ maxWidth: IDENTITY_MAX_W }} title={item.description}>
+      <div className="w-full truncate text-sm text-nc-text" title={item.description}>
         {item.description}
       </div>
-      <div className="mt-0.5 text-xs text-nc-text-muted" style={{ maxWidth: IDENTITY_MAX_W }}>
-        {item.itemNumber} · {kindLabel}
-        {item.itemKind === 'unit_price' && <> · {fmtQuantity(item.approximateQuantity)} approx.</>}
+      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-nc-text-muted">
+        <span>{item.itemNumber}</span>
+        {item.itemKind === 'unit_price' && (
+          <span>
+            · {item.unit} · {fmtQuantity(item.approximateQuantity)} approx.
+          </span>
+        )}
+        {item.itemKind !== 'unit_price' && (
+          <span className="inline-flex items-center rounded-full bg-nc-neutral-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-nc-neutral-text">
+            {item.itemKind === 'lump_sum' ? 'Lump sum' : 'Provisional sum'}
+          </span>
+        )}
       </div>
     </div>
   )
@@ -661,9 +675,21 @@ export function RatesScreen() {
   const costTabOffset = 0
   const priceTabOffset = showUnitCostInput ? rows.length : 0
 
-  function sortableHeader(key: SortKey, label: string, width: number, align: 'left' | 'right' = 'left'): ReactNode {
+  // width omitted (undefined) for the one column that should flex — see
+  // COL_W's own comment. min-w-[200px] is a floor, not a target: only
+  // matters if every optional column were ever on at the narrowest desktop
+  // width this screen supports, and even then the flexible column measures
+  // wider than that in practice (see the redesign follow-up's own measured
+  // widths).
+  function sortableHeader(key: SortKey, label: string, width: number | undefined, align: 'left' | 'right' = 'left'): ReactNode {
     return (
-      <TH align={align} compact style={{ width }} onClick={() => toggleSort(key)} className="cursor-pointer select-none hover:bg-nc-border/40">
+      <TH
+        align={align}
+        compact
+        style={width === undefined ? undefined : { width }}
+        className={`cursor-pointer select-none hover:bg-nc-border/40 ${width === undefined ? 'min-w-[200px]' : ''}`}
+        onClick={() => toggleSort(key)}
+      >
         <span className="inline-flex items-center gap-1">
           {label}
           <SortIndicator active={sortKey === key} dir={sortDir} />
@@ -672,33 +698,23 @@ export function RatesScreen() {
     )
   }
 
-  // Explicit pixel widths, not natural auto-layout — table-layout: fixed
-  // makes these authoritative regardless of what any cell's own content
-  // wants to claim (a coverage annotation, a long header label, a panel).
-  // Sums to ~1110px at every optional column on, comfortably under the
-  // available width at 1440px even with the sidebar — verified live, not
-  // just budgeted (redesign brief's own overflow constraint).
-  const COL_W = { identity: 260, unitPrice: 100, extAmount: 120, unitCost: 100, extCost: 120, margin: 110, marginPercent: 85, percentComplete: 95, authorizedValue: 120 }
-
-  // table-layout: fixed alone isn't enough without also giving the table
-  // an explicit width — with none (fullWidth={false}, sized to fit-content
-  // instead of stretched), the browser still consults every cell's natural
-  // content — including a subtotal row's "covers N of M" annotation — to
-  // work out what "fit" means, silently widening a column past the pixel
-  // value on its own header. An explicit width, summed from exactly the
-  // columns currently on, makes the per-column widths authoritative and
-  // gives the sparse default view (Item/Unit price/Extended amount) its own
-  // compact width instead of stretching to fill the page.
-  const tableWidthPx =
-    COL_W.identity +
-    COL_W.unitPrice +
-    COL_W.extAmount +
-    (columns.unitCost ? COL_W.unitCost : 0) +
-    (columns.extCost ? COL_W.extCost : 0) +
-    (columns.margin ? COL_W.margin : 0) +
-    (columns.marginPercent ? COL_W.marginPercent : 0) +
-    (columns.percentComplete ? COL_W.percentComplete : 0) +
-    (columns.authorizedValue ? COL_W.authorizedValue : 0)
+  // Explicit pixel widths for every price-family column — table-layout:
+  // fixed makes these authoritative regardless of what any cell's own
+  // content wants to claim (a coverage annotation, a long header label, a
+  // panel), and every cell inside a column now renders at w-full (see
+  // MoneyDisplay/ExtAmountCell/the Input elements below) rather than a
+  // second, independently-tracked pixel constant, so there is exactly one
+  // place these numbers live.
+  //
+  // identity has NO width here, deliberately — it's the one column that
+  // should absorb whatever space the fixed-width columns don't claim, so
+  // the table fills the page at any viewport instead of stopping at the
+  // sum of the price columns and leaving a dead gutter. A table with an
+  // explicit overall width (below: 100%) and exactly one column left
+  // unconstrained is standard fixed-layout behavior, not a special case —
+  // the constrained columns keep their pixel caps (never grow, so no
+  // overflow risk returns) and identity takes the rest.
+  const COL_W = { unitPrice: 100, extAmount: 120, unitCost: 100, extCost: 120, margin: 110, marginPercent: 85, percentComplete: 95, authorizedValue: 120 }
 
   function renderPanel(row: IndexedRow): ReactNode {
     const { item } = row
@@ -810,7 +826,6 @@ export function RatesScreen() {
     const costInput = (
       <Input
         className={`nc-numeric text-right ${costFailed !== undefined ? 'border-nc-danger-text' : ''}`}
-        style={{ width: item.itemKind === 'unit_price' ? UNIT_W : EXT_W }}
         data-cell={`${i}-cost`}
         tabIndex={costTabOffset + i + 1}
         inputMode="decimal"
@@ -830,7 +845,6 @@ export function RatesScreen() {
     const priceInput = (
       <Input
         className={`nc-numeric text-right ${unitPriceFailed !== undefined ? 'border-nc-danger-text' : ''}`}
-        style={{ width: item.itemKind === 'unit_price' ? UNIT_W : EXT_W }}
         data-cell={`${i}-unitPrice`}
         tabIndex={priceTabOffset + i + 1}
         inputMode="decimal"
@@ -861,9 +875,9 @@ export function RatesScreen() {
               needs. */}
           <TD align="right" dense compact className="align-top" onClick={(e) => e.stopPropagation()}>
             {item.itemKind === 'unit_price' ? (
-              canEdit ? priceInput : <MoneyDisplay value={row.unitPrice} width={UNIT_W} />
+              canEdit ? priceInput : <MoneyDisplay value={row.unitPrice} />
             ) : (
-              <DashCell width={UNIT_W} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Extended amount' : undefined} />
+              <DashCell title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Extended amount' : undefined} />
             )}
             {unitPriceFailed && <p className="mt-1 text-xs text-nc-danger-text">{unitPriceFailed}</p>}
           </TD>
@@ -873,18 +887,18 @@ export function RatesScreen() {
               7's own Provisional Sum allowance for Provisional Sum. */}
           <TD align="right" dense compact className="align-top" onClick={(e) => e.stopPropagation()}>
             {item.itemKind === 'lump_sum' ? (
-              canEdit ? priceInput : <ExtAmountCell value={row.financials.extAmount} width={EXT_W} maxValue={maxExtAmount} />
+              canEdit ? priceInput : <ExtAmountCell value={row.financials.extAmount} maxValue={maxExtAmount} />
             ) : (
-              <ExtAmountCell value={row.financials.extAmount} width={EXT_W} maxValue={maxExtAmount} />
+              <ExtAmountCell value={row.financials.extAmount} maxValue={maxExtAmount} />
             )}
           </TD>
 
           {columns.unitCost && (
             <TD align="right" dense compact className="align-top" onClick={(e) => e.stopPropagation()}>
               {item.itemKind === 'unit_price' ? (
-                canEdit ? costInput : <MoneyDisplay value={row.costPrice} width={UNIT_W} />
+                canEdit ? costInput : <MoneyDisplay value={row.costPrice} />
               ) : (
-                <DashCell width={UNIT_W} title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Extended cost' : undefined} />
+                <DashCell title={item.itemKind === 'lump_sum' ? 'No per-unit rate — enter the total under Extended cost' : undefined} />
               )}
               {costFailed && <p className="mt-1 text-xs text-nc-danger-text">{costFailed}</p>}
             </TD>
@@ -893,11 +907,11 @@ export function RatesScreen() {
           {columns.extCost && (
             <TD align="right" dense compact className="align-top" onClick={(e) => e.stopPropagation()}>
               {item.itemKind === 'lump_sum' ? (
-                canEdit ? costInput : <MoneyDisplay value={row.financials.extCost} width={EXT_W} />
+                canEdit ? costInput : <MoneyDisplay value={row.financials.extCost} />
               ) : item.itemKind === 'unit_price' ? (
-                <MoneyDisplay value={row.financials.extCost} width={EXT_W} />
+                <MoneyDisplay value={row.financials.extCost} />
               ) : (
-                <DashCell width={EXT_W} />
+                <DashCell />
               )}
             </TD>
           )}
@@ -932,12 +946,12 @@ export function RatesScreen() {
               the row's own panel (redesign §4). */}
           {columns.percentComplete && (
             <TD align="right" compact className="align-top">
-              {item.itemKind === 'lump_sum' ? <PercentDisplay value={item.percentComplete} width={PCT_W} /> : <DashCell width={PCT_W} />}
+              {item.itemKind === 'lump_sum' ? <PercentDisplay value={item.percentComplete} /> : <DashCell />}
             </TD>
           )}
           {columns.authorizedValue && (
             <TD align="right" compact className="align-top">
-              {item.itemKind === 'provisional_sum' ? <MoneyDisplay value={item.authorizedValue} width={EXT_W} /> : <DashCell width={EXT_W} />}
+              {item.itemKind === 'provisional_sum' ? <MoneyDisplay value={item.authorizedValue} /> : <DashCell />}
             </TD>
           )}
         </TR>
@@ -1063,7 +1077,7 @@ export function RatesScreen() {
               <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
             ) : (
               <>
-                <Table fullWidth={false} maxHeight="calc(100vh - 280px)" style={{ tableLayout: 'fixed', width: tableWidthPx }}>
+                <Table maxHeight="calc(100vh - 280px)" style={{ tableLayout: 'fixed', width: '100%' }}>
                   <THead className="sticky top-0 z-10">
                     {failedItemIds.size > 0 && (
                       <tr>
@@ -1075,7 +1089,7 @@ export function RatesScreen() {
                       </tr>
                     )}
                     <TR>
-                      {sortableHeader('itemNumber', 'Item', COL_W.identity)}
+                      {sortableHeader('itemNumber', 'Item', undefined)}
                       <TH align="right" compact style={{ width: COL_W.unitPrice }}>
                         Unit price
                       </TH>
