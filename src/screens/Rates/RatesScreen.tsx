@@ -234,11 +234,11 @@ const PREFS_SCOPE = 'rates_columns'
  * number once a number is on screen, not off in a second location a reader
  * has to cross-reference (add-quantity-column follow-up).
  *
- * Truncates to w-full, not a pixel constant — this is the flexible column
- * (see COL_W's own comment), so its real width moves with the viewport and
- * the active column set; a fixed max-width here would either clip early on
- * a wide screen or, worse, silently stop matching what table-layout: fixed
- * actually rendered.
+ * Truncates to w-full, not a pixel constant of its own — its column gets
+ * an explicit, computed width (identityW, capped well short of "however
+ * much space happens to be free"; see that computation's own comment), and
+ * w-full always matches whatever table-layout: fixed actually rendered for
+ * that column, so this never needs updating in step with it.
  *
  * A Lump Sum/Provisional Sum Item still gets its kind tag here — the one
  * thing about an Item's identity that isn't a quantity or a unit, and the
@@ -704,21 +704,12 @@ export function RatesScreen() {
   const costTabOffset = 0
   const priceTabOffset = showUnitCostInput ? rows.length : 0
 
-  // width omitted (undefined) for the one column that should flex — see
-  // COL_W's own comment. min-w-[200px] is a floor, not a target: only
-  // matters if every optional column were ever on at the narrowest desktop
-  // width this screen supports, and even then the flexible column measures
-  // wider than that in practice (see the redesign follow-up's own measured
-  // widths).
-  function sortableHeader(key: SortKey, label: string, width: number | undefined, align: 'left' | 'right' = 'left'): ReactNode {
+  // Every column's width below is a PERCENTAGE of tableWidthPx, not a
+  // literal pixel — see tableWidthPx's own comment for why. sortableHeader
+  // takes the already-formatted percentage string; pctW does the division.
+  function sortableHeader(key: SortKey, label: string, width: string, align: 'left' | 'right' = 'left'): ReactNode {
     return (
-      <TH
-        align={align}
-        compact
-        style={width === undefined ? undefined : { width }}
-        className={`cursor-pointer select-none hover:bg-nc-border/40 ${width === undefined ? 'min-w-[200px]' : ''}`}
-        onClick={() => toggleSort(key)}
-      >
+      <TH align={align} compact style={{ width }} className="cursor-pointer select-none hover:bg-nc-border/40" onClick={() => toggleSort(key)}>
         <span className="inline-flex items-center gap-1">
           {label}
           <SortIndicator active={sortKey === key} dir={sortDir} />
@@ -727,23 +718,61 @@ export function RatesScreen() {
     )
   }
 
-  // Explicit pixel widths for every price-family column — table-layout:
-  // fixed makes these authoritative regardless of what any cell's own
+  // Design-target pixel widths — NOT what actually renders (see pctW
+  // below). These exist to fix the RATIO between columns; table-layout:
+  // fixed makes that ratio authoritative regardless of what any cell's own
   // content wants to claim (a coverage annotation, a long header label, a
-  // panel), and every cell inside a column now renders at w-full (see
+  // panel), and every cell inside a column renders at w-full (see
   // MoneyDisplay/ExtAmountCell/the Input elements below) rather than a
   // second, independently-tracked pixel constant, so there is exactly one
-  // place these numbers live.
-  //
-  // identity has NO width here, deliberately — it's the one column that
-  // should absorb whatever space the fixed-width columns don't claim, so
-  // the table fills the page at any viewport instead of stopping at the
-  // sum of the price columns and leaving a dead gutter. A table with an
-  // explicit overall width (below: 100%) and exactly one column left
-  // unconstrained is standard fixed-layout behavior, not a special case —
-  // the constrained columns keep their pixel caps (never grow, so no
-  // overflow risk returns) and identity takes the rest.
+  // place these ratios live.
   const COL_W = { quantity: 150, unitPrice: 100, extAmount: 120, unitCost: 100, extCost: 120, margin: 110, marginPercent: 85, percentComplete: 95, authorizedValue: 120 }
+
+  // identity USED to be the flexible column, absorbing whatever the fixed
+  // columns didn't — correct the first time (fills a viewport-width table
+  // with no dead gutter), wrong once that table stopped being viewport-
+  // width. Absorbing leftover space up to 1000+px is how a two-word Lump
+  // Sum label ended up sitting in a description column wider than most
+  // monitors' reading columns.
+  //
+  // Now: identity gets an explicit target width too, computed once per
+  // render — whatever's needed to bring the table up toward TABLE_TARGET_W,
+  // capped at IDENTITY_MAX_W so it never "breathes" into a stretch again.
+  // On the default four columns (370px of fixed columns) that caps identity
+  // at its own maximum, since 1360-370 is nowhere near it; on every column
+  // (1000px fixed) identity comes out to exactly 360px, landing the whole
+  // table exactly at TABLE_TARGET_W.
+  //
+  // tableWidthPx (the sum of all this) becomes a max-width on the table's
+  // own wrapper, in actual pixels — a plain CSS max-width is unconditionally
+  // reliable, unlike a table's own `width` under table-layout: fixed (a
+  // `width: min(1360px, 100%)` directly on the table measured, live, as
+  // staying at the literal 1360px regardless of the wrapper's real size —
+  // table sizing under fixed layout doesn't reliably resolve CSS Values
+  // math functions the way a plain block element's max-width does). Every
+  // COLUMN then gets a PERCENTAGE of tableWidthPx (pctW below) rather than
+  // a literal pixel — table-layout: fixed with width: 100% and percentage
+  // columns is the standard, well-supported way to make a table's own
+  // internal proportions scale down together, smoothly, the moment the
+  // wrapper's max-width actually constrains it below 1360 — no scrollbar,
+  // no page-level overflow, and no measurement of the viewport required at
+  // all, in JS or CSS.
+  const IDENTITY_MIN_W = 220
+  const IDENTITY_MAX_W = 420
+  const TABLE_TARGET_W = 1360
+  const fixedColumnsW =
+    COL_W.quantity +
+    COL_W.unitPrice +
+    COL_W.extAmount +
+    (columns.unitCost ? COL_W.unitCost : 0) +
+    (columns.extCost ? COL_W.extCost : 0) +
+    (columns.margin ? COL_W.margin : 0) +
+    (columns.marginPercent ? COL_W.marginPercent : 0) +
+    (columns.percentComplete ? COL_W.percentComplete : 0) +
+    (columns.authorizedValue ? COL_W.authorizedValue : 0)
+  const identityW = Math.min(IDENTITY_MAX_W, Math.max(IDENTITY_MIN_W, TABLE_TARGET_W - fixedColumnsW))
+  const tableWidthPx = fixedColumnsW + identityW
+  const pctW = (px: number) => `${Math.round((px / tableWidthPx) * 10000) / 100}%`
 
   function renderPanel(row: IndexedRow): ReactNode {
     const { item } = row
@@ -1122,79 +1151,104 @@ export function RatesScreen() {
               <EmptyState icon={<IconCurrencyDollar size={32} stroke={1.5} />} title="No items to price yet." description="Add items on the Items screen first." />
             ) : (
               <>
-                <Table maxHeight="calc(100vh - 280px)" style={{ tableLayout: 'fixed', width: '100%' }}>
-                  <THead className="sticky top-0 z-10">
-                    {failedItemIds.size > 0 && (
-                      <tr>
-                        <th colSpan={colCount} className="bg-nc-danger-bg p-0 text-left">
-                          <button type="button" onClick={focusFirstFailedRow} className="w-full px-4 py-2 text-left text-sm font-semibold text-nc-danger-text hover:bg-nc-danger-bg/70">
-                            {failedItemIds.size} row{failedItemIds.size === 1 ? '' : 's'} didn't save — click to go to the first one
-                          </button>
-                        </th>
-                      </tr>
-                    )}
-                    <TR>
-                      {sortableHeader('itemNumber', 'Item', undefined)}
-                      <TH align="right" compact style={{ width: COL_W.quantity }}>
-                        Approximate quantity
-                      </TH>
-                      <TH align="right" compact style={{ width: COL_W.unitPrice }}>
-                        Unit price
-                      </TH>
-                      {sortableHeader('extAmount', 'Extended amount', COL_W.extAmount, 'right')}
-                      {columns.unitCost && (
-                        <TH align="right" compact style={{ width: COL_W.unitCost }}>
-                          Unit cost
-                        </TH>
+                {/* The outer div carries the cap — a plain CSS max-width,
+                    unconditionally reliable, unlike a table's own `width`
+                    under table-layout: fixed (see pctW's own comment).
+                    mx-auto centers it whenever the available column is
+                    wider than tableWidthPx; when it's narrower, max-width
+                    constrains the div down to fit, and the table inside
+                    (width: 100%, percentage columns) scales every column
+                    down together in step, so nothing here can overflow
+                    regardless of viewport or how many columns are on. */}
+                {/* width: '100%' alongside maxWidth, not maxWidth alone —
+                    the Table component's own wrapper has overflow-x-auto
+                    (every Table on the platform does), and a percentage
+                    width on a descendant of a scrolling box with no
+                    explicit width of its own is a known circular case:
+                    measured live, the table's 100% resolved against its
+                    own scrollable CONTENT size (~1821px, wider than any
+                    column's own content needed) rather than the visible
+                    1156px box — a feedback loop where the auto-overflow
+                    box's used width came from its content, and the
+                    content's own 100% came from the box. An explicit
+                    width here gives every descendant a genuinely
+                    definite, non-circular number to resolve percentages
+                    against, breaking the loop. */}
+                <div style={{ width: '100%', maxWidth: tableWidthPx, marginLeft: 'auto', marginRight: 'auto' }}>
+                  <Table maxHeight="calc(100vh - 280px)" style={{ tableLayout: 'fixed', width: '100%' }}>
+                    <THead className="sticky top-0 z-10">
+                      {failedItemIds.size > 0 && (
+                        <tr>
+                          <th colSpan={colCount} className="bg-nc-danger-bg p-0 text-left">
+                            <button type="button" onClick={focusFirstFailedRow} className="w-full px-4 py-2 text-left text-sm font-semibold text-nc-danger-text hover:bg-nc-danger-bg/70">
+                              {failedItemIds.size} row{failedItemIds.size === 1 ? '' : 's'} didn't save — click to go to the first one
+                            </button>
+                          </th>
+                        </tr>
                       )}
-                      {columns.extCost && (
-                        <TH align="right" compact style={{ width: COL_W.extCost }}>
-                          Extended cost
+                      <TR>
+                        {sortableHeader('itemNumber', 'Item', pctW(identityW))}
+                        <TH align="right" compact style={{ width: pctW(COL_W.quantity) }}>
+                          Approximate quantity
                         </TH>
-                      )}
-                      {columns.margin && (
-                        <TH align="right" compact style={{ width: COL_W.margin }} title="Tendered margin — at Approximate Quantity, the whole scope as bid, not quantity to date">
-                          Margin
+                        <TH align="right" compact style={{ width: pctW(COL_W.unitPrice) }}>
+                          Unit price
                         </TH>
-                      )}
-                      {columns.marginPercent && (
-                        <TH
-                          align="right"
-                          compact
-                          style={{ width: COL_W.marginPercent }}
-                          title="Tendered margin — at Approximate Quantity, the whole scope as bid, not quantity to date"
-                        >
-                          Margin %
-                        </TH>
-                      )}
-                      {columns.percentComplete && (
-                        <TH align="right" compact style={{ width: COL_W.percentComplete }}>
-                          % complete
-                        </TH>
-                      )}
-                      {columns.authorizedValue && (
-                        <TH align="right" compact style={{ width: COL_W.authorizedValue }}>
-                          Authorized value
-                        </TH>
-                      )}
-                    </TR>
-                  </THead>
-                  <TBody>
-                    {groupBySection && sectionGroups
-                      ? sectionGroups.map((group) => (
-                          <Fragment key={group.prefix}>
-                            <TR>
-                              <TD colSpan={colCount} className="border-t border-nc-border text-xs font-semibold uppercase tracking-wide text-nc-text-muted first:border-t-0">
-                                {sectionLabel(group.prefix)}
-                              </TD>
-                            </TR>
-                            {group.rows.map((row) => renderDataRow(row))}
-                            {renderSubtotalRow(`${sectionLabel(group.prefix)} subtotal`, group.rows, group.prefix)}
-                          </Fragment>
-                        ))
-                      : rows.map((row) => renderDataRow(row))}
-                  </TBody>
-                </Table>
+                        {sortableHeader('extAmount', 'Extended amount', pctW(COL_W.extAmount), 'right')}
+                        {columns.unitCost && (
+                          <TH align="right" compact style={{ width: pctW(COL_W.unitCost) }}>
+                            Unit cost
+                          </TH>
+                        )}
+                        {columns.extCost && (
+                          <TH align="right" compact style={{ width: pctW(COL_W.extCost) }}>
+                            Extended cost
+                          </TH>
+                        )}
+                        {columns.margin && (
+                          <TH align="right" compact style={{ width: pctW(COL_W.margin) }} title="Tendered margin — at Approximate Quantity, the whole scope as bid, not quantity to date">
+                            Margin
+                          </TH>
+                        )}
+                        {columns.marginPercent && (
+                          <TH
+                            align="right"
+                            compact
+                            style={{ width: pctW(COL_W.marginPercent) }}
+                            title="Tendered margin — at Approximate Quantity, the whole scope as bid, not quantity to date"
+                          >
+                            Margin %
+                          </TH>
+                        )}
+                        {columns.percentComplete && (
+                          <TH align="right" compact style={{ width: pctW(COL_W.percentComplete) }}>
+                            % complete
+                          </TH>
+                        )}
+                        {columns.authorizedValue && (
+                          <TH align="right" compact style={{ width: pctW(COL_W.authorizedValue) }}>
+                            Authorized value
+                          </TH>
+                        )}
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {groupBySection && sectionGroups
+                        ? sectionGroups.map((group) => (
+                            <Fragment key={group.prefix}>
+                              <TR>
+                                <TD colSpan={colCount} className="border-t border-nc-border text-xs font-semibold uppercase tracking-wide text-nc-text-muted first:border-t-0">
+                                  {sectionLabel(group.prefix)}
+                                </TD>
+                              </TR>
+                              {group.rows.map((row) => renderDataRow(row))}
+                              {renderSubtotalRow(`${sectionLabel(group.prefix)} subtotal`, group.rows, group.prefix)}
+                            </Fragment>
+                          ))
+                        : rows.map((row) => renderDataRow(row))}
+                    </TBody>
+                  </Table>
+                </div>
 
                 {/* Totals as cards, not a footer row — the answer, not a
                     footnote (redesign §5). Section subtotals stay inside

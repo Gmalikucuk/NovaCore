@@ -186,7 +186,20 @@ export function Table({ className = '', children, fullWidth = true, maxHeight, s
       className={`overflow-x-auto ${maxHeight ? 'overflow-y-auto' : 'overflow-y-hidden'} rounded-lg border border-nc-border bg-white shadow-sm ${className}`}
       style={maxHeight ? { maxHeight } : undefined}
     >
-      <table className={`${fullWidth ? 'w-full' : ''} min-w-max border-collapse`} style={style} {...props}>
+      {/* min-w-max only under fullWidth=false — that's the "size to content,
+          scroll if it doesn't fit" case, where a min-content floor is the
+          point. Under fullWidth=true (every consumer today) the intent is
+          the opposite: stretch to fill AND shrink with the container. A
+          min-content floor there silently wins over width:100% the moment
+          content's own natural (unwrapped) width exceeds the container —
+          measured live on Rates at 1440px/all-columns, the table rendered
+          at 1821px against a correctly-sized 1156px wrapper despite every
+          column having an explicit percentage width via table-layout:
+          fixed. table-layout: fixed governs how a *given* width is
+          distributed across columns; it doesn't stop the browser computing
+          intrinsic (min-content) size from content, which is exactly what
+          min-w-max was pinning the table to. */}
+      <table className={`${fullWidth ? 'w-full' : 'min-w-max'} border-collapse`} style={style} {...props}>
         {children}
       </table>
     </div>

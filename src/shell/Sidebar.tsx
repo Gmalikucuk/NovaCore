@@ -266,13 +266,22 @@ export function Sidebar() {
       </aside>
 
       <main className="flex-1 overflow-y-auto">
-        {/* Not centered, not max-w-7xl — that assumed no sidebar competing
-            for width (Freight's own layout), which here left ~350px of
-            dead gutter on each side of a 1280px column while wide tables
-            still overflowed anyway. A modest left offset from the sidebar
-            (px-8) and a wide cap; screens with genuine prose or a form
-            (not a data table) apply their own narrower max-w- locally. */}
-        <div className="max-w-[1800px] px-8 py-8">
+        {/* The platform-wide width cap: every screen routed through here —
+            table or card-list, Rates or Months — gets the same ceiling
+            automatically, rather than each one remembering to cap itself.
+            1400px matches the dense-table convention (roughly 1200-1400,
+            beyond which a row's leftmost and rightmost figures stop being
+            scannable in one glance) and is centered (mx-auto) so a wide
+            monitor gets breathing room on both sides instead of the column
+            hugging the sidebar. An EARLIER attempt at this (max-w-7xl,
+            1280px) was abandoned because individual screens weren't yet
+            disciplined about their own column widths — a wide table would
+            overflow straight past the narrower centered column regardless.
+            That's fixed per-screen now (table-layout: fixed, one source of
+            truth per column); this cap assumes that discipline holds. A
+            screen with genuinely more columns than this affords should be
+            measured and reported, not silently exempted here. */}
+        <div className="mx-auto max-w-[1400px] px-8 py-8">
           <Outlet context={contractState} />
         </div>
       </main>
