@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { claimFieldForKind, proposeClaimedFromRecords, variance } from './progressEstimates'
+import { claimFieldForKind, percentOfApproximate, projectedValueVariance, proposeClaimedFromRecords, quantityToDate, variance } from './progressEstimates'
 
 describe('claimFieldForKind', () => {
   it('is quantity for unit_price', () => {
@@ -84,5 +84,59 @@ describe('variance', () => {
 
   it('does not clamp a negative variance — a shortfall is the gap, not an error', () => {
     expect(variance(200, 50)).toBe(-150)
+  })
+})
+
+describe('quantityToDate', () => {
+  it('is previous plus current', () => {
+    expect(quantityToDate(100, 50)).toBe(150)
+  })
+
+  it('treats a null previous as zero — no prior claim exists', () => {
+    expect(quantityToDate(null, 50)).toBe(50)
+  })
+
+  it('is null when current is unknown, even with a real previous', () => {
+    expect(quantityToDate(100, null)).toBeNull()
+  })
+
+  it('is null when both are unknown', () => {
+    expect(quantityToDate(null, null)).toBeNull()
+  })
+})
+
+describe('percentOfApproximate', () => {
+  it('is quantity over approximate quantity, as a percent', () => {
+    expect(percentOfApproximate(50, 200)).toBe(25)
+  })
+
+  it('does not clamp over 100% — a gain, not a fault (GC 52.04)', () => {
+    expect(percentOfApproximate(631.4, 120)).toBeCloseTo(526.17, 1)
+  })
+
+  it('is null when the quantity is unknown', () => {
+    expect(percentOfApproximate(null, 200)).toBeNull()
+  })
+
+  it('is null when approximate quantity is zero or negative', () => {
+    expect(percentOfApproximate(50, 0)).toBeNull()
+  })
+})
+
+describe('projectedValueVariance', () => {
+  it('is (projected - approximate) times unit price — a gain when projected exceeds tender', () => {
+    expect(projectedValueVariance(150, 120, 100)).toBe(3000)
+  })
+
+  it('is negative when projected falls short of tender — the gap, not clamped', () => {
+    expect(projectedValueVariance(100, 120, 100)).toBe(-2000)
+  })
+
+  it('is null when projected quantity is not yet entered', () => {
+    expect(projectedValueVariance(null, 120, 100)).toBeNull()
+  })
+
+  it('is null when unit price is unknown', () => {
+    expect(projectedValueVariance(150, 120, null)).toBeNull()
   })
 })

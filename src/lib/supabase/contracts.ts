@@ -18,6 +18,8 @@ export interface ContractRights {
   confirmQuantity: boolean
   viewRates: boolean
   extractReport: boolean
+  /** May prepare and submit the monthly progress claim (0046) — Unit Price and quantity, never cost or margin. Independent of setCost/setUnitPrice on purpose: the project management team prepares claims, not Finance. */
+  prepareClaims: boolean
 }
 
 export interface MyContract extends ContractRights {
@@ -34,6 +36,10 @@ export interface MyContract extends ContractRights {
   contractState: ContractState
   /** Whether derived cost figures (Margin, Margin %, Est. cost/margin, the pinned-Item margin line, Needs Attention's at-cost sentence, both Excel exports) render anywhere outside Rates' own entry columns (0042). Defaults false — cost coverage is not yet real on any contract. A person's deliberate call, never inferred from how much cost happens to be entered. */
   costTrackingEnabled: boolean
+  /** The holdback percentage withheld from each progress payment (GC 54.00, 0046), entered from the contract documents. Null until someone enters it. */
+  holdbackPercent: number | null
+  /** The GST rate applied to the net progress payment (0046), entered from the contract documents. Null until someone enters it. */
+  gstPercent: number | null
 }
 
 /**
@@ -58,6 +64,7 @@ interface RawMembershipRow {
   confirm_quantity: boolean
   view_rates: boolean
   extract_report: boolean
+  prepare_claims: boolean
   contracts: {
     id: string
     contract_name: string
@@ -67,6 +74,8 @@ interface RawMembershipRow {
     contract_end: string | null
     contract_state: ContractState
     cost_tracking_enabled: boolean
+    holdback_percent: string | null
+    gst_percent: string | null
   }
 }
 
@@ -90,7 +99,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   const { data, error } = await supabase
     .from('contract_members')
     .select(
-      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end, contract_state, cost_tracking_enabled )',
+      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, prepare_claims, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end, contract_state, cost_tracking_enabled, holdback_percent, gst_percent )',
     )
     .eq('user_id', user.id)
   if (error) throw error
@@ -106,6 +115,8 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       contractEnd: r.contracts.contract_end,
       contractState: r.contracts.contract_state,
       costTrackingEnabled: r.contracts.cost_tracking_enabled,
+      holdbackPercent: r.contracts.holdback_percent === null ? null : Number(r.contracts.holdback_percent),
+      gstPercent: r.contracts.gst_percent === null ? null : Number(r.contracts.gst_percent),
       createItems: r.create_items,
       setCost: r.set_cost,
       setUnitPrice: r.set_unit_price,
@@ -114,6 +125,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       confirmQuantity: r.confirm_quantity,
       viewRates: r.view_rates,
       extractReport: r.extract_report,
+      prepareClaims: r.prepare_claims,
     }
   })
 }
@@ -169,6 +181,8 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
     contractEnd: input.contractEnd,
     contractState: data.contract_state,
     costTrackingEnabled: data.cost_tracking_enabled,
+    holdbackPercent: null,
+    gstPercent: null,
     // The creator's own rights on their brand-new contract — create_items
     // only (see above), everything else false until seated separately.
     createItems: true,
@@ -179,6 +193,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
     confirmQuantity: false,
     viewRates: false,
     extractReport: false,
+    prepareClaims: false,
   }
 }
 
@@ -229,5 +244,17 @@ export async function updateContractState(contractId: string, state: ContractSta
  */
 export async function updateCostTrackingEnabled(contractId: string, enabled: boolean): Promise<void> {
   const { error } = await supabase.from('contracts').update({ cost_tracking_enabled: enabled }).eq('id', contractId)
+  if (error) throw error
+}
+
+/**
+ * Holdback/GST percentages (0046) — entered from the contract documents,
+ * never hardcoded (see the column comments). Gated by RLS on prepare_claims
+ * (contracts_progress_claim_fields_update_right), not set_cost/set_unit_
+ * price: the population preparing the claim is the population reading
+ * these off the documents, independent of Rates' own pricing rights.
+ */
+export async function updateContractClaimTerms(contractId: string, input: { holdbackPercent: number | null; gstPercent: number | null }): Promise<void> {
+  const { error } = await supabase.from('contracts').update({ holdback_percent: input.holdbackPercent, gst_percent: input.gstPercent }).eq('id', contractId)
   if (error) throw error
 }

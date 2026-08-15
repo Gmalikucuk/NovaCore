@@ -534,17 +534,29 @@ BODY_OUT=$(printf '%s' "$upsert_resp" | sed '$d')
 ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && ok=1
 check "full: upsert progress_estimate_items (setup)" "200 or 201" "$ok" "$STATUS $BODY_OUT"
 
-request GET "progress_estimates?select=*" "$QUANTITIES_TOKEN"
-ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: progress_estimates (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+# quantities holds prepare_claims on this project as of 0046 (it did not
+# exist when these three checks were written as negatives against "no
+# view_rates") — progress_estimates_select/progress_estimate_items_select
+# now read "view_rates OR prepare_claims", so quantities correctly sees
+# these rows today. Flipped to positives rather than left stale: an
+# unmodified "expect []" here would now be asserting something 0046 made
+# false, which is a worse failure mode than deleting the check outright —
+# see readonly (zero per-project rights, further down) for the genuine
+# negative these three used to stand in for.
+request GET "progress_estimates?select=*&id=eq.$ESTIMATE_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities: progress_estimates visible (prepare_claims, 0046)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
 
-request GET "progress_estimate_items?select=*" "$QUANTITIES_TOKEN"
-ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: progress_estimate_items (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+request GET "progress_estimate_items?select=*&progress_estimate_id=eq.$ESTIMATE_ID" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "quantities: progress_estimate_items visible (prepare_claims, 0046)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
 
 request GET "v_progress_estimate_reconciliation?select=*&contract_id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN"
-ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: v_progress_estimate_reconciliation (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "quantities: v_progress_estimate_reconciliation visible (prepare_claims, 0046)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+# readonly's own "progress_estimates on sandbox project (zero rights)" check
+# just below is the genuine negative these three used to stand in for —
+# not duplicated here.
 
 request GET "progress_estimates?select=*&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
@@ -558,48 +570,59 @@ request GET "v_progress_estimate_reconciliation?select=*&contract_id=eq.$PROJECT
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
 check "viewer: v_progress_estimate_reconciliation sees the row (view_rates)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
 
-request POST "progress_estimates" "$QUANTITIES_TOKEN" "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-02-01\",\"period_end\":\"2026-02-28\"}"
+request POST "progress_estimates" "$READONLY_TOKEN" "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-02-01\",\"period_end\":\"2026-02-28\"}"
 ok=0; [ "$STATUS" = "403" ] && ok=1
-check "quantities: insert progress_estimates rejected (no set_cost/set_unit_price)" "403" "$ok" "$STATUS $BODY_OUT"
+check "readonly: insert progress_estimates rejected (zero per-project rights)" "403" "$ok" "$STATUS $BODY_OUT"
+
+# quantities holds prepare_claims-and-nothing-else on this project (0046) —
+# the actual positive control for the new gate, and set up with
+# on_conflict=merge-duplicates (same idempotent-rerun shape as full's own
+# setup upsert above) so a rerun doesn't 409 on progress_estimates' unique
+# (contract_id, period_start, period_end).
+upsert_resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/progress_estimates?on_conflict=contract_id,period_start,period_end" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $QUANTITIES_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-02-01\",\"period_end\":\"2026-02-28\"}")
+STATUS=$(printf '%s' "$upsert_resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$upsert_resp" | sed '$d')
+QUANTITIES_ESTIMATE_ID=$(json_field "$BODY_OUT" 0 id)
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ -n "$QUANTITIES_ESTIMATE_ID" ] && ok=1
+check "quantities: insert progress_estimates succeeds (prepare_claims-ONLY seat, 0046 — setup for the checks below)" "200 or 201" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
-# Progress estimates — the Finance write path (0041)
+# Progress estimates — the Finance write path (0041/0046)
 #
 # 0010 gated INSERT/UPDATE on confirm_quantity — a field-operations right
-# borrowed by proximity, not chosen for what it actually gates on a table
-# that is finance material (its own SELECT policy already agreed: view_rates).
-# 0041 changed the gate to set_cost AND set_unit_price, matching item_prices
-# exactly. The check above (quantities, zero relevant rights either way)
-# can't distinguish the old gate from the new one — it was rejected under
-# both. viewer proves the actual behavioural change that matters: it holds
-# set_cost on this sandbox contract ONLY (0026) and NOT set_unit_price
-# anywhere, and NOT confirm_quantity anywhere — so its rejection here proves
-# the AND-gate genuinely requires both rights, holding ONE is not enough,
-# isolated from full's blanket rights (same isolation viewer already
-# provides for item_prices, above). No existing fixture holds
-# confirm_quantity without also holding set_cost/set_unit_price (full has
-# all three together), so "confirm_quantity alone no longer admits a write"
-# is not independently exercisable without a new seed grant — confirmed
-# instead by direct inspection of the applied policy (pg_policies:
-# progress_estimates_insert/_update's with_check is exactly "has_right(...,
-# 'set_cost') AND has_right(..., 'set_unit_price')", no confirm_quantity
-# anywhere in it, and no second, more permissive INSERT/UPDATE policy
-# exists on either table to admit a write around it) — the items_update_
-# right lesson is about a SECOND policy silently admitting what a narrower
-# one blocks; confirmed there is only one INSERT and one UPDATE policy per
-# table here, so that failure mode does not apply.
+# borrowed by proximity. 0041 changed it to set_cost AND set_unit_price,
+# matching item_prices. 0046 replaced THAT with prepare_claims alone —
+# "Claims are prepared by the project management team, not by Finance" —
+# proven immediately above: quantities holds prepare_claims and nothing
+# else relevant (no view_rates, no set_cost, no set_unit_price) and its
+# insert succeeds. viewer below proves the opposite edge: it holds set_cost
+# on this sandbox contract (0026) but NOT prepare_claims, NOT set_unit_
+# price — so under the OLD gate this would have been "AND-gate needs both,
+# one alone fails"; under the NEW one it's simpler still, prepare_claims is
+# the only thing that matters and viewer never held it. Confirmed by direct
+# inspection of the applied policy (pg_policies: progress_estimates_insert/
+# _update's with_check is exactly "has_right(..., 'prepare_claims')", no
+# set_cost/set_unit_price/confirm_quantity anywhere in it, and no second,
+# more permissive INSERT/UPDATE policy exists on either table to admit a
+# write around it) — the items_update_right lesson is about a SECOND policy
+# silently admitting what a narrower one blocks; confirmed there is only
+# one INSERT and one UPDATE policy per table here, so that failure mode
+# does not apply.
 # =============================================================================
 echo
-echo "=== Progress estimates — the Finance write path (0041) ==="
+echo "=== Progress estimates — the Finance write path (0041/0046) ==="
 
 request POST "progress_estimates" "$VIEWER_TOKEN" "{\"contract_id\":\"$PROJECT_ID\",\"period_start\":\"2026-03-01\",\"period_end\":\"2026-03-31\"}"
 ok=0; [ "$STATUS" = "403" ] && ok=1
-check "viewer: insert progress_estimates rejected (set_cost alone, no set_unit_price)" "403" "$ok" "$STATUS $BODY_OUT"
+check "viewer: insert progress_estimates rejected (set_cost/view_rates, no prepare_claims)" "403" "$ok" "$STATUS $BODY_OUT"
 
 request POST "progress_estimate_items" "$VIEWER_TOKEN" \
   "{\"progress_estimate_id\":\"$ESTIMATE_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"certified_quantity\":1}"
 ok=0; [ "$STATUS" = "403" ] && ok=1
-check "viewer: insert progress_estimate_items rejected (set_cost alone, no set_unit_price)" "403" "$ok" "$STATUS $BODY_OUT"
+check "viewer: insert progress_estimate_items rejected (set_cost/view_rates, no prepare_claims)" "403" "$ok" "$STATUS $BODY_OUT"
 
 request GET "progress_estimates?select=*&contract_id=eq.$PROJECT_ID" "$READONLY_TOKEN"
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
@@ -637,8 +660,12 @@ ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null &
 check "viewer: progress_estimate_items_history sees the logged change (view_rates)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
 
 request GET "progress_estimate_items_history?progress_estimate_item_id=eq.$PE_ITEM_ID&select=*" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
+check "quantities: progress_estimate_items_history sees the logged change (prepare_claims, 0046)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "progress_estimate_items_history?progress_estimate_item_id=eq.$PE_ITEM_ID&select=*" "$READONLY_TOKEN"
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: progress_estimate_items_history empty (no view_rates)" "200, []" "$ok" "$STATUS $BODY_OUT"
+check "readonly: progress_estimate_items_history empty (zero per-project rights)" "200, []" "$ok" "$STATUS $BODY_OUT"
 
 request GET "progress_estimate_status_history?progress_estimate_id=eq.$ESTIMATE_ID&select=*" "$VIEWER_TOKEN"
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" -ge 1 ] 2>/dev/null && ok=1
@@ -665,6 +692,224 @@ check "full: direct insert into progress_estimate_status_history rejected (trigg
 request PATCH "progress_estimates?id=eq.$ESTIMATE_ID" "$FULL_TOKEN" '{"status":"draft"}'
 ok=0; [ "$STATUS" = "200" ] && ok=1
 check "full: reset setup estimate back to draft (idempotent rerun)" "200" "$ok" "$STATUS $BODY_OUT"
+
+# =============================================================================
+# Progress claims (0046) — §1 previous_quantity (carried forward once, then
+# immutable), §2 projected_quantity (never frozen, unlike claimed_*), §3
+# holdback_percent/gst_percent + v_progress_estimate_summary (gross/
+# holdback/net/GST/invoiced, and holdback retained to date as a running
+# total), §5 prepare_claims' actual Unit Price surface (v_item_unit_price_
+# visible) proven never to leak cost even on a contract with cost tracking
+# ON — the specific failure mode a naive gating choice would have hit, per
+# this migration's own header.
+#
+# Reuses $ESTIMATE_ID/$PE_ITEM_ID (full's Jan 2026 setup estimate, just
+# reset to draft above) and $QUANTITIES_ESTIMATE_ID (quantities' own Feb
+# 2026 estimate, created as the prepare_claims write-path positive control
+# above) rather than seeding fresh fixtures — both already exist and are
+# already idempotent across reruns.
+# =============================================================================
+echo
+echo "=== Progress claims (0046) ==="
+
+# --- previous_quantity: immutable, any status --------------------------------
+request PATCH "progress_estimate_items?id=eq.$PE_ITEM_ID" "$FULL_TOKEN" '{"previous_quantity":500}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: previous_quantity edit rejected outright (immutable, 0046)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# --- claimed_value on the Jan estimate, setup for the summary arithmetic below ---
+# Set while still draft — claimed_* freezes once submitted (proven above),
+# and the check right after this re-submits this same estimate to prove
+# projected_quantity is NOT subject to that freeze, so this has to land
+# first.
+request PATCH "progress_estimate_items?id=eq.$PE_ITEM_ID" "$FULL_TOKEN" '{"claimed_value":1000}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 claimed_value)" = "1000" ] && ok=1
+check "full: set claimed_value on the Jan estimate (setup for the summary checks below)" "200, claimed_value=1000" "$ok" "$STATUS $BODY_OUT"
+
+# --- projected_quantity: NOT frozen once the estimate leaves draft -----------
+request PATCH "progress_estimates?id=eq.$ESTIMATE_ID" "$FULL_TOKEN" '{"status":"submitted"}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 status)" = "submitted" ] && ok=1
+check "full: resubmit the Jan estimate (setup for the projected_quantity check below)" "200, status=submitted" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "progress_estimate_items?id=eq.$PE_ITEM_ID" "$FULL_TOKEN" '{"projected_quantity":150}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 projected_quantity)" = "150" ] && ok=1
+check "full: projected_quantity still writable once submitted (NOT frozen, unlike claimed_*)" "200, projected_quantity=150" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "progress_estimates?id=eq.$ESTIMATE_ID" "$FULL_TOKEN" '{"status":"draft"}'
+check "cleanup: Jan estimate reset back to draft again" "200" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# --- holdback_percent / gst_percent: gated on prepare_claims, readable by any member ---
+request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"holdback_percent":10,"gst_percent":5}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
+check "quantities: set holdback_percent/gst_percent (prepare_claims)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# readonly holds manage_members, which admits the row via contracts_state_
+# update_right's own USING clause — it is guard_contracts_protected_
+# columns() (0047), not RLS, that rejects the actual holdback_percent
+# change. (Before 0047 this same combination was the leak: readonly could
+# write holdback_percent because RLS admitted the row and nothing then
+# checked the column.)
+request PATCH "contracts?id=eq.$PROJECT_ID" "$READONLY_TOKEN" '{"holdback_percent":99}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "readonly: set holdback_percent rejected (manage_members admits the row, guard blocks the column)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+request GET "contracts?id=eq.$PROJECT_ID&select=holdback_percent,gst_percent" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_field "$BODY_OUT" 0 holdback_percent)" = "10" ] && ok=1
+check "readonly: read holdback_percent/gst_percent (no rights needed to read)" "200, holdback_percent=10" "$ok" "$STATUS $BODY_OUT"
+
+# --- v_progress_estimate_summary: hand-verified arithmetic -------------------
+# Jan (ESTIMATE_ID): gross 1000, 10% holdback = 100, net = 900, 5% GST = 45,
+# invoiced = 945. Feb (QUANTITIES_ESTIMATE_ID) gets its own claimed line
+# here: gross 200, holdback 20, net 180, GST 9, invoiced 189. Feb is the
+# later period, so its holdback_retained_to_date should be both periods'
+# holdback summed: 120.
+upsert_resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/progress_estimate_items?on_conflict=progress_estimate_id,item_id" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $QUANTITIES_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"progress_estimate_id\":\"$QUANTITIES_ESTIMATE_ID\",\"item_id\":\"$LINE_ITEM_ID\",\"contract_id\":\"$PROJECT_ID\",\"claimed_quantity\":10,\"claimed_value\":200}")
+STATUS=$(printf '%s' "$upsert_resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$upsert_resp" | sed '$d')
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && ok=1
+check "quantities: upsert a claimed line on the Feb estimate (setup for the summary checks below)" "200 or 201" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_progress_estimate_summary?progress_estimate_id=eq.$ESTIMATE_ID&select=*" "$QUANTITIES_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  jan_ok=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if float(d['gross_claim']) == 1000 and float(d['holdback_amount']) == 100 and float(d['net_payment']) == 900 and float(d['gst_amount']) == 45 and float(d['total_invoiced']) == 945 else '0')
+" "$BODY_OUT")
+  [ "$jan_ok" = "1" ] && ok=1
+fi
+check "quantities: Jan v_progress_estimate_summary — gross 1000, holdback 100, net 900, GST 45, invoiced 945" "200, matches hand arithmetic" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_progress_estimate_summary?progress_estimate_id=eq.$QUANTITIES_ESTIMATE_ID&select=*" "$QUANTITIES_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  feb_ok=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if float(d['gross_claim']) == 200 and float(d['holdback_amount']) == 20 and float(d['net_payment']) == 180 and float(d['gst_amount']) == 9 and float(d['total_invoiced']) == 189 and float(d['holdback_retained_to_date']) == 120 else '0')
+" "$BODY_OUT")
+  [ "$feb_ok" = "1" ] && ok=1
+fi
+check "quantities: Feb v_progress_estimate_summary — gross 200, holdback 20, net 180, GST 9, invoiced 189, retained to date 120 (both periods)" "200, matches hand arithmetic" "$ok" "$STATUS $BODY_OUT"
+
+# Revert — shared fixture, baseline is null on both.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"holdback_percent":null,"gst_percent":null}'
+check "cleanup: holdback_percent/gst_percent reverted to null" "200" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# --- v_item_unit_price_visible: the ACTUAL leak this migration exists to prevent ---
+# Toggle cost_tracking_enabled ON — the harder case: OFF, item_prices_
+# select_right alone already keeps a prepare_claims-only seat out (proven
+# below too); ON is where the wrong, obvious-looking design (routing
+# prepare_claims through item_prices_select_right) would have leaked real
+# cost_price to quantities. Reuses FULL_PRICED_ITEM_ID (cost_price 10,
+# cost_basis per_unit, unit_price 20 — the same fixture row 0044's own
+# probes already use).
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"cost_tracking_enabled":true}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
+check "full: set cost_tracking_enabled true (setup for the checks below)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_unit_price_visible?item_id=eq.$FULL_PRICED_ITEM_ID&select=item_id,unit_price" "$QUANTITIES_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  real=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if d['unit_price'] == 20 else '0')
+" "$BODY_OUT")
+  [ "$real" = "1" ] && ok=1
+fi
+check "quantities (prepare_claims-ONLY, no view_rates): v_item_unit_price_visible shows real unit_price" "200, unit_price=20" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_prices_visible?item_id=eq.$FULL_PRICED_ITEM_ID&select=item_id,cost_price,unit_price" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: v_item_prices_visible empty (no view_rates — the row itself is hidden, not just cost)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "item_prices?item_id=eq.$FULL_PRICED_ITEM_ID&select=item_id,cost_price" "$QUANTITIES_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: item_prices raw table empty too (no leak by any query shape, cost tracking ON)" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# Regression — the companion fix (0046) to v_item_prices_visible's own mask
+# must not change anything for the populations that already had access.
+request GET "v_item_prices_visible?item_id=eq.$FULL_PRICED_ITEM_ID&select=item_id,cost_price,unit_price" "$VIEWER_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  real=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if d['cost_price'] == 10 else '0')
+" "$BODY_OUT")
+  [ "$real" = "1" ] && ok=1
+fi
+check "viewer (view_rates, cost tracking ON): v_item_prices_visible still shows real cost — companion fix regression" "200, cost_price=10" "$ok" "$STATUS $BODY_OUT"
+
+request GET "v_item_prices_visible?item_id=eq.$FULL_PRICED_ITEM_ID&select=item_id,cost_price,unit_price" "$FULL_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  real=$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])[0]
+print('1' if d['cost_price'] == 10 else '0')
+" "$BODY_OUT")
+  [ "$real" = "1" ] && ok=1
+fi
+check "full (set_cost): v_item_prices_visible still shows real cost regardless — entry-surface exemption unaffected" "200, cost_price=10" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"cost_tracking_enabled":false}'
+check "cleanup: cost_tracking_enabled reverted to false" "200" "$([ "$STATUS" = "200" ] && echo 1 || echo 0)" "$STATUS $BODY_OUT"
+
+# =============================================================================
+# contracts column guard (0047) — six permissive UPDATE policies on
+# contracts combine via OR at the row level; none of them are column-
+# scoped, so a seat satisfying ANY one could previously write ANY column
+# with a broad grant, regardless of which policy "intended" to gate it.
+# guard_contracts_protected_columns() is the actual, per-column
+# enforcement. Each check below reuses a fixture that DOES satisfy some
+# OTHER contracts UPDATE policy — proving the trigger, not just RLS, is
+# what blocks it — the exact cross-contamination shape this migration
+# closes. Attempted, not read off the policy.
+# =============================================================================
+echo
+echo "=== contracts column guard (0047) ==="
+
+# full: set_cost + set_unit_price + manage_schedule + prepare_claims — no
+# manage_members. Satisfies three of the six policies, still rejected.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"contract_end":"2026-12-31"}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: contract_end rejected (set_cost/set_unit_price/manage_schedule/prepare_claims, no manage_members)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# quantities: prepare_claims only — no manage_schedule, no manage_members.
+# A genuinely different value (not the column's own current one) — the
+# guard's IS DISTINCT FROM check only fires on a real change.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"planned_end":"2026-12-02"}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "quantities: planned_end rejected (prepare_claims alone is not manage_schedule/manage_members)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# readonly: manage_members only — no set_cost, no set_unit_price. The exact
+# combination that first surfaced this whole class (tender_price -> 777).
+request PATCH "contracts?id=eq.$PROJECT_ID" "$READONLY_TOKEN" '{"tender_price":777}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "readonly: tender_price rejected (manage_members alone is not set_cost+set_unit_price)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# correct_only: manage_members only — same shape, different column.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$CORRECT_ONLY_TOKEN" '{"cost_tracking_enabled":true}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "correct_only: cost_tracking_enabled rejected (manage_members alone is not set_cost+set_unit_price)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# full: same three-of-six-policies seat as the contract_end check above, no
+# manage_members — proves contract_state independently of dates.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"contract_state":"archived"}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "full: contract_state rejected (set_cost/set_unit_price/manage_schedule/prepare_claims, no manage_members)" ">=400" "$ok" "$STATUS $BODY_OUT"
+
+# readonly: manage_members only, no prepare_claims — the exact combination
+# that surfaced the holdback_percent leak specifically.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$READONLY_TOKEN" '{"holdback_percent":99}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "readonly: holdback_percent rejected (manage_members alone is not prepare_claims)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
 # =============================================================================
 # Positive controls — prove the seats can still do their jobs. A suite that
@@ -834,18 +1079,21 @@ request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"contract_end":"2026
 ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
 check "full: update contracts.contract_end rejected (manage_schedule alone is not enough)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
-# quantities (neither manage_schedule nor manage_members) can't move either
-# date pair on contracts. USING excludes the row outright (no right matches),
-# so this is PostgREST's "0 rows visible to update" shape — 200 with an
-# empty body, not a 403 — same as "quantities: status update rejected"
-# and "viewer: update item_prices rejected" elsewhere in this suite. The
-# full-seat probes above got 403/>=400 instead because THEY are members with
-# SOME matching right (manage_schedule), so USING passes and it's WITH CHECK
-# or the trigger that then blocks the specific column — a different failure
-# point with a different shape.
-request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"planned_start":"2026-04-01"}'
-ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: update contracts.planned_start rejected" "200, []" "$ok" "$STATUS $BODY_OUT"
+# quantities holds neither manage_schedule nor manage_members — but as of
+# 0046 it DOES hold prepare_claims, which satisfies contracts_progress_
+# claim_fields_update_right's own row-level USING clause. That admits the
+# row to the UPDATE statement (this is no longer "0 rows visible", the
+# shape this check originally proved before prepare_claims existed) — it's
+# guard_contracts_protected_columns() (0047) that then rejects the actual
+# planned_start change, a real value change (not the prior no-op-shaped
+# probe, which happened to PATCH the column to its own existing value and
+# so never exercised the trigger's IS DISTINCT FROM check at all). Same
+# >=400 shape as full's contract_end rejection just above, now reachable
+# by quantities too, for a different reason (prepare_claims, not
+# manage_schedule) admitting the row.
+request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"planned_start":"2026-04-02"}'
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "quantities: update contracts.planned_start rejected (prepare_claims admits the row, guard_contracts_protected_columns blocks the column)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
 echo
 echo "=== item_jobs (0019) — Item <-> Job assignment, same right as jobs itself ==="
@@ -1931,9 +2179,15 @@ check "full: set tender_price (set_cost + set_unit_price)" "200, 1 row" "$ok" "$
 # USING passes on some other permissive policy for this row (is_member
 # alone), so this is the same "matches 0 rows, not 403" shape as every other
 # split-right column-grant check in this file, not an error.
+# quantities holds prepare_claims as of 0046, which admits the row via
+# contracts_progress_claim_fields_update_right's own USING clause — the
+# rejection below now comes from guard_contracts_protected_columns()
+# (0047), not from RLS excluding the row. Before 0047 this exact
+# combination (a policy for one column admitting a seat that then writes a
+# DIFFERENT column) was the leak.
 request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"tender_price":1}'
-ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: set tender_price rejected (no set_cost/set_unit_price)" "200, []" "$ok" "$STATUS $BODY_OUT"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "quantities: set tender_price rejected (prepare_claims admits the row, guard blocks the column)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
 # view_rates alone (viewer) isn't enough either — reading Rates and pricing
 # the contract are different permissions, same split canEdit already draws
@@ -1967,9 +2221,11 @@ request PATCH "contracts?id=eq.$PROJECT_ID" "$FULL_TOKEN" '{"cost_tracking_enabl
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" != "0" ] && ok=1
 check "full: set cost_tracking_enabled (set_cost + set_unit_price)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
 
+# Same shift as tender_price just above — prepare_claims admits the row,
+# guard_contracts_protected_columns() (0047) blocks this column.
 request PATCH "contracts?id=eq.$PROJECT_ID" "$QUANTITIES_TOKEN" '{"cost_tracking_enabled":false}'
-ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
-check "quantities: set cost_tracking_enabled rejected (no set_cost/set_unit_price)" "200, []" "$ok" "$STATUS $BODY_OUT"
+ok=0; [ "$STATUS" -ge 400 ] 2>/dev/null && ok=1
+check "quantities: set cost_tracking_enabled rejected (prepare_claims admits the row, guard blocks the column)" ">=400" "$ok" "$STATUS $BODY_OUT"
 
 request PATCH "contracts?id=eq.$PROJECT_ID" "$VIEWER_TOKEN" '{"cost_tracking_enabled":false}'
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1

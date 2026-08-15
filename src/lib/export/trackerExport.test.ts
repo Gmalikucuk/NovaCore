@@ -28,6 +28,8 @@ const CONTRACT: MyContract = {
   contractEnd: null,
   contractState: 'active',
   costTrackingEnabled: false,
+  holdbackPercent: null,
+  gstPercent: null,
   createItems: false,
   setCost: false,
   setUnitPrice: false,
@@ -36,6 +38,7 @@ const CONTRACT: MyContract = {
   confirmQuantity: false,
   viewRates: true,
   extractReport: false,
+  prepareClaims: false,
 }
 
 const UNIT_PRICE_ITEM: Item = {

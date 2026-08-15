@@ -79,3 +79,40 @@ export function variance(claimed: number | null, certified: number | null): numb
   if (claimed === null || certified === null) return null
   return certified - claimed
 }
+
+/**
+ * Quantity to date — previous plus current, computed, never stored (§1).
+ * previousQuantity's own null means "no prior claim exists" (0046's
+ * previous_quantity is only ever null for that reason, by construction —
+ * see the column comment), so it contributes 0, not "unknown." claimed
+ * being null is the genuinely unknown case — this period's figure hasn't
+ * been entered yet — and stays null rather than silently reading as
+ * "nothing claimed this period," which would be a different, wrong fact.
+ */
+export function quantityToDate(previousQuantity: number | null, claimedQuantity: number | null): number | null {
+  if (claimedQuantity === null) return null
+  return (previousQuantity ?? 0) + claimedQuantity
+}
+
+/**
+ * A quantity as a percent of Approximate Quantity — the one ratio §2 needs
+ * twice (percent to date, percent projected), against the same
+ * denominator each time. Over 100% is a gain, not a fault (GC 52.04); this
+ * function does not clamp it, same neutrality as variance() above.
+ */
+export function percentOfApproximate(quantity: number | null, approximateQuantity: number): number | null {
+  if (quantity === null || approximateQuantity <= 0) return null
+  return (quantity / approximateQuantity) * 100
+}
+
+/**
+ * The projected final quantity's dollar difference against the tendered
+ * extended amount (Approximate Quantity × Unit Price) — §2's own example:
+ * "Schedule I projected $116,875.07 over the tendered total." Positive is
+ * a gain (projected above tender), same neutral-gap convention as
+ * variance() — never described as an error.
+ */
+export function projectedValueVariance(projectedQuantity: number | null, approximateQuantity: number, unitPrice: number | null): number | null {
+  if (projectedQuantity === null || unitPrice === null) return null
+  return (projectedQuantity - approximateQuantity) * unitPrice
+}

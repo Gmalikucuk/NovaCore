@@ -43,6 +43,7 @@ interface RawContractMemberRow {
   confirm_quantity: boolean
   view_rates: boolean
   extract_report: boolean
+  prepare_claims: boolean
   profiles: { full_name: string | null } | null
 }
 
@@ -58,17 +59,16 @@ function mapContractMemberRow(row: RawContractMemberRow): ContractMember {
     confirmQuantity: row.confirm_quantity,
     viewRates: row.view_rates,
     extractReport: row.extract_report,
+    prepareClaims: row.prepare_claims,
   }
 }
 
+const CONTRACT_MEMBER_SELECT =
+  'user_id, create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, prepare_claims, profiles ( full_name )'
+
 /** Every seat on a contract, with the name to show against each — manage_members only (contract_members_select's own is_member(contract_id) gate is satisfied by 0028's widened contracts visibility, not bypassed). */
 export async function fetchContractMembers(contractId: string): Promise<ContractMember[]> {
-  const { data, error } = await supabase
-    .from('contract_members')
-    .select(
-      'user_id, create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, profiles ( full_name )',
-    )
-    .eq('contract_id', contractId)
+  const { data, error } = await supabase.from('contract_members').select(CONTRACT_MEMBER_SELECT).eq('contract_id', contractId)
   if (error) throw error
   return (data ?? []).map((row) => mapContractMemberRow(row as unknown as RawContractMemberRow))
 }
@@ -104,6 +104,7 @@ const RIGHT_COLUMN: Record<ContractRightKey, string> = {
   confirmQuantity: 'confirm_quantity',
   viewRates: 'view_rates',
   extractReport: 'extract_report',
+  prepareClaims: 'prepare_claims',
 }
 
 /**
@@ -118,13 +119,7 @@ export async function addContractMember(contractId: string, userId: string, righ
   const payload: Record<string, string | boolean> = { contract_id: contractId, user_id: userId }
   for (const key of rightsToGrant) payload[RIGHT_COLUMN[key]] = true
 
-  const { data, error } = await supabase
-    .from('contract_members')
-    .insert(payload)
-    .select(
-      'user_id, create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, profiles ( full_name )',
-    )
-    .single()
+  const { data, error } = await supabase.from('contract_members').insert(payload).select(CONTRACT_MEMBER_SELECT).single()
   if (error) {
     if (error.code === '23505') throw new Error('This person is already seated on this contract.')
     throw new Error(error.message)
