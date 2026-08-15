@@ -116,3 +116,9 @@ export function projectedValueVariance(projectedQuantity: number | null, approxi
   if (projectedQuantity === null || unitPrice === null) return null
   return (projectedQuantity - approximateQuantity) * unitPrice
 }
+
+/** Approximate Quantity × Unit Price — the tendered extended amount, shown in the redesigned claim screen's expanded panel as the reference figure a projection is measured against. Null when Unit Price isn't on file, never $0. */
+export function tenderedExtendedAmount(approximateQuantity: number, unitPrice: number | null): number | null {
+  if (unitPrice === null) return null
+  return approximateQuantity * unitPrice
+}

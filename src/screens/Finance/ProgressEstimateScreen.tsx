@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { IconArrowLeft } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
@@ -10,9 +10,7 @@ import {
   fetchProgressEstimateItems,
   fetchProgressEstimateSummaries,
   fetchUnitPricesForClaims,
-  updateProgressEstimateItemCertified,
   updateProgressEstimateItemClaim,
-  updateProgressEstimateItemDispute,
   updateProgressEstimateItemProjected,
   updateProgressEstimateStatus,
   type ProgressEstimate,
@@ -20,16 +18,27 @@ import {
   type ProgressEstimateStatus,
   type ProgressEstimateSummary,
 } from '../../lib/supabase/progressEstimates'
+import { fetchViewPreferences, saveViewPreferences } from '../../lib/supabase/viewPreferences'
 import { fetchItems, type Item } from '../../lib/supabase/items'
-import { claimFieldForKind, percentOfApproximate, projectedValueVariance, proposeClaimedFromRecords, quantityToDate, variance, type ProposedClaim } from '../../lib/calculations/progressEstimates'
-import { sumOrNull } from '../../lib/calculations/margin'
+import {
+  claimFieldForKind,
+  percentOfApproximate,
+  proposeClaimedFromRecords,
+  quantityToDate,
+  tenderedExtendedAmount,
+  type ProposedClaim,
+} from '../../lib/calculations/progressEstimates'
 import { formatDayLabel } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
-import { quantity as fmtQuantity, money as fmtMoney } from '../../lib/format'
-import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, Table, TBody, TD, TH, THead, TR, Textarea } from '../../components/ui'
+import { quantity as fmtQuantity, money as fmtMoney, rate as fmtRate } from '../../lib/format'
+import { Button, EmptyState, Input, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 const STATUS_OPTIONS: ProgressEstimateStatus[] = ['draft', 'submitted', 'received', 'reconciled']
 const STATUS_LABEL: Record<ProgressEstimateStatus, string> = { draft: 'Draft', submitted: 'Submitted', received: 'Received', reconciled: 'Reconciled' }
+
+const PREFS_SCOPE = 'progress_estimate_detail'
+type LineFilter = 'all' | 'claimed' | 'not_started'
+const FILTER_LABEL: Record<LineFilter, string> = { all: 'All items', claimed: 'Claimed this period', not_started: 'Not started' }
 
 function parseNum(raw: string): number | null {
   const trimmed = raw.trim()
@@ -38,92 +47,87 @@ function parseNum(raw: string): number | null {
   return Number.isNaN(n) ? null : n
 }
 
-function fieldLabel(field: 'quantity' | 'percent' | 'value'): string {
-  return field === 'quantity' ? 'Quantity' : field === 'percent' ? '% complete' : 'Value'
-}
-
-function formatField(field: 'quantity' | 'percent' | 'value', value: number | null, unit: string): string {
-  if (value === null) return '—'
-  if (field === 'percent') return `${value.toFixed(1)}%`
-  if (field === 'value') return fmtMoney(value)
-  return fmtQuantity(value, unit)
-}
-
-// percentOfApproximate returns 0-100, same convention as items.percent_
-// complete (see RatesScreen's own PercentDisplay) — a plain toFixed, never
-// format.ts's percent(), which expects a 0-1 ratio and would misread this
-// value by a factor of 100.
-function formatPercentOfApproximate(value: number | null): string {
-  return value === null ? '—' : `${value.toFixed(1)}%`
+function sanitizeFilter(raw: unknown): LineFilter {
+  return raw === 'claimed' || raw === 'not_started' ? raw : 'all'
 }
 
 /**
- * One line. §1's previous/claimed/to-date and §2's projected/%to-date/
- * %projected/±$ apply to unit_price lines only (claimFieldForKind's
- * 'quantity' branch) — Lump Sum/Provisional Sum lines render em-dash across
- * that whole group, same as they already did for the pre-existing claimed/
- * certified pair.
- *
- * Claimed stays frozen once the estimate leaves draft (guard_progress_
- * estimate_claim, 0041/0046 — the database is the real wall, this input's
- * own disabling is a courtesy). Projected is NOT frozen — see the column's
- * own comment in the migration. Certified/paid/disputed are always
- * writable, unchanged from before.
- *
- * The records-derived proposal (proposedClaim) is offered beside the
- * Claimed input, never written automatically — clicking "Use" only fills
- * the local draft, exactly as if the person had typed it; committing still
- * happens on blur, same as every other field here.
+ * Description + identity line — the Item's unit of measure and Approximate
+ * Quantity live here, once, not repeated in every numeric cell (§2). A
+ * projected overrun is stated on this same line, as plain text, only when
+ * it actually IS one (projected > 100% of Approximate Quantity) — over-
+ * quantity is revenue above tender, not styled as a problem.
  */
-function EstimateLineRow({
+function ItemIdentity({ line }: { line: ProgressEstimateItem }) {
+  const kindLabel = line.itemKind === 'lump_sum' ? 'lump sum' : line.itemKind === 'provisional_sum' ? 'provisional sum' : line.unit
+  const percentProjected = line.itemKind === 'unit_price' ? percentOfApproximate(line.projectedQuantity, line.approximateQuantity) : null
+  const overrun = percentProjected !== null && percentProjected > 100 ? ` · ${percentProjected.toFixed(0)}% projected` : ''
+  return (
+    <div>
+      <div className="max-w-[320px] truncate text-sm text-nc-text" title={line.description}>
+        {line.description}
+      </div>
+      <div className="mt-0.5 text-xs text-nc-text-muted">
+        {line.itemNumber} · {kindLabel}
+        {line.itemKind === 'unit_price' && <> · {fmtQuantity(line.approximateQuantity)} approx.</>}
+        {overrun}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One claim line, unit_price Items only (§1's four columns apply to the
+ * quantity-measured case this brief was written against — Lump Sum/
+ * Provisional Sum lines render in the separate, minimal list further down,
+ * where "this period" has no equivalent meaning). Returns a Fragment of
+ * ONE OR TWO <TR>s: the row itself, and — when expanded — the detail panel
+ * directly beneath it, so later rows shift down and the row being worked
+ * on never moves (§3).
+ *
+ * "This period" is the only input in the row itself; Quantity to date and
+ * Value are both computed live from it, matching §1 ("everything else is
+ * derived or carried"). previousQuantity/claimed freeze/prepare_claims
+ * gating are unchanged from 65e2a0f — this component only changes what is
+ * shown and where, not what is enforced (the database still owns that).
+ */
+function ClaimLine({
   line,
+  rowIndex,
   isDraft,
   canWrite,
   unitPrice,
   proposedClaim,
+  expanded,
+  onToggleExpand,
   onChanged,
 }: {
   line: ProgressEstimateItem
+  rowIndex: number
   isDraft: boolean
   canWrite: boolean
   unitPrice: number | null
   proposedClaim: ProposedClaim | undefined
+  expanded: boolean
+  onToggleExpand: () => void
   onChanged: () => void
 }) {
-  const field = claimFieldForKind(line.itemKind)
-  const isQuantity = field === 'quantity'
-  const claimedValue = field === 'quantity' ? line.claimedQuantity : field === 'percent' ? line.claimedPercent : line.claimedValue
-  const certifiedValue = field === 'quantity' ? line.certifiedQuantity : field === 'percent' ? line.certifiedPercent : line.certifiedValue
-
-  const [claimedDraft, setClaimedDraft] = useState(claimedValue?.toString() ?? '')
+  const [thisPeriodDraft, setThisPeriodDraft] = useState(line.claimedQuantity?.toString() ?? '')
   const [projectedDraft, setProjectedDraft] = useState(line.projectedQuantity?.toString() ?? '')
-  const [certifiedDraft, setCertifiedDraft] = useState(certifiedValue?.toString() ?? '')
-  const [paidDraft, setPaidDraft] = useState(line.paidAmount?.toString() ?? '')
-  const [noteDraft, setNoteDraft] = useState(line.varianceNote ?? '')
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  const fieldVariance = variance(claimedValue, certifiedValue)
-  const valueVariance = variance(line.claimedValue, line.certifiedValue)
-  const toDate = isQuantity ? quantityToDate(line.previousQuantity, line.claimedQuantity) : null
-  const percentToDate = isQuantity ? percentOfApproximate(toDate, line.approximateQuantity) : null
-  const percentProjected = isQuantity ? percentOfApproximate(line.projectedQuantity, line.approximateQuantity) : null
-  const projectedVariance = isQuantity ? projectedValueVariance(line.projectedQuantity, line.approximateQuantity, unitPrice) : null
+  const thisPeriodParsed = parseNum(thisPeriodDraft)
+  const toDate = quantityToDate(line.previousQuantity, thisPeriodParsed)
+  const liveValue = thisPeriodParsed === null || unitPrice === null ? null : thisPeriodParsed * unitPrice
+  const tendered = tenderedExtendedAmount(line.approximateQuantity, unitPrice)
 
-  async function commitClaimed() {
-    const value = parseNum(claimedDraft)
-    if (value === claimedValue) return
+  async function commitThisPeriod() {
+    if (thisPeriodParsed === line.claimedQuantity) return
     try {
-      if (field === 'quantity') {
-        // claimed_value isn't a separate input for unit_price lines — it's
-        // this quantity priced at the Item's current Unit Price, the same
-        // pricing proposeClaimedFromRecords already does for the proposal.
-        // Without this, gross_claim (§3) would never see a typed-or-
-        // accepted quantity claim, only the (never-populated) auto-fill
-        // path 0041 originally wrote.
-        await updateProgressEstimateItemClaim(line.id, { claimedQuantity: value, claimedValue: value === null || unitPrice === null ? null : value * unitPrice })
-      } else {
-        await updateProgressEstimateItemClaim(line.id, { [field === 'percent' ? 'claimedPercent' : 'claimedValue']: value })
-      }
+      await updateProgressEstimateItemClaim(line.id, {
+        claimedQuantity: thisPeriodParsed,
+        claimedValue: thisPeriodParsed === null || unitPrice === null ? null : thisPeriodParsed * unitPrice,
+      })
       onChanged()
     } catch (err) {
       setSaveError(errorMessage(err))
@@ -141,41 +145,113 @@ function EstimateLineRow({
     }
   }
 
-  async function commitCertified() {
-    const value = parseNum(certifiedDraft)
-    if (value === certifiedValue) return
-    try {
-      await updateProgressEstimateItemCertified(line.id, { [field === 'quantity' ? 'certifiedQuantity' : field === 'percent' ? 'certifiedPercent' : 'certifiedValue']: value })
-      onChanged()
-    } catch (err) {
-      setSaveError(errorMessage(err))
-    }
+  function useProposal() {
+    if (!proposedClaim) return
+    setThisPeriodDraft(proposedClaim.claimedQuantity.toString())
   }
 
-  async function commitPaid() {
-    const value = parseNum(paidDraft)
-    if (value === line.paidAmount) return
-    try {
-      await updateProgressEstimateItemCertified(line.id, { paidAmount: value })
-      onChanged()
-    } catch (err) {
-      setSaveError(errorMessage(err))
-    }
-  }
+  return (
+    <>
+      <TR className="cursor-pointer hover:bg-nc-secondary" onClick={onToggleExpand}>
+        <TD className="align-top">
+          <ItemIdentity line={line} />
+        </TD>
+        <TD align="right" className="nc-numeric align-top">
+          {toDate === null ? '—' : fmtQuantity(toDate, line.unit)}
+        </TD>
+        <TD align="right" className="align-top" onClick={(e) => e.stopPropagation()}>
+          {canWrite && isDraft ? (
+            <Input
+              className="nc-numeric text-right"
+              inputMode="decimal"
+              style={{ width: 110 }}
+              value={thisPeriodDraft}
+              tabIndex={rowIndex + 1}
+              aria-label={`${line.itemNumber} this period`}
+              onChange={(e) => setThisPeriodDraft(e.target.value)}
+              onBlur={() => void commitThisPeriod()}
+            />
+          ) : (
+            <span className="nc-numeric">{line.claimedQuantity === null ? '—' : fmtQuantity(line.claimedQuantity, line.unit)}</span>
+          )}
+          {saveError && <p className="mt-1 text-xs text-nc-danger-text">{saveError}</p>}
+        </TD>
+        <TD align="right" className="nc-numeric align-top">
+          {fmtMoney(liveValue)}
+        </TD>
+      </TR>
+      {expanded && (
+        <TR className="bg-nc-secondary" onClick={(e) => e.stopPropagation()}>
+          <TD colSpan={4} className="align-top">
+            <div className="grid grid-cols-4 gap-6 py-2">
+              <label className="text-xs text-nc-text-muted">
+                Projected final quantity
+                {canWrite ? (
+                  <Input
+                    className="nc-numeric mt-1 text-right"
+                    inputMode="decimal"
+                    tabIndex={-1}
+                    value={projectedDraft}
+                    aria-label={`${line.itemNumber} projected final quantity`}
+                    onChange={(e) => setProjectedDraft(e.target.value)}
+                    onBlur={() => void commitProjected()}
+                  />
+                ) : (
+                  <div className="nc-numeric mt-1 text-right text-sm text-nc-text">{line.projectedQuantity === null ? '—' : fmtQuantity(line.projectedQuantity, line.unit)}</div>
+                )}
+              </label>
+              <div className="text-xs text-nc-text-muted">
+                From records
+                <div className="mt-1 text-sm text-nc-text">
+                  {proposedClaim ? (
+                    <>
+                      {fmtQuantity(proposedClaim.claimedQuantity, line.unit)}{' '}
+                      {canWrite && isDraft && (
+                        <button type="button" className="text-nc-link underline" onClick={useProposal}>
+                          Use
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </div>
+              </div>
+              <div className="text-xs text-nc-text-muted">
+                Unit Price
+                <div className="nc-numeric mt-1 text-sm text-nc-text">{fmtRate(unitPrice)}</div>
+              </div>
+              <div className="text-xs text-nc-text-muted">
+                Tendered extended amount
+                <div className="nc-numeric mt-1 text-sm text-nc-text">{fmtMoney(tendered)}</div>
+              </div>
+            </div>
+          </TD>
+        </TR>
+      )}
+    </>
+  )
+}
 
-  async function toggleDisputed() {
-    try {
-      await updateProgressEstimateItemDispute(line.id, { disputed: !line.disputed, varianceNote: line.varianceNote })
-      onChanged()
-    } catch (err) {
-      setSaveError(errorMessage(err))
-    }
-  }
+/**
+ * Lump Sum / Provisional Sum lines — only ever present if added by hand
+ * (they're never auto-created, 65e2a0f). §1's four-column redesign doesn't
+ * fit them: there is no "this period" quantity concept for a percent-
+ * complete or one-time authorized-value figure. Kept minimal rather than
+ * forced into a shape that doesn't describe them — one input, matching
+ * whichever field claimFieldForKind says is live, nothing else.
+ */
+function OtherLine({ line, isDraft, canWrite, onChanged }: { line: ProgressEstimateItem; isDraft: boolean; canWrite: boolean; onChanged: () => void }) {
+  const field = claimFieldForKind(line.itemKind)
+  const claimedValue = field === 'percent' ? line.claimedPercent : line.claimedValue
+  const [draft, setDraft] = useState(claimedValue?.toString() ?? '')
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  async function commitNote() {
-    if (noteDraft === (line.varianceNote ?? '')) return
+  async function commit() {
+    const value = parseNum(draft)
+    if (value === claimedValue) return
     try {
-      await updateProgressEstimateItemDispute(line.id, { disputed: line.disputed, varianceNote: noteDraft.trim() || null })
+      await updateProgressEstimateItemClaim(line.id, field === 'percent' ? { claimedPercent: value } : { claimedValue: value })
       onChanged()
     } catch (err) {
       setSaveError(errorMessage(err))
@@ -184,129 +260,40 @@ function EstimateLineRow({
 
   return (
     <TR>
-      <TD className="nc-numeric align-top">{line.itemNumber}</TD>
-      <TD prose className="align-top">
-        <div className="max-w-[180px] truncate" title={line.description}>
+      <TD className="align-top">
+        <div className="max-w-[320px] truncate text-sm text-nc-text" title={line.description}>
           {line.description}
         </div>
-        {saveError && <p className="mt-1 text-xs text-nc-danger-text">{saveError}</p>}
-      </TD>
-      <TD align="right" className="nc-numeric align-top">
-        {isQuantity ? formatField('quantity', line.previousQuantity, line.unit) : '—'}
+        <div className="mt-0.5 text-xs text-nc-text-muted">
+          {line.itemNumber} · {line.itemKind === 'lump_sum' ? 'lump sum' : 'provisional sum'}
+        </div>
       </TD>
       <TD align="right" className="align-top">
         {canWrite && isDraft ? (
-          <>
-            <Input
-              className="nc-numeric text-right"
-              inputMode="decimal"
-              style={{ width: 100 }}
-              value={claimedDraft}
-              aria-label={`${line.itemNumber} claimed ${fieldLabel(field)}`}
-              onChange={(e) => setClaimedDraft(e.target.value)}
-              onBlur={() => void commitClaimed()}
-            />
-            {isQuantity && proposedClaim && (
-              <div className="mt-1 text-right text-xs text-nc-text-muted">
-                From records: {fmtQuantity(proposedClaim.claimedQuantity, line.unit)}{' '}
-                <button type="button" className="text-nc-link underline" onClick={() => setClaimedDraft(proposedClaim.claimedQuantity.toString())}>
-                  Use
-                </button>
-              </div>
-            )}
-          </>
-        ) : (
-          <span className="nc-numeric">{formatField(field, claimedValue, line.unit)}</span>
-        )}
-      </TD>
-      <TD align="right" className="nc-numeric align-top">
-        {isQuantity ? formatField('quantity', toDate, line.unit) : '—'}
-      </TD>
-      <TD align="right" className="align-top">
-        {isQuantity && canWrite ? (
           <Input
             className="nc-numeric text-right"
             inputMode="decimal"
-            style={{ width: 100 }}
-            value={projectedDraft}
-            aria-label={`${line.itemNumber} projected final quantity`}
-            onChange={(e) => setProjectedDraft(e.target.value)}
-            onBlur={() => void commitProjected()}
-          />
-        ) : isQuantity ? (
-          <span className="nc-numeric">{formatField('quantity', line.projectedQuantity, line.unit)}</span>
-        ) : (
-          '—'
-        )}
-      </TD>
-      <TD align="right" className="nc-numeric align-top">{isQuantity ? formatPercentOfApproximate(percentToDate) : '—'}</TD>
-      <TD align="right" className="nc-numeric align-top">{isQuantity ? formatPercentOfApproximate(percentProjected) : '—'}</TD>
-      <TD align="right" className={`nc-numeric align-top ${projectedVariance !== null && projectedVariance < 0 ? 'text-nc-danger-text' : ''}`}>
-        {isQuantity && projectedVariance !== null ? fmtMoney(projectedVariance) : '—'}
-      </TD>
-      <TD align="right" className="align-top">
-        {canWrite ? (
-          <Input
-            className="nc-numeric text-right"
-            inputMode="decimal"
-            style={{ width: 100 }}
-            value={certifiedDraft}
-            aria-label={`${line.itemNumber} certified ${fieldLabel(field)}`}
-            onChange={(e) => setCertifiedDraft(e.target.value)}
-            onBlur={() => void commitCertified()}
+            style={{ width: 110 }}
+            value={draft}
+            aria-label={`${line.itemNumber} ${field === 'percent' ? '% complete' : 'value'}`}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commit()}
           />
         ) : (
-          <span className="nc-numeric">{formatField(field, certifiedValue, line.unit)}</span>
+          <span className="nc-numeric">{claimedValue === null ? '—' : field === 'percent' ? `${claimedValue.toFixed(1)}%` : fmtMoney(claimedValue)}</span>
         )}
-      </TD>
-      <TD align="right" className="nc-numeric align-top">{fieldVariance === null ? '—' : formatField(field, fieldVariance, line.unit)}</TD>
-      <TD align="right" className="nc-numeric align-top">{valueVariance === null ? '—' : fmtMoney(valueVariance)}</TD>
-      <TD align="right" className="align-top">
-        {canWrite ? (
-          <Input
-            className="nc-numeric text-right"
-            inputMode="decimal"
-            style={{ width: 100 }}
-            value={paidDraft}
-            aria-label={`${line.itemNumber} paid amount`}
-            onChange={(e) => setPaidDraft(e.target.value)}
-            onBlur={() => void commitPaid()}
-          />
-        ) : (
-          <span className="nc-numeric">{fmtMoney(line.paidAmount)}</span>
-        )}
-      </TD>
-      <TD className="align-top text-center">
-        {canWrite ? (
-          <input type="checkbox" checked={line.disputed} onChange={() => void toggleDisputed()} aria-label={`${line.itemNumber} disputed`} />
-        ) : line.disputed ? (
-          <span className="rounded-full bg-nc-warning-bg px-2 py-0.5 text-xs font-medium text-nc-warning-text">Disputed</span>
-        ) : null}
-      </TD>
-      <TD className="align-top">
-        {canWrite ? (
-          <Textarea
-            className="w-48 text-xs"
-            rows={1}
-            value={noteDraft}
-            placeholder="Note (optional)"
-            aria-label={`${line.itemNumber} variance note`}
-            onChange={(e) => setNoteDraft(e.target.value)}
-            onBlur={() => void commitNote()}
-          />
-        ) : (
-          <span className="text-xs text-nc-text-muted">{line.varianceNote ?? ''}</span>
-        )}
+        {saveError && <p className="mt-1 text-xs text-nc-danger-text">{saveError}</p>}
       </TD>
     </TR>
   )
 }
 
 /**
- * One progress estimate's detail — previous/claimed/to-date/projected per
- * unit_price Item (§1, §2), certified/paid/disputed for every Item
- * regardless of kind (unchanged from before), and the claim summary
- * (gross/holdback/net/GST/invoiced, §3).
+ * One progress estimate's detail, redesigned around one question per Item:
+ * how much of this got done this period. Four columns, one expandable
+ * panel per row for everything else that's worth seeing but isn't the
+ * input, filters instead of scrolling past settled rows, and the summary
+ * as four cards plus holdback retained to date — the answer, not a footer.
  */
 export function ProgressEstimateScreen() {
   const contract = useOutletContext<MyContract>()
@@ -324,6 +311,11 @@ export function ProgressEstimateScreen() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [statusSaving, setStatusSaving] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [filter, setFilter] = useState<LineFilter>('all')
+  const filterLoaded = useRef(false)
+  const lastPersistedFilter = useRef<string | null>(null)
 
   const [addItemId, setAddItemId] = useState('')
   const [addItemValue, setAddItemValue] = useState('')
@@ -364,12 +356,53 @@ export function ProgressEstimateScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, contract.id])
 
+  // Filter choice — per seat, per screen (not per contract or per estimate;
+  // one preference follows this person everywhere they prepare a claim).
+  useEffect(() => {
+    fetchViewPreferences(PREFS_SCOPE)
+      .then((raw) => {
+        const f = sanitizeFilter(raw?.lineFilter)
+        lastPersistedFilter.current = f
+        setFilter(f)
+      })
+      .catch(() => {
+        lastPersistedFilter.current = 'all'
+      })
+      .finally(() => {
+        filterLoaded.current = true
+      })
+  }, [])
+
+  useEffect(() => {
+    if (!filterLoaded.current) return
+    if (filter === lastPersistedFilter.current) return
+    const handle = setTimeout(() => {
+      void saveViewPreferences(PREFS_SCOPE, { lineFilter: filter }).then(() => {
+        lastPersistedFilter.current = filter
+      })
+    }, 500)
+    return () => clearTimeout(handle)
+  }, [filter])
+
   const isDraft = estimate?.status === 'draft'
 
-  const sortedLines = useMemo(() => [...lines].sort((a, b) => a.itemNumber.localeCompare(b.itemNumber, undefined, { numeric: true })), [lines])
+  const unitPriceLines = useMemo(
+    () => [...lines].filter((l) => l.itemKind === 'unit_price').sort((a, b) => a.itemNumber.localeCompare(b.itemNumber, undefined, { numeric: true })),
+    [lines],
+  )
+  const otherLines = useMemo(
+    () => [...lines].filter((l) => l.itemKind !== 'unit_price').sort((a, b) => a.itemNumber.localeCompare(b.itemNumber, undefined, { numeric: true })),
+    [lines],
+  )
+
+  const filteredLines = useMemo(() => {
+    if (filter === 'all') return unitPriceLines
+    if (filter === 'claimed') return unitPriceLines.filter((l) => l.claimedQuantity !== null)
+    return unitPriceLines.filter((l) => (l.previousQuantity ?? 0) === 0 && l.claimedQuantity === null)
+  }, [unitPriceLines, filter])
 
   // The records-derived proposal for THIS estimate's period, unit_price
-  // Items only — offered beside the Claimed input, never written
+  // Items only — offered in the expanded panel, never written
   // automatically (see proposeClaimedFromRecords' own doc comment).
   const proposedByItem = useMemo(() => {
     if (!estimate) return new Map<string, ProposedClaim>()
@@ -379,9 +412,10 @@ export function ProgressEstimateScreen() {
   }, [estimate, items, productionRecords, unitPriceByItem])
 
   const summary = useMemo(() => summaries.find((s) => s.progressEstimateId === id), [summaries, id])
-
-  const totalValueVariance = useMemo(() => sumOrNull(lines.map((l) => variance(l.claimedValue, l.certifiedValue))), [lines])
-  const totalPaid = useMemo(() => sumOrNull(lines.map((l) => l.paidAmount)), [lines])
+  const retainedToDate = useMemo(() => {
+    if (summaries.length === 0) return null
+    return [...summaries].sort((a, b) => (a.periodEnd < b.periodEnd ? 1 : -1))[0]?.holdbackRetainedToDate ?? null
+  }, [summaries])
 
   const itemsNotYetAdded = useMemo(() => {
     const lineItemIds = new Set(lines.map((l) => l.itemId))
@@ -484,78 +518,62 @@ export function ProgressEstimateScreen() {
             {!isDraft && <p className="text-xs text-nc-text-muted">Claimed figures are frozen — this estimate is no longer a draft.</p>}
           </div>
 
-          {summary && (
-            <div className="mb-6 grid grid-cols-2 gap-4 rounded-lg border border-nc-border bg-white p-4 sm:grid-cols-5">
-              <div>
-                <div className="text-xs text-nc-text-muted">Gross claim</div>
-                <div className="nc-numeric text-lg font-semibold text-nc-text">{fmtMoney(summary.grossClaim)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-nc-text-muted">Holdback ({summary.holdbackPercent === null ? '—' : `${summary.holdbackPercent}%`})</div>
-                <div className="nc-numeric text-lg font-semibold text-nc-text">{fmtMoney(summary.holdbackAmount)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-nc-text-muted">Net payment</div>
-                <div className="nc-numeric text-lg font-semibold text-nc-text">{fmtMoney(summary.netPayment)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-nc-text-muted">GST ({summary.gstPercent === null ? '—' : `${summary.gstPercent}%`})</div>
-                <div className="nc-numeric text-lg font-semibold text-nc-text">{fmtMoney(summary.gstAmount)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-nc-text-muted">Total invoiced</div>
-                <div className="nc-numeric text-lg font-semibold text-nc-text">{fmtMoney(summary.totalInvoiced)}</div>
-              </div>
-            </div>
-          )}
+          <div className="mb-4 flex gap-2" role="group" aria-label="Line filter">
+            {(['all', 'claimed', 'not_started'] as LineFilter[]).map((f) => (
+              <Button key={f} type="button" variant={filter === f ? 'primary' : 'secondary'} onClick={() => setFilter(f)}>
+                {FILTER_LABEL[f]}
+              </Button>
+            ))}
+          </div>
 
-          {sortedLines.length === 0 ? (
-            <EmptyState title="No lines on this estimate yet." description="No unit_price Item had confirmed records in this period. Add a line by hand below." />
+          {filteredLines.length === 0 ? (
+            <EmptyState title="No items match this filter." description="Try a different filter above." />
           ) : (
             <Table>
               <THead>
                 <TR>
-                  <TH>Item #</TH>
-                  <TH>Description</TH>
-                  <TH align="right">Previous</TH>
-                  <TH align="right">Claimed</TH>
-                  <TH align="right">To date</TH>
-                  <TH align="right">Projected</TH>
-                  <TH align="right">% to date</TH>
-                  <TH align="right">% projected</TH>
-                  <TH align="right">Projected variance ($)</TH>
-                  <TH align="right">Certified</TH>
-                  <TH align="right">Variance</TH>
-                  <TH align="right">Variance ($)</TH>
-                  <TH align="right">Paid</TH>
-                  <TH className="text-center">Disputed</TH>
-                  <TH>Note</TH>
+                  <TH>Item</TH>
+                  <TH align="right">Quantity to date</TH>
+                  <TH align="right">This period</TH>
+                  <TH align="right">Value</TH>
                 </TR>
               </THead>
               <TBody>
-                {sortedLines.map((line) => (
-                  <EstimateLineRow
+                {filteredLines.map((line, i) => (
+                  <ClaimLine
                     key={line.id}
                     line={line}
+                    rowIndex={i}
                     isDraft={isDraft}
                     canWrite={canWrite}
                     unitPrice={unitPriceByItem.get(line.itemId) ?? null}
                     proposedClaim={proposedByItem.get(line.itemId)}
+                    expanded={expandedId === line.id}
+                    onToggleExpand={() => setExpandedId((cur) => (cur === line.id ? null : line.id))}
                     onChanged={() => void reload()}
                   />
                 ))}
               </TBody>
-              <tfoot>
-                <tr>
-                  <td colSpan={10} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-xs text-nc-text-muted">
-                    Totals — only the $ columns are summed (mixed units/percent across Items).
-                  </td>
-                  <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{totalValueVariance === null ? '—' : fmtMoney(totalValueVariance)}</td>
-                  <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">{totalPaid === null ? '—' : fmtMoney(totalPaid)}</td>
-                  <td className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3" colSpan={2} />
-                </tr>
-              </tfoot>
             </Table>
+          )}
+
+          {otherLines.length > 0 && (
+            <div className="mt-6">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Lump Sum & Provisional Sum</h2>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Item</TH>
+                    <TH align="right">This period</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {otherLines.map((line) => (
+                    <OtherLine key={line.id} line={line} isDraft={isDraft} canWrite={canWrite} onChanged={() => void reload()} />
+                  ))}
+                </TBody>
+              </Table>
+            </div>
           )}
 
           {canWrite && itemsNotYetAdded.length > 0 && (
@@ -576,7 +594,7 @@ export function ProgressEstimateScreen() {
                 </label>
                 {addItemId && (
                   <label className="text-xs text-nc-text-muted">
-                    {fieldLabel(claimFieldForKind(items.find((i) => i.id === addItemId)?.itemKind ?? 'unit_price'))}
+                    This period
                     <Input className="mt-1" inputMode="decimal" value={addItemValue} onChange={(e) => setAddItemValue(e.target.value)} />
                   </label>
                 )}
@@ -586,6 +604,16 @@ export function ProgressEstimateScreen() {
               </div>
             </div>
           )}
+
+          <div className="mt-8 grid grid-cols-4 gap-4">
+            <StatCard label="Gross claim" value={fmtMoney(summary?.grossClaim ?? null)} />
+            <StatCard label={`Holdback${summary?.holdbackPercent !== null && summary?.holdbackPercent !== undefined ? ` (${summary.holdbackPercent}%)` : ''}`} value={fmtMoney(summary?.holdbackAmount ?? null)} />
+            <StatCard label={`GST${summary?.gstPercent !== null && summary?.gstPercent !== undefined ? ` (${summary.gstPercent}%)` : ''}`} value={fmtMoney(summary?.gstAmount ?? null)} />
+            <StatCard label="Amount to invoice" value={fmtMoney(summary?.totalInvoiced ?? null)} />
+          </div>
+          <div className="mt-4">
+            <StatCard label="Holdback retained to date" value={fmtMoney(retainedToDate)} sub="Earned, and withheld from every progress payment so far — money Keywest has not yet been paid." />
+          </div>
         </>
       )}
     </div>

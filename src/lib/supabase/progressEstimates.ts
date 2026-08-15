@@ -397,6 +397,7 @@ export async function updateProgressEstimateItemDispute(id: string, input: { dis
 export interface ProgressEstimateSummary {
   progressEstimateId: string
   contractId: string
+  periodEnd: string
   grossClaim: number | null
   holdbackPercent: number | null
   holdbackAmount: number | null
@@ -411,6 +412,7 @@ export interface ProgressEstimateSummary {
 interface RawProgressEstimateSummaryRow {
   progress_estimate_id: string
   contract_id: string
+  period_end: string
   gross_claim: string | null
   holdback_percent: string | null
   holdback_amount: string | null
@@ -434,6 +436,7 @@ export async function fetchProgressEstimateSummaries(contractId: string): Promis
     return {
       progressEstimateId: r.progress_estimate_id,
       contractId: r.contract_id,
+      periodEnd: r.period_end,
       grossClaim: num(r.gross_claim),
       holdbackPercent: num(r.holdback_percent),
       holdbackAmount: num(r.holdback_amount),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { claimFieldForKind, percentOfApproximate, projectedValueVariance, proposeClaimedFromRecords, quantityToDate, variance } from './progressEstimates'
+import { claimFieldForKind, percentOfApproximate, projectedValueVariance, proposeClaimedFromRecords, quantityToDate, tenderedExtendedAmount, variance } from './progressEstimates'
 
 describe('claimFieldForKind', () => {
   it('is quantity for unit_price', () => {
@@ -138,5 +138,15 @@ describe('projectedValueVariance', () => {
 
   it('is null when unit price is unknown', () => {
     expect(projectedValueVariance(150, 120, null)).toBeNull()
+  })
+})
+
+describe('tenderedExtendedAmount', () => {
+  it('is approximate quantity times unit price', () => {
+    expect(tenderedExtendedAmount(120, 100)).toBe(12000)
+  })
+
+  it('is null when unit price is unknown, never $0', () => {
+    expect(tenderedExtendedAmount(120, null)).toBeNull()
   })
 })
