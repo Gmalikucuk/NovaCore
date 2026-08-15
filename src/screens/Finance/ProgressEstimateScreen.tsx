@@ -113,7 +113,17 @@ function EstimateLineRow({
     const value = parseNum(claimedDraft)
     if (value === claimedValue) return
     try {
-      await updateProgressEstimateItemClaim(line.id, { [field === 'quantity' ? 'claimedQuantity' : field === 'percent' ? 'claimedPercent' : 'claimedValue']: value })
+      if (field === 'quantity') {
+        // claimed_value isn't a separate input for unit_price lines — it's
+        // this quantity priced at the Item's current Unit Price, the same
+        // pricing proposeClaimedFromRecords already does for the proposal.
+        // Without this, gross_claim (§3) would never see a typed-or-
+        // accepted quantity claim, only the (never-populated) auto-fill
+        // path 0041 originally wrote.
+        await updateProgressEstimateItemClaim(line.id, { claimedQuantity: value, claimedValue: value === null || unitPrice === null ? null : value * unitPrice })
+      } else {
+        await updateProgressEstimateItemClaim(line.id, { [field === 'percent' ? 'claimedPercent' : 'claimedValue']: value })
+      }
       onChanged()
     } catch (err) {
       setSaveError(errorMessage(err))
