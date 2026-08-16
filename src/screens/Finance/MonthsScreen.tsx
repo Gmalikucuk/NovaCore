@@ -6,7 +6,7 @@ import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
 import { fetchContractMonths, fetchItemMonths, type ContractMonth, type ItemMonth } from '../../lib/supabase/monthlyPeriods'
 import { fetchLastConfirmedAt } from '../../lib/supabase/quantityRecords'
 import { formatMonthLabel, monthKeyFromDate, monthKeyToPeriod } from '../../lib/calculations/overview'
-import { costTrackingVisible, gateOnCostTracking } from '../../lib/calculations/margin'
+import { costTrackingVisible } from '../../lib/calculations/margin'
 import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { rate } from '../../lib/format'
@@ -84,6 +84,12 @@ export function MonthsScreen() {
   const unitPriceItems = useMemo(() => items.filter((i) => i.itemKind === 'unit_price'), [items])
   const hasNoRatesAtAll = contract.viewRates && unitPriceItems.length > 0 && !unitPriceItems.some((i) => priceByItem.get(i.id)?.unitPrice != null)
 
+  // Whether Est. margin has anywhere to be shown at all — same rule Rates
+  // now follows: a column that's em-dash on every row because cost
+  // tracking is off announces an absence rather than showing one, so it's
+  // dropped entirely (header and cells) rather than gated per-cell.
+  const costVisible = costTrackingVisible({ costTrackingEnabled: contract.costTrackingEnabled, setCost: contract.setCost })
+
   const financeMonths = useMemo(() => {
     const keys = new Set(itemMonths.map((m) => m.periodMonth))
     const currentPeriod = monthKeyToPeriod(nowMonthKey)
@@ -98,17 +104,14 @@ export function MonthsScreen() {
           period,
           monthKey: { year: y, month: m },
           isCurrent: period === currentPeriod,
+          // Value stays real regardless of cost-tracking visibility — it's
+          // price-derived, not cost-derived. Margin is raw here; visibility
+          // is decided once, at the column level, by costVisible above.
           value: contractMonth?.valueInPeriod ?? null,
-          // Suppressed until cost tracking is deliberately on for this
-          // contract (0042) — Value stays real regardless, it's price-
-          // derived, not cost-derived.
-          margin: gateOnCostTracking(
-            contractMonth?.marginInPeriod ?? null,
-            costTrackingVisible({ costTrackingEnabled: contract.costTrackingEnabled, setCost: contract.setCost }),
-          ),
+          margin: contractMonth?.marginInPeriod ?? null,
         }
       })
-  }, [itemMonths, contractMonths, nowMonthKey, contract.costTrackingEnabled, contract.setCost])
+  }, [itemMonths, contractMonths, nowMonthKey])
 
   const maxMonthValue = useMemo(() => financeMonths.reduce((max, fm) => Math.max(max, fm.value ?? 0), 0), [financeMonths])
 
@@ -119,7 +122,7 @@ export function MonthsScreen() {
         Value of Work is recorded quantity × tendered Unit Price — the Contractor's own measure, not a Ministry-approved progress estimate.
       </p>
 
-      <SandboxBanner contract={contract} />
+      <SandboxBanner contract={contract} variant="quiet" />
 
       {status === 'loading' && (
         <div className="flex items-center gap-2 py-8 text-nc-text-muted">
@@ -143,6 +146,19 @@ export function MonthsScreen() {
               <p className="text-xs text-nc-text-muted">{lastConfirmedAt ? <>Confirmed records as of {formatConfirmedAt(lastConfirmedAt)}</> : 'No confirmed records yet'}</p>
             </div>
             <div className="flex flex-col divide-y divide-nc-border rounded-lg border border-nc-border bg-white shadow-sm">
+              {/* Column heads stated once here rather than repeated on
+                  every row (was "Value"/"Est. margin" inside each of
+                  twelve-odd rows) — same width as the cells below them
+                  (w-28) so the numbers line up under their own label. */}
+              {contract.viewRates && (
+                <div className="flex items-center justify-between gap-4 px-4 py-2">
+                  <span aria-hidden="true" />
+                  <div className="flex gap-6">
+                    <div className="text-label w-28 text-right text-nc-text-muted">Value</div>
+                    {costVisible && <div className="text-label w-28 text-right text-nc-text-muted">Est. margin</div>}
+                  </div>
+                </div>
+              )}
               {financeMonths.map((fm) => (
                 <button
                   key={fm.period}
@@ -158,15 +174,15 @@ export function MonthsScreen() {
                   </div>
                   {contract.viewRates && (
                     <div className="flex gap-6">
-                      <div className="text-right">
-                        <div className="text-xs text-nc-text-muted">Value</div>
+                      <div className="w-28 text-right">
                         <div className="nc-numeric text-sm font-semibold text-nc-text">{rate(fm.value)}</div>
                         <ValueBar value={fm.value} maxValue={maxMonthValue} />
                       </div>
-                      <div className="text-right">
-                        <div className="text-xs text-nc-text-muted">Est. margin</div>
-                        <div className={`nc-numeric text-sm font-semibold ${fm.margin !== null && fm.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}>{rate(fm.margin)}</div>
-                      </div>
+                      {costVisible && (
+                        <div className="w-28 text-right">
+                          <div className={`nc-numeric text-sm font-semibold ${fm.margin !== null && fm.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}>{rate(fm.margin)}</div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </button>

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
-import { IconAlertTriangle, IconArrowLeft, IconMinus, IconTrendingDown, IconTrendingUp } from '@tabler/icons-react'
+import { IconArrowLeft, IconMinus, IconTrendingDown, IconTrendingUp } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
@@ -8,11 +8,13 @@ import { fetchContractMonths, fetchItemMonths, fetchItemProgressRate, type Contr
 import { fetchLastConfirmedAt } from '../../lib/supabase/quantityRecords'
 import { formatMonthLabel, monthDirection, monthKeyFromDate, monthKeyToPeriod, previousMonth, type Direction, type MonthKey } from '../../lib/calculations/overview'
 import { costTrackingVisible, estimatedCost, gateOnCostTracking, margin as computeMargin, sumOrNull } from '../../lib/calculations/margin'
+import { resolveFinanceMonthColumns, type FinanceMonthColumnVisibility } from '../../lib/calculations/financeMonthColumns'
+import { fetchViewPreferences, saveViewPreferences } from '../../lib/supabase/viewPreferences'
 import { formatConfirmedAt } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportFinanceWorkbook, type FinanceExportRow } from '../../lib/export/financeExport'
 import { rate, quantity as fmtQuantity } from '../../lib/format'
-import { Button, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+import { Button, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Select, Spinner, StatCard, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
 
 function DirectionBadge({ direction, sameIsGood }: { direction: Direction; sameIsGood?: boolean }) {
   if (direction === 'flat') return <IconMinus size={14} stroke={2} className="inline text-nc-text-muted" />
@@ -25,8 +27,8 @@ function DirectionBadge({ direction, sameIsGood }: { direction: Direction; sameI
 function CoverageNote({ coverage }: { coverage: { count: number; total: number } }) {
   if (coverage.total === 0 || coverage.count === coverage.total) return null
   return (
-    <span className="ml-1.5 block whitespace-nowrap text-xs font-normal text-nc-text-muted">
-      covers {coverage.count} of {coverage.total}
+    <span className="mt-1 block text-xs font-normal text-nc-text-muted">
+      Covers {coverage.count} of {coverage.total} priced Items.
     </span>
   )
 }
@@ -40,12 +42,102 @@ function parsePeriodParam(period: string | undefined): MonthKey {
   return monthKeyFromDate(new Date())
 }
 
+const PREFS_SCOPE = 'finance_month_detail'
+type MonthLineFilter = 'all' | 'this_period' | 'not_started'
+const FILTER_LABEL: Record<MonthLineFilter, string> = { all: 'All items', this_period: 'This period', not_started: 'Not started' }
+function sanitizeFilter(raw: unknown): MonthLineFilter {
+  return raw === 'this_period' || raw === 'not_started' ? raw : 'all'
+}
+
+type ColumnKey = keyof FinanceMonthColumnVisibility
+const COLUMN_LABEL: Record<ColumnKey, string> = {
+  quantityInPeriod: 'Quantity this period',
+  valueToDate: 'Value to date',
+  quantityToDate: 'Quantity to date',
+  costInPeriod: 'Est. cost this period',
+  marginInPeriod: 'Est. margin this period',
+  costToDate: 'Est. cost to date',
+  marginToDate: 'Est. margin to date',
+}
+
+function ColumnsControl({ columns, costVisible, onToggle }: { columns: FinanceMonthColumnVisibility; costVisible: boolean; onToggle: (key: ColumnKey) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [open])
+
+  const keys: ColumnKey[] = costVisible
+    ? ['quantityInPeriod', 'valueToDate', 'quantityToDate', 'costInPeriod', 'marginInPeriod', 'costToDate', 'marginToDate']
+    : ['quantityInPeriod', 'valueToDate', 'quantityToDate']
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button type="button" variant="secondary" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="true">
+        Columns
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-nc-border bg-white p-2 shadow-lg">
+          <p className="px-2 pb-1.5 pt-1 text-xs font-semibold uppercase tracking-wide text-nc-text-muted">Columns</p>
+          {keys.map((key) => (
+            <label key={key} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-nc-text hover:bg-nc-secondary">
+              <input type="checkbox" checked={columns[key]} onChange={() => onToggle(key)} className="h-4 w-4 rounded border-nc-border" />
+              {COLUMN_LABEL[key]}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
- * One month's Item detail — this period, previous period, to date,
- * remaining, drill-down, export, the last-confirmed indicator. This is the
- * screen a row on the Finance month list opens to; the calculations and the
- * export were already correct when this lived inline on the Finance tab
- * (82f50bc), so this is a relocation, not a rewrite.
+ * Item # and Description merged into one identity line — description is
+ * what gets read, the item number beneath it is the drill-down (the same
+ * ?itemId=&period= deep link Tracker already uses to reach Daily Entry),
+ * kept as a link rather than folded into plain text since it's still an
+ * affordance, not just a label. max-w constrains the truncating div's own
+ * content width rather than the TD's, so an unusually long description
+ * can't feed back into the table's column-width math the way an
+ * unconstrained cell would.
+ */
+function ItemIdentity({ item, onOpenPeriod, periodLabel }: { item: Item; onOpenPeriod: () => void; periodLabel: string }) {
+  return (
+    <div>
+      <div className="max-w-[260px] truncate text-sm text-nc-text" title={item.description}>
+        {item.description}
+      </div>
+      <div className="mt-0.5 text-xs">
+        <button
+          type="button"
+          className="text-nc-info-text underline decoration-dotted hover:decoration-solid"
+          onClick={onOpenPeriod}
+          title={`View ${periodLabel}'s confirmed records for ${item.itemNumber}`}
+        >
+          {item.itemNumber}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One month's Item detail — this period, to date, drill-down, export, the
+ * last-confirmed indicator. This is the screen a row on the Finance month
+ * list opens to; the calculations and the export were already correct
+ * when this lived inline on the Finance tab (82f50bc), so this remains a
+ * relocation at heart — this pass brings its own layout up to the pattern
+ * Rates and the progress claim screen already established: one identity
+ * column, the unit living once beside its own quantity, a small proposed
+ * default column set with the rest behind a Columns control, filters for
+ * an otherwise-em-dash row, and totals as cards below the table rather
+ * than a footnoted footer row.
  */
 export function FinanceMonthScreen() {
   const contract = useOutletContext<MyContract>()
@@ -57,6 +149,7 @@ export function FinanceMonthScreen() {
   const previousSelectedMonth = useMemo(() => previousMonth(selectedMonth), [selectedMonth])
   const previousSelectedPeriod = monthKeyToPeriod(previousSelectedMonth)
   const nowMonthKey = useMemo(() => monthKeyFromDate(new Date()), [])
+  const selectedMonthLabel = formatMonthLabel(selectedMonth)
 
   const [items, setItems] = useState<Item[]>([])
   const [prices, setPrices] = useState<ItemPrice[]>([])
@@ -70,12 +163,62 @@ export function FinanceMonthScreen() {
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
-  // Value — this period/to date — is the spine everyone reads; cost and
-  // margin are Keywest's own bid estimate, a second opinion behind a click,
-  // not the first thing on screen. Off by default: the table fits the
-  // desktop viewport without horizontal scroll this way (14 columns did
-  // not).
-  const [showCostMargin, setShowCostMargin] = useState(false)
+  const costVisible = costTrackingVisible(contract)
+
+  // Columns and filter, both persisted per seat under one scope (same
+  // delta-merge pattern Rates uses for its own column preferences) —
+  // resolved fresh against costVisible on every load and every rights
+  // change, never trusted from a stale saved blob.
+  const [columns, setColumns] = useState<FinanceMonthColumnVisibility>(resolveFinanceMonthColumns(null, costVisible))
+  const [filter, setFilter] = useState<MonthLineFilter>('all')
+  const prefsLoaded = useRef(false)
+  const rawPrefs = useRef<Record<string, unknown> | null>(null)
+  const lastPersisted = useRef<string>('{}')
+
+  useEffect(() => {
+    fetchViewPreferences(PREFS_SCOPE)
+      .then((raw) => {
+        rawPrefs.current = raw
+        lastPersisted.current = JSON.stringify(raw ?? {})
+        setColumns(resolveFinanceMonthColumns(raw, costVisible))
+        setFilter(sanitizeFilter(raw?.lineFilter))
+      })
+      .catch(() => {
+        rawPrefs.current = null
+        setColumns(resolveFinanceMonthColumns(null, costVisible))
+      })
+      .finally(() => {
+        prefsLoaded.current = true
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contract.id])
+
+  useEffect(() => {
+    if (!prefsLoaded.current) return
+    setColumns(resolveFinanceMonthColumns(rawPrefs.current, costVisible))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [costVisible])
+
+  function persist(nextRaw: Record<string, unknown>) {
+    rawPrefs.current = nextRaw
+    const serialized = JSON.stringify(nextRaw)
+    if (prefsLoaded.current && serialized !== lastPersisted.current) {
+      void saveViewPreferences(PREFS_SCOPE, nextRaw).then(() => {
+        lastPersisted.current = serialized
+      })
+    }
+  }
+
+  function toggleColumn(key: ColumnKey) {
+    const nextRaw = { ...(rawPrefs.current ?? {}), [key]: !columns[key] }
+    setColumns(resolveFinanceMonthColumns(nextRaw, costVisible))
+    persist(nextRaw)
+  }
+
+  function changeFilter(next: MonthLineFilter) {
+    setFilter(next)
+    persist({ ...(rawPrefs.current ?? {}), lineFilter: next })
+  }
 
   useEffect(() => {
     setStatus('loading')
@@ -113,12 +256,8 @@ export function FinanceMonthScreen() {
   // level up from the per-item table.
   const valueThisMonth = currentContractMonth?.valueInPeriod ?? null
   const valueLastMonth = previousContractMonth?.valueInPeriod ?? null
-  // Suppressed until cost tracking is deliberately on for this contract
-  // (0042) — Value stays real regardless, it's price-derived, not
-  // cost-derived.
-  const marginThisMonthVisible = costTrackingVisible(contract)
-  const marginThisMonth = gateOnCostTracking(currentContractMonth?.marginInPeriod ?? null, marginThisMonthVisible)
-  const marginLastMonth = gateOnCostTracking(previousContractMonth?.marginInPeriod ?? null, marginThisMonthVisible)
+  const marginThisMonth = gateOnCostTracking(currentContractMonth?.marginInPeriod ?? null, costVisible)
+  const marginLastMonth = gateOnCostTracking(previousContractMonth?.marginInPeriod ?? null, costVisible)
 
   const availableMonths = useMemo(() => {
     const keys = new Set(itemMonths.map((m) => m.periodMonth))
@@ -127,6 +266,11 @@ export function FinanceMonthScreen() {
   }, [itemMonths, nowMonthKey])
 
   const itemMonthByItem = useMemo(() => new Map(itemMonths.filter((m) => m.periodMonth === selectedPeriod).map((m) => [m.itemId, m])), [itemMonths, selectedPeriod])
+  // Previous-period figures aren't shown in the table anymore (the top
+  // Money band already compares this month to last, at the contract
+  // level) — kept per-row purely because the Excel export still has its
+  // own "previous period" columns, unaffected by what the on-screen table
+  // decides to show.
   const previousItemMonthByItem = useMemo(() => new Map(itemMonths.filter((m) => m.periodMonth === previousSelectedPeriod).map((m) => [m.itemId, m])), [itemMonths, previousSelectedPeriod])
 
   const monthRows = useMemo(
@@ -148,9 +292,7 @@ export function FinanceMonthScreen() {
         // all derive from this one variable — nulled here, at the source,
         // when cost tracking is off for this contract (0042), rather than
         // at each of the derived figures below.
-        const cost = unitPriced
-          ? gateOnCostTracking(price?.costPrice ?? null, costTrackingVisible({ costTrackingEnabled: contract.costTrackingEnabled, setCost: contract.setCost }))
-          : null
+        const cost = unitPriced ? gateOnCostTracking(price?.costPrice ?? null, costTrackingVisible({ costTrackingEnabled: contract.costTrackingEnabled, setCost: contract.setCost })) : null
         const costBasis = unitPriced ? (price?.costBasis ?? null) : null
         const unitPrice = unitPriced ? (price?.unitPrice ?? null) : null
         const quantityToDate = unitPriced ? (progress?.quantityToDate ?? 0) : null
@@ -179,6 +321,9 @@ export function FinanceMonthScreen() {
           valueToDate: unitPrice !== null && quantityToDate !== null ? quantityToDate * unitPrice : null,
           costToDate: unitPriced ? estimatedCost(quantityToDate ?? 0, cost, costBasis) : null,
           marginToDate: unitPriced ? computeMargin(quantityToDate ?? 0, cost, unitPrice, costBasis) : null,
+          // Kept for the export (which still reports remaining/approximate
+          // quantity), even though the table itself no longer shows either
+          // — that pair belongs to Tracker now, which already shows them.
           approximateQuantity: unitPriced ? item.approximateQuantity : null,
           remaining: unitPriced ? item.approximateQuantity - (quantityToDate ?? 0) : null,
           isOverQuantity: unitPriced ? (progress?.isOverQuantity ?? false) : false,
@@ -187,7 +332,54 @@ export function FinanceMonthScreen() {
     [items, itemMonthByItem, previousItemMonthByItem, priceByItem, progressByItem, contract.costTrackingEnabled, contract.setCost],
   )
 
+  // The filter that keeps an all-em-dash row from being the default read:
+  // "this period" is exactly the rows a "what happened this month" reader
+  // wants, "not started" surfaces unit_price Items nothing has ever been
+  // recorded against. Totals below are computed from this filtered set,
+  // not the full table — a total should describe what's actually on
+  // screen, same as the progress claim screen's own filtered total.
+  const filteredRows = useMemo(() => {
+    if (filter === 'this_period') return monthRows.filter((r) => r.quantityInPeriod !== null)
+    if (filter === 'not_started') return monthRows.filter((r) => r.item.itemKind === 'unit_price' && (r.quantityToDate ?? 0) === 0)
+    return monthRows
+  }, [monthRows, filter])
+
   const monthTotals = useMemo(
+    () => ({
+      value: sumOrNull(filteredRows.map((r) => r.valueInPeriod)),
+      cost: sumOrNull(filteredRows.map((r) => r.costInPeriod)),
+      margin: sumOrNull(filteredRows.map((r) => r.marginInPeriod)),
+      toDateValue: sumOrNull(filteredRows.map((r) => r.valueToDate)),
+      toDateCost: sumOrNull(filteredRows.map((r) => r.costToDate)),
+      toDateMargin: sumOrNull(filteredRows.map((r) => r.marginToDate)),
+    }),
+    [filteredRows],
+  )
+
+  // Coverage — same convention as Rates: state it wherever a total is
+  // genuinely partial, say nothing where it's complete. Scoped to the
+  // filtered set, matching the totals they annotate.
+  const filteredUnitPriceRows = useMemo(() => filteredRows.filter((r) => r.item.itemKind === 'unit_price'), [filteredRows])
+  const valueCoverage = useMemo(
+    () => ({ count: filteredUnitPriceRows.filter((r) => priceByItem.get(r.item.id)?.unitPrice != null).length, total: filteredUnitPriceRows.length }),
+    [filteredUnitPriceRows, priceByItem],
+  )
+  const periodActiveRows = useMemo(() => filteredUnitPriceRows.filter((r) => r.quantityInPeriod !== null), [filteredUnitPriceRows])
+  const periodCostCoverage = useMemo(() => ({ count: periodActiveRows.filter((r) => r.costInPeriod !== null).length, total: periodActiveRows.length }), [periodActiveRows])
+  const periodMarginCoverage = useMemo(() => ({ count: periodActiveRows.filter((r) => r.marginInPeriod !== null).length, total: periodActiveRows.length }), [periodActiveRows])
+  const toDateCostCoverage = useMemo(
+    () => ({ count: filteredUnitPriceRows.filter((r) => r.costToDate !== null).length, total: filteredUnitPriceRows.length }),
+    [filteredUnitPriceRows],
+  )
+  const toDateMarginCoverage = useMemo(
+    () => ({ count: filteredUnitPriceRows.filter((r) => r.marginToDate !== null).length, total: filteredUnitPriceRows.length }),
+    [filteredUnitPriceRows],
+  )
+
+  // The export always covers every Item regardless of the on-screen
+  // filter — it's a standalone document someone opens later, not a
+  // snapshot of what happened to be visible when it was generated.
+  const exportTotals = useMemo(
     () => ({
       value: sumOrNull(monthRows.map((r) => r.valueInPeriod)),
       cost: sumOrNull(monthRows.map((r) => r.costInPeriod)),
@@ -199,37 +391,6 @@ export function FinanceMonthScreen() {
       toDateMargin: sumOrNull(monthRows.map((r) => r.marginToDate)),
     }),
     [monthRows],
-  )
-
-  // Coverage — same convention as Rates: state it wherever a total is
-  // genuinely partial, say nothing where it's complete. Value's coverage is
-  // about whether a Unit Price is on file at all (a stable contract-data
-  // fact); cost/margin's is scoped to whichever Items the figure actually
-  // applies to this period (period cost only ever applies to a per_unit
-  // basis, to-date cost applies to every priced Item regardless of basis) —
-  // narrower denominators than "all Items", matching how aggregateFinancials
-  // scopes Rates' own cost coverage.
-  const unitPriceRows = useMemo(() => monthRows.filter((r) => r.item.itemKind === 'unit_price'), [monthRows])
-  const valueCoverage = useMemo(
-    () => ({ count: unitPriceRows.filter((r) => priceByItem.get(r.item.id)?.unitPrice != null).length, total: unitPriceRows.length }),
-    [unitPriceRows, priceByItem],
-  )
-  const periodActiveRows = useMemo(() => unitPriceRows.filter((r) => r.quantityInPeriod !== null), [unitPriceRows])
-  const periodCostCoverage = useMemo(
-    () => ({ count: periodActiveRows.filter((r) => r.costInPeriod !== null).length, total: periodActiveRows.length }),
-    [periodActiveRows],
-  )
-  const periodMarginCoverage = useMemo(
-    () => ({ count: periodActiveRows.filter((r) => r.marginInPeriod !== null).length, total: periodActiveRows.length }),
-    [periodActiveRows],
-  )
-  const toDateCostCoverage = useMemo(
-    () => ({ count: unitPriceRows.filter((r) => r.costToDate !== null).length, total: unitPriceRows.length }),
-    [unitPriceRows],
-  )
-  const toDateMarginCoverage = useMemo(
-    () => ({ count: unitPriceRows.filter((r) => r.marginToDate !== null).length, total: unitPriceRows.length }),
-    [unitPriceRows],
   )
 
   async function handleFinanceExport() {
@@ -259,12 +420,12 @@ export function FinanceMonthScreen() {
         }))
       await exportFinanceWorkbook({
         contract,
-        periodLabel: formatMonthLabel(selectedMonth),
+        periodLabel: selectedMonthLabel,
         previousPeriodLabel: formatMonthLabel(previousSelectedMonth),
         lastConfirmedAt,
         selectedPeriod,
         rows: unitPriceRows,
-        totals: monthTotals,
+        totals: exportTotals,
         appOrigin: window.location.origin,
       })
     } catch (err) {
@@ -277,11 +438,36 @@ export function FinanceMonthScreen() {
   const unitPriceItems = useMemo(() => items.filter((i) => i.itemKind === 'unit_price'), [items])
   const hasNoRatesAtAll = contract.viewRates && unitPriceItems.length > 0 && !unitPriceItems.some((i) => priceByItem.get(i.id)?.unitPrice != null)
 
+  // Design-target pixel widths — see Rates' own COL_W comment for why these
+  // are ratios, not literal pixels: table-layout: fixed plus percentage
+  // columns (pctW below) is what actually renders, scaling every column
+  // down together the moment the screen's own width cap constrains it.
+  const COL_W = { quantityInPeriod: 170, valueInPeriod: 130, costInPeriod: 130, marginInPeriod: 130, quantityToDate: 170, valueToDate: 130, costToDate: 130, marginToDate: 130 }
+  const IDENTITY_MIN_W = 220
+  const IDENTITY_MAX_W = 300
+  const TABLE_TARGET_W = 1360
+  const fixedColumnsW =
+    COL_W.valueInPeriod +
+    (columns.quantityInPeriod ? COL_W.quantityInPeriod : 0) +
+    (columns.costInPeriod ? COL_W.costInPeriod : 0) +
+    (columns.marginInPeriod ? COL_W.marginInPeriod : 0) +
+    (columns.quantityToDate ? COL_W.quantityToDate : 0) +
+    (columns.valueToDate ? COL_W.valueToDate : 0) +
+    (columns.costToDate ? COL_W.costToDate : 0) +
+    (columns.marginToDate ? COL_W.marginToDate : 0)
+  const identityW = Math.min(IDENTITY_MAX_W, Math.max(IDENTITY_MIN_W, TABLE_TARGET_W - fixedColumnsW))
+  const tableWidthPx = fixedColumnsW + identityW
+  const pctW = (px: number) => `${Math.round((px / tableWidthPx) * 10000) / 100}%`
+
   return (
-    <div>
+    // tableWidthPx caps the whole screen — title through totals cards —
+    // same one-shared-measure rule Rates now follows, rather than the
+    // table alone measuring differently from the banners and cards around
+    // it.
+    <div style={{ maxWidth: tableWidthPx, marginLeft: 'auto', marginRight: 'auto' }}>
       <PageHeader
         title="Finance"
-        subtitle={`${contract.name} · ${formatMonthLabel(selectedMonth)}`}
+        subtitle={`${contract.name} · ${selectedMonthLabel}`}
         actions={
           <Button type="button" variant="ghost" onClick={() => navigate('/finance')}>
             <IconArrowLeft size={16} stroke={2} className="mr-1 inline" />
@@ -290,7 +476,7 @@ export function FinanceMonthScreen() {
         }
       />
 
-      <SandboxBanner contract={contract} />
+      <SandboxBanner contract={contract} variant="quiet" />
 
       {status === 'loading' && (
         <div className="flex items-center gap-2 py-8 text-nc-text-muted">
@@ -313,7 +499,7 @@ export function FinanceMonthScreen() {
               moment the records behind these figures were confirmed. */}
           <section className="mb-6">
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money — {formatMonthLabel(selectedMonth)}</h2>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money — {selectedMonthLabel}</h2>
               <p className="text-xs text-nc-text-muted">{lastConfirmedAt ? <>Confirmed records as of {formatConfirmedAt(lastConfirmedAt)}</> : 'No confirmed records yet'}</p>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -335,16 +521,12 @@ export function FinanceMonthScreen() {
                     />
                     <StatCard
                       label="Est. margin"
-                      value={
-                        marginThisMonth === null ? (
-                          '—'
-                        ) : (
-                          <span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{rate(marginThisMonth)}</span>
-                        )
-                      }
+                      value={marginThisMonth === null ? '—' : <span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{rate(marginThisMonth)}</span>}
                       sub={
                         marginThisMonth === null ? (
-                          contract.costTrackingEnabled ? "Cost isn't fully priced for this month's Items" : undefined
+                          contract.costTrackingEnabled ? (
+                            "Cost isn't fully priced for this month's Items"
+                          ) : undefined
                         ) : marginLastMonth !== null ? (
                           <>
                             <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {rate(marginLastMonth)} the prior month
@@ -357,8 +539,8 @@ export function FinanceMonthScreen() {
                   </>
                 ) : (
                   <>
-                    <StatCard label="Value of Work" value="—" sub={`No records yet for ${formatMonthLabel(selectedMonth)}`} />
-                    <StatCard label="Est. margin" value="—" sub={`No records yet for ${formatMonthLabel(selectedMonth)}`} />
+                    <StatCard label="Value of Work" value="—" sub={`No records yet for ${selectedMonthLabel}`} />
+                    <StatCard label="Est. margin" value="—" sub={`No records yet for ${selectedMonthLabel}`} />
                   </>
                 )
               ) : (
@@ -371,21 +553,14 @@ export function FinanceMonthScreen() {
           </section>
 
           {/* Item detail. The billing-industry vocabulary a finance manager
-              already thinks in: this period, previous period, to date,
-              remaining. No % complete, no weighting — Remaining is a plain
-              Approximate Quantity minus quantity to date. Not reachable
+              already thinks in: this period, to date. Not reachable
               single-column, so hidden entirely below sm: rather than
               squeezed. */}
           <section className="hidden sm:block">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-4">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Item detail</h2>
               <div className="flex items-center gap-3">
-                <Select
-                  className="w-auto"
-                  value={selectedPeriod}
-                  onChange={(e) => navigate(`/finance/${e.target.value}`)}
-                  aria-label="Month"
-                >
+                <Select className="w-auto" value={selectedPeriod} onChange={(e) => navigate(`/finance/${e.target.value}`)} aria-label="Month">
                   {availableMonths.map((period) => {
                     const [y, m] = period.split('-').map(Number)
                     return (
@@ -395,20 +570,19 @@ export function FinanceMonthScreen() {
                     )
                   })}
                 </Select>
-                {/* Nothing behind this toggle worth revealing until cost
-                    tracking is deliberately on for this contract (0042) —
-                    every cell it would show is already null at this point,
-                    so the toggle itself goes quiet rather than opening onto
-                    a wall of em-dashes. */}
-                {contract.viewRates && contract.costTrackingEnabled && (
-                  <Button type="button" variant="secondary" onClick={() => setShowCostMargin((v) => !v)} aria-pressed={showCostMargin}>
-                    {showCostMargin ? 'Hide cost & margin' : 'Show cost & margin'}
-                  </Button>
-                )}
+                {contract.viewRates && <ColumnsControl columns={columns} costVisible={costVisible} onToggle={toggleColumn} />}
                 <Button type="button" variant="secondary" disabled={exporting} onClick={() => void handleFinanceExport()}>
                   {exporting ? 'Exporting…' : 'Export to Excel'}
                 </Button>
               </div>
+            </div>
+
+            <div className="mb-4 flex gap-2" role="group" aria-label="Item filter">
+              {(['all', 'this_period', 'not_started'] as MonthLineFilter[]).map((f) => (
+                <Button key={f} type="button" variant={filter === f ? 'primary' : 'secondary'} onClick={() => changeFilter(f)}>
+                  {FILTER_LABEL[f]}
+                </Button>
+              ))}
             </div>
 
             {exportError && (
@@ -417,198 +591,151 @@ export function FinanceMonthScreen() {
               </NotificationBanner>
             )}
 
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Item #</TH>
-                  <TH>Description</TH>
-                  <TH align="right">Qty — {formatMonthLabel(selectedMonth)}</TH>
-                  {contract.viewRates && (
-                    <>
-                      <TH align="right">Value — {formatMonthLabel(selectedMonth)}</TH>
-                      {showCostMargin && (
+            {filteredRows.length === 0 ? (
+              <EmptyState title="No items match this filter." description="Try a different filter above." />
+            ) : (
+              <div style={{ width: '100%' }}>
+                <Table style={{ tableLayout: 'fixed', width: '100%' }}>
+                  <THead>
+                    <TR>
+                      <TH style={{ width: pctW(identityW) }}>Item</TH>
+                      {columns.quantityInPeriod && (
+                        <TH align="right" style={{ width: pctW(COL_W.quantityInPeriod) }}>
+                          Qty — {selectedMonthLabel}
+                        </TH>
+                      )}
+                      {contract.viewRates && (
                         <>
-                          <TH align="right">Est. cost — {formatMonthLabel(selectedMonth)}</TH>
-                          <TH align="right">Est. margin — {formatMonthLabel(selectedMonth)}</TH>
+                          <TH align="right" style={{ width: pctW(COL_W.valueInPeriod) }}>
+                            Value — {selectedMonthLabel}
+                          </TH>
+                          {columns.costInPeriod && (
+                            <TH align="right" style={{ width: pctW(COL_W.costInPeriod) }}>
+                              Est. cost — {selectedMonthLabel}
+                            </TH>
+                          )}
+                          {columns.marginInPeriod && (
+                            <TH align="right" style={{ width: pctW(COL_W.marginInPeriod) }}>
+                              Est. margin — {selectedMonthLabel}
+                            </TH>
+                          )}
                         </>
                       )}
-                    </>
-                  )}
-                  <TH align="right">Qty to date</TH>
-                  {contract.viewRates && (
-                    <>
-                      <TH align="right">Value to date</TH>
-                      {showCostMargin && (
-                        <>
-                          <TH align="right">Est. cost to date</TH>
-                          <TH align="right">Est. margin to date</TH>
-                        </>
+                      {columns.quantityToDate && (
+                        <TH align="right" style={{ width: pctW(COL_W.quantityToDate) }}>
+                          Qty to date
+                        </TH>
                       )}
-                    </>
-                  )}
-                  <TH align="right">Approx. Qty</TH>
-                  <TH align="right">Remaining</TH>
-                </TR>
-              </THead>
-              <TBody>
-                {monthRows.map((r) => (
-                  <TR key={r.item.id}>
-                    {/* Item # is the drill-down: the same ?itemId=&period=
-                        deep link the Tracker screen already uses to reach
-                        Daily Entry, not a new drill-down framework — the
-                        shortest honest path from a figure on this row to
-                        the confirmed records behind it. */}
-                    <TD className="nc-numeric">
-                      <button
-                        type="button"
-                        className="text-nc-info-text underline decoration-dotted hover:decoration-solid"
-                        onClick={() => navigate(`/daily-entry?itemId=${r.item.id}&period=${selectedPeriod}`)}
-                        title={`View ${formatMonthLabel(selectedMonth)}'s confirmed records for ${r.item.itemNumber}`}
-                      >
-                        {r.item.itemNumber}
-                      </button>
-                    </TD>
-                    {/* Fixed width, not left to the table's auto-layout: unconstrained, this
-                        column measured 506px wide in an earlier column set for the exact same
-                        text — auto-layout balances its width against whichever numeric columns
-                        happen to be visible. `title` is mouse-hover-only and shows nothing on a
-                        touch screen — fine here since this table is desktop-only, but don't copy
-                        the pattern onto a touch-reachable screen without a tap-to-reveal alternative. */}
-                    <TD prose>
-                      {/* The truncate/max-width lives on this inner div, not
-                          the TD itself — a <td>'s own max-width is not
-                          reliably respected by an auto-layout table (this
-                          table isn't table-layout: fixed), but a fixed-width
-                          block INSIDE it is, since the browser only needs to
-                          make room for that block's width, not the text's
-                          natural content width. */}
-                      <div className="max-w-[220px] truncate" title={r.item.description}>
-                        {r.item.description}
-                      </div>
-                    </TD>
-                    <TD align="right" className="nc-numeric">
-                      {fmtQuantity(r.quantityInPeriod, r.item.unit)}
-                    </TD>
-                    {contract.viewRates && (
-                      <>
-                        <TD align="right" className="nc-numeric">
-                          {rate(r.valueInPeriod)}
+                      {contract.viewRates && columns.valueToDate && (
+                        <TH align="right" style={{ width: pctW(COL_W.valueToDate) }}>
+                          Value to date
+                        </TH>
+                      )}
+                      {contract.viewRates && columns.costToDate && (
+                        <TH align="right" style={{ width: pctW(COL_W.costToDate) }}>
+                          Est. cost to date
+                        </TH>
+                      )}
+                      {contract.viewRates && columns.marginToDate && (
+                        <TH align="right" style={{ width: pctW(COL_W.marginToDate) }}>
+                          Est. margin to date
+                        </TH>
+                      )}
+                    </TR>
+                  </THead>
+                  <TBody>
+                    {filteredRows.map((r) => (
+                      <TR key={r.item.id}>
+                        <TD className="align-top">
+                          <ItemIdentity
+                            item={r.item}
+                            periodLabel={selectedMonthLabel}
+                            onOpenPeriod={() => navigate(`/daily-entry?itemId=${r.item.id}&period=${selectedPeriod}`)}
+                          />
                         </TD>
-                        {showCostMargin && (
+                        {columns.quantityInPeriod && (
+                          <TD align="right" className="nc-numeric align-top">
+                            {fmtQuantity(r.quantityInPeriod, r.item.unit)}
+                          </TD>
+                        )}
+                        {contract.viewRates && (
                           <>
-                            <TD align="right" className="nc-numeric">
-                              {rate(r.costInPeriod)}
+                            <TD align="right" className="nc-numeric align-top">
+                              {rate(r.valueInPeriod)}
                             </TD>
-                            <TD align="right" className={`nc-numeric ${r.marginInPeriod !== null && r.marginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                              {r.marginInPeriod === null ? '—' : rate(r.marginInPeriod)}
-                            </TD>
+                            {columns.costInPeriod && (
+                              <TD align="right" className="nc-numeric align-top">
+                                {rate(r.costInPeriod)}
+                              </TD>
+                            )}
+                            {columns.marginInPeriod && (
+                              <TD align="right" className={`nc-numeric align-top ${r.marginInPeriod !== null && r.marginInPeriod < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                                {rate(r.marginInPeriod)}
+                              </TD>
+                            )}
                           </>
                         )}
-                      </>
-                    )}
-                    <TD align="right" className="nc-numeric">
-                      <button
-                        type="button"
-                        className="text-nc-info-text underline decoration-dotted hover:decoration-solid"
-                        onClick={() => navigate(`/daily-entry?itemId=${r.item.id}`)}
-                        title={`View ${r.item.itemNumber}'s confirmed records`}
-                      >
-                        {fmtQuantity(r.quantityToDate)}
-                      </button>
-                    </TD>
-                    {contract.viewRates && (
-                      <>
-                        <TD align="right" className="nc-numeric">
-                          {rate(r.valueToDate)}
-                        </TD>
-                        {showCostMargin && (
-                          <>
-                            <TD align="right" className="nc-numeric">
-                              {rate(r.costToDate)}
-                            </TD>
-                            <TD align="right" className={`nc-numeric ${r.marginToDate !== null && r.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
-                              {r.marginToDate === null ? '—' : rate(r.marginToDate)}
-                            </TD>
-                          </>
+                        {columns.quantityToDate && (
+                          <TD align="right" className="nc-numeric align-top">
+                            <button
+                              type="button"
+                              className="text-nc-info-text underline decoration-dotted hover:decoration-solid"
+                              onClick={() => navigate(`/daily-entry?itemId=${r.item.id}`)}
+                              title={`View ${r.item.itemNumber}'s confirmed records`}
+                            >
+                              {fmtQuantity(r.quantityToDate, r.item.unit)}
+                            </button>
+                          </TD>
                         )}
-                      </>
-                    )}
-                    <TD align="right" className="nc-numeric">
-                      {r.approximateQuantity === null ? '—' : fmtQuantity(r.approximateQuantity)}
-                    </TD>
-                    {/* Over quantity: the existing violet "over" tone, but
-                        colour is never the only signal — an icon plus "…
-                        over" reads correctly even in greyscale, same
-                        phrasing OwnerScreen already uses for the same
-                        condition. */}
-                    <TD align="right" className={`nc-numeric ${r.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
-                      {r.remaining === null ? (
-                        '—'
-                      ) : r.isOverQuantity ? (
-                        <span className="inline-flex items-center justify-end gap-1">
-                          <IconAlertTriangle size={13} stroke={1.75} />
-                          {fmtQuantity(Math.abs(r.remaining))} over
-                        </span>
-                      ) : (
-                        fmtQuantity(r.remaining)
-                      )}
-                    </TD>
-                  </TR>
-                ))}
-              </TBody>
-              {contract.viewRates && (
-                <tfoot>
-                  <tr>
-                    <td colSpan={2} className="text-data border-t border-nc-border bg-nc-secondary px-4 py-3 text-xs text-nc-text-muted">
-                      {/* Width-capped for the same reason as the Description column above: an
-                          unconstrained colSpan cell's content width feeds into the auto-layout
-                          algorithm for BOTH columns it spans. */}
-                      <div className="max-w-[200px]">Totals — quantity columns aren't summed (mixed units across Items); the $ columns are.</div>
-                    </td>
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                      {rate(monthTotals.value)}
-                      <CoverageNote coverage={valueCoverage} />
-                    </td>
-                    {showCostMargin && (
-                      <>
-                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                          {rate(monthTotals.cost)}
-                          <CoverageNote coverage={periodCostCoverage} />
-                        </td>
-                        <td
-                          className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.margin !== null && monthTotals.margin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
-                        >
-                          {rate(monthTotals.margin)}
-                          <CoverageNote coverage={periodMarginCoverage} />
-                        </td>
-                      </>
-                    )}
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                      {rate(monthTotals.toDateValue)}
-                      <CoverageNote coverage={valueCoverage} />
-                    </td>
-                    {showCostMargin && (
-                      <>
-                        <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold text-nc-text">
-                          {rate(monthTotals.toDateCost)}
-                          <CoverageNote coverage={toDateCostCoverage} />
-                        </td>
-                        <td
-                          className={`text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right font-semibold ${monthTotals.toDateMargin !== null && monthTotals.toDateMargin < 0 ? 'text-nc-danger-text' : 'text-nc-text'}`}
-                        >
-                          {rate(monthTotals.toDateMargin)}
-                          <CoverageNote coverage={toDateMarginCoverage} />
-                        </td>
-                      </>
-                    )}
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
-                    <td className="text-data nc-numeric border-t border-nc-border bg-nc-secondary px-4 py-3 text-right" />
-                  </tr>
-                </tfoot>
-              )}
-            </Table>
+                        {contract.viewRates && columns.valueToDate && (
+                          <TD align="right" className="nc-numeric align-top">
+                            {rate(r.valueToDate)}
+                          </TD>
+                        )}
+                        {contract.viewRates && columns.costToDate && (
+                          <TD align="right" className="nc-numeric align-top">
+                            {rate(r.costToDate)}
+                          </TD>
+                        )}
+                        {contract.viewRates && columns.marginToDate && (
+                          <TD align="right" className={`nc-numeric align-top ${r.marginToDate !== null && r.marginToDate < 0 ? 'font-semibold text-nc-danger-text' : ''}`}>
+                            {rate(r.marginToDate)}
+                          </TD>
+                        )}
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Totals as cards, not a footer row — the answer, not a
+                footnote (same as Rates). Quantity has no card: mixed units
+                across Items make a summed quantity meaningless, so it's
+                left out entirely rather than shown blank with an
+                explanation nobody expects to need. */}
+            {contract.viewRates && filteredRows.length > 0 && (
+              <div className={`mt-6 grid gap-4 ${columns.costInPeriod || columns.marginInPeriod || columns.costToDate || columns.marginToDate ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                <StatCard label={`Value — ${selectedMonthLabel}`} value={rate(monthTotals.value)} sub={<CoverageNote coverage={valueCoverage} />} />
+                {columns.costInPeriod && <StatCard label={`Est. cost — ${selectedMonthLabel}`} value={rate(monthTotals.cost)} sub={<CoverageNote coverage={periodCostCoverage} />} />}
+                {columns.marginInPeriod && (
+                  <StatCard
+                    label={`Est. margin — ${selectedMonthLabel}`}
+                    value={<span className={monthTotals.margin !== null && monthTotals.margin < 0 ? 'text-nc-danger-text' : ''}>{rate(monthTotals.margin)}</span>}
+                    sub={<CoverageNote coverage={periodMarginCoverage} />}
+                  />
+                )}
+                {columns.valueToDate && <StatCard label="Value to date" value={rate(monthTotals.toDateValue)} sub={<CoverageNote coverage={valueCoverage} />} />}
+                {columns.costToDate && <StatCard label="Est. cost to date" value={rate(monthTotals.toDateCost)} sub={<CoverageNote coverage={toDateCostCoverage} />} />}
+                {columns.marginToDate && (
+                  <StatCard
+                    label="Est. margin to date"
+                    value={<span className={monthTotals.toDateMargin !== null && monthTotals.toDateMargin < 0 ? 'text-nc-danger-text' : ''}>{rate(monthTotals.toDateMargin)}</span>}
+                    sub={<CoverageNote coverage={toDateMarginCoverage} />}
+                  />
+                )}
+              </div>
+            )}
           </section>
         </>
       )}
