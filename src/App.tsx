@@ -29,6 +29,9 @@ import { TrackerScreen } from './screens/Tracker/TrackerScreen'
 import { TrackerItemScreen } from './screens/Tracker/TrackerItemScreen'
 import { CreateContractScreen } from './screens/Admin/CreateContractScreen'
 import { SeatMembersScreen } from './screens/Admin/SeatMembersScreen'
+import { EquipmentScreen } from './screens/Equipment/EquipmentScreen'
+import { LabourScreen } from './screens/Labour/LabourScreen'
+import { MaterialsScreen } from './screens/Materials/MaterialsScreen'
 
 /**
  * Narrows the full CurrentContractState (Sidebar's own outlet context, since
@@ -135,6 +138,35 @@ function App() {
                 element={
                   <ErrorBoundary>
                     <SeatMembersScreen />
+                  </ErrorBoundary>
+                }
+              />
+              {/* Cost registers (0048) — company-wide reference data
+                  (equipment, labour, materials), not contract-scoped. Each
+                  screen gates itself on maintain_cost_registers/view_cost_
+                  register_rates; the routes aren't gated a second time here,
+                  same posture as Admin above. */}
+              <Route
+                path="/equipment"
+                element={
+                  <ErrorBoundary>
+                    <EquipmentScreen />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/labour"
+                element={
+                  <ErrorBoundary>
+                    <LabourScreen />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/materials"
+                element={
+                  <ErrorBoundary>
+                    <MaterialsScreen />
                   </ErrorBoundary>
                 }
               />

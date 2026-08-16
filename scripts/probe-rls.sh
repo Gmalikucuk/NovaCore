@@ -2623,6 +2623,150 @@ request PATCH "bids?id=eq.$BID_ID" "$FULL_TOKEN" '{"status":"lost","winning_pric
 ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
 check "full: status+winning_price to 'lost' together succeeds" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
 
+# =============================================================================
+# Cost registers (0048) — equipment/labour_classes/materials open-read,
+# identical shape to owners/standard_items; every rate table gated on
+# maintain_cost_registers OR view_cost_register_rates for select, maintain_
+# cost_registers alone for write. maintain_cost_registers IMPLIES read — a
+# deliberate departure from the bids split (see the migration's own header)
+# — so unlike bid_item_costs, quantities' own writes below use the shared
+# request() helper (return=representation) without needing a return=minimal
+# workaround: a maintain-only seat CAN read back what it just wrote.
+#
+# quantities (field@novacore.test) holds maintain_cost_registers only —
+# none of create_bids/set_bid_cost/view_bid_costs/view_cost_register_rates.
+# readonly (owner@novacore.test) holds view_cost_register_rates only, atop
+# its own unrelated company-wide rights (create_projects/manage_members).
+# full (pm@novacore.test) holds neither — proves a DIFFERENT company-wide
+# right (create_bids) does not leak into this domain.
+# =============================================================================
+echo "=== Cost registers (company-wide rights) ==="
+
+# --- Equipment --------------------------------------------------------------
+request POST "equipment" "$QUANTITIES_TOKEN" '{"equipment_type":"Excavator","year":2019,"make":"Komatsu","model":"PC210"}'
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert equipment" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+EQUIPMENT_ID=$(json_field "$BODY_OUT" 0 id)
+
+request POST "equipment_rates" "$QUANTITIES_TOKEN" "{\"equipment_id\":\"$EQUIPMENT_ID\",\"book_year\":2026,\"blue_book_rate\":145.00,\"internal_rate\":110.00}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert equipment_rates, reads own write back" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request POST "equipment" "$FULL_TOKEN" '{"equipment_type":"Should not land","year":2020}'
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "full (create_bids, no maintain_cost_registers): insert equipment rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+request GET "equipment?id=eq.$EQUIPMENT_ID&select=id" "$FULL_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full (no cost-register right): select equipment (open read)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "equipment_rates?equipment_id=eq.$EQUIPMENT_ID&select=id" "$FULL_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "full (no cost-register right): select equipment_rates empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "equipment_rates?equipment_id=eq.$EQUIPMENT_ID&select=blue_book_rate" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  bbr=$(json_field "$BODY_OUT" 0 blue_book_rate)
+  # json_field prints via Python's json+str(), which collapses a JSON
+  # numeric literal's own trailing zeros (145.00 -> float 145.0 -> "145.0")
+  # — a serialization detail of the probe helper, not of PostgREST's actual
+  # response (confirmed by reading the raw body directly).
+  [ "$bbr" = "145.0" ] && ok=1
+fi
+check "readonly (view_cost_register_rates): select equipment_rates sees the row" "200, blue_book_rate=145.0" "$ok" "$STATUS $BODY_OUT"
+
+request POST "equipment_rates" "$READONLY_TOKEN" "{\"equipment_id\":\"$EQUIPMENT_ID\",\"book_year\":2025,\"blue_book_rate\":1}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "readonly (view only, no maintain): insert equipment_rates rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# --- Labour -------------------------------------------------------------------
+request POST "labour_classes" "$QUANTITIES_TOKEN" '{"class_name":"Probe Operator"}'
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert labour_classes" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+LABOUR_CLASS_ID=$(json_field "$BODY_OUT" 0 id)
+
+request POST "labour_class_rates" "$QUANTITIES_TOKEN" "{\"labour_class_id\":\"$LABOUR_CLASS_ID\",\"hourly_rate\":42.00,\"effective_date\":\"2024-01-01\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert labour_class_rates" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request POST "labour_class_rates" "$QUANTITIES_TOKEN" "{\"labour_class_id\":\"$LABOUR_CLASS_ID\",\"hourly_rate\":45.50,\"effective_date\":\"2026-01-01\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities: insert a second labour_class_rates row, later effective_date" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# unique(labour_class_id, effective_date) is what makes "as of" resolution
+# unambiguous — two rates on the same day for the same class would leave no
+# principled way to pick one. Proven here, not just assumed by the schema.
+request POST "labour_class_rates" "$QUANTITIES_TOKEN" "{\"labour_class_id\":\"$LABOUR_CLASS_ID\",\"hourly_rate\":99.00,\"effective_date\":\"2026-01-01\"}"
+ok=0; [ "$STATUS" = "409" ] && ok=1
+check "quantities: duplicate (labour_class_id, effective_date) rejected" "409" "$ok" "$STATUS $BODY_OUT"
+
+request GET "labour_class_rates?labour_class_id=eq.$LABOUR_CLASS_ID&select=id" "$FULL_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "full (no cost-register right): select labour_class_rates empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "labour_class_rates?labour_class_id=eq.$LABOUR_CLASS_ID&select=id" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "2" ] && ok=1
+check "readonly (view_cost_register_rates): select labour_class_rates sees both rows" "200, 2 rows" "$ok" "$STATUS $BODY_OUT"
+
+# --- Materials ------------------------------------------------------------
+request POST "materials" "$QUANTITIES_TOKEN" '{"description":"Probe Asphalt Mix","unit":"Tonne"}'
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert materials" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+MATERIAL_ID=$(json_field "$BODY_OUT" 0 id)
+
+request POST "material_rates" "$QUANTITIES_TOKEN" "{\"material_id\":\"$MATERIAL_ID\",\"rate\":95.00,\"effective_date\":\"2026-01-01\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert material_rates" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request POST "materials" "$FULL_TOKEN" '{"description":"Should not land","unit":"Tonne"}'
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "full (no maintain_cost_registers): insert materials rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+request GET "material_rates?material_id=eq.$MATERIAL_ID&select=id" "$FULL_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "full (no cost-register right): select material_rates empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "material_rates?material_id=eq.$MATERIAL_ID&select=rate" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "readonly (view_cost_register_rates): select material_rates sees the row" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# --- Payroll additive / tool allowance (company-wide, no entity id) --------
+# unique(effective_date) alone, unscoped to any per-run-fresh id (unlike
+# equipment/labour_class/material rates above, each scoped to a uuid this
+# run just minted) — a second run on the same day would collide on a plain
+# POST. on_conflict=effective_date, same idempotency pattern already used
+# for user_view_preferences further up this file.
+resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/payroll_additive_rates?on_conflict=effective_date" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $QUANTITIES_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d '{"percent":32,"effective_date":"2026-01-01"}')
+STATUS=$(printf '%s' "$resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$resp" | sed '$d')
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert payroll_additive_rates" "201/200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/tool_allowance_rates?on_conflict=effective_date" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $QUANTITIES_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d '{"percent":1,"effective_date":"2026-01-01"}')
+STATUS=$(printf '%s' "$resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$resp" | sed '$d')
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (maintain_cost_registers): insert tool_allowance_rates" "201/200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "payroll_additive_rates?select=id" "$FULL_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "full (no cost-register right): select payroll_additive_rates empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+request GET "tool_allowance_rates?select=percent" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  pct=$(json_field "$BODY_OUT" 0 percent)
+  [ "$pct" = "1" ] && ok=1
+fi
+check "readonly (view_cost_register_rates): select tool_allowance_rates sees the row" "200, percent=1" "$ok" "$STATUS $BODY_OUT"
+
 echo
 echo "=== Summary: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -eq 0 ]; then

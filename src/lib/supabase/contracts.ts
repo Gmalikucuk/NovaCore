@@ -59,6 +59,10 @@ export interface CompanyRights {
   setBidCost: boolean
   /** Read cost_price/cost_source on a bid line (0047). Never implied by createBids or setBidCost. */
   viewBidCosts: boolean
+  /** Add/edit equipment, labour classes, materials, and every rate/history table under them (0048). Implies read of rates — maintaining a register requires seeing what it holds. */
+  maintainCostRegisters: boolean
+  /** Read cost-register rate figures without being able to change the register (0048). Identity fields (equipment type/year/make/model, class name, material description/unit) need no right — open read. */
+  viewCostRegisterRates: boolean
 }
 
 interface RawMembershipRow {
@@ -208,9 +212,22 @@ export async function fetchMyCompanyRights(): Promise<CompanyRights> {
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { createProjects: false, manageMembers: false, createBids: false, setBidCost: false, viewBidCosts: false }
+  if (!user)
+    return {
+      createProjects: false,
+      manageMembers: false,
+      createBids: false,
+      setBidCost: false,
+      viewBidCosts: false,
+      maintainCostRegisters: false,
+      viewCostRegisterRates: false,
+    }
 
-  const { data, error } = await supabase.from('profiles').select('create_projects, manage_members, create_bids, set_bid_cost, view_bid_costs').eq('id', user.id).single()
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('create_projects, manage_members, create_bids, set_bid_cost, view_bid_costs, maintain_cost_registers, view_cost_register_rates')
+    .eq('id', user.id)
+    .single()
   if (error) throw error
 
   return {
@@ -219,6 +236,8 @@ export async function fetchMyCompanyRights(): Promise<CompanyRights> {
     createBids: data.create_bids,
     setBidCost: data.set_bid_cost,
     viewBidCosts: data.view_bid_costs,
+    maintainCostRegisters: data.maintain_cost_registers,
+    viewCostRegisterRates: data.view_cost_register_rates,
   }
 }
 

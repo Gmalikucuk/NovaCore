@@ -9,6 +9,7 @@ import {
   IconDeviceMobile,
   IconFileInvoice,
   IconFilePlus,
+  IconFlask,
   IconGavel,
   IconHome,
   IconLayoutDashboard,
@@ -18,6 +19,8 @@ import {
   IconReportAnalytics,
   IconShoppingCart,
   IconTable,
+  IconTruck,
+  IconUsers,
   IconUsersGroup,
 } from '@tabler/icons-react'
 import { NavLink, Outlet, useNavigate, useOutletContext } from 'react-router-dom'
@@ -213,6 +216,31 @@ export function Sidebar() {
                 </div>
               </div>
             )}
+
+            {/* Registers (0048) — company-wide reference data (equipment,
+                labour, materials), same "COMPANY = not about any one
+                contract or stage" reasoning as Admin just above, and the
+                same reasoning Bids uses for staying ungated: identity
+                fields are open-read to any seated user, so nothing here
+                would ever hide the link — RLS walls the rate figures and
+                every write regardless of what the nav shows. */}
+            <div className="mt-4">
+              <NavGroupHeading>Registers</NavGroupHeading>
+              <div className="space-y-0.5">
+                <NavLink to="/equipment" className={navLinkClass}>
+                  <IconTruck size={18} stroke={1.75} />
+                  Equipment
+                </NavLink>
+                <NavLink to="/labour" className={navLinkClass}>
+                  <IconUsers size={18} stroke={1.75} />
+                  Labour
+                </NavLink>
+                <NavLink to="/materials" className={navLinkClass}>
+                  <IconFlask size={18} stroke={1.75} />
+                  Materials
+                </NavLink>
+              </div>
+            </div>
           </div>
 
           {/* Pre-award — a stage, not a contract. Ungated here on purpose:

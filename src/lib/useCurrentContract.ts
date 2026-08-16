@@ -4,7 +4,15 @@ import { errorMessage } from './errorMessage'
 
 const STORAGE_KEY = 'novacore_current_contract_id'
 
-const NO_COMPANY_RIGHTS: CompanyRights = { createProjects: false, manageMembers: false, createBids: false, setBidCost: false, viewBidCosts: false }
+const NO_COMPANY_RIGHTS: CompanyRights = {
+  createProjects: false,
+  manageMembers: false,
+  createBids: false,
+  setBidCost: false,
+  viewBidCosts: false,
+  maintainCostRegisters: false,
+  viewCostRegisterRates: false,
+}
 
 export interface CurrentContractState {
   status: 'loading' | 'none' | 'ready' | 'error'
