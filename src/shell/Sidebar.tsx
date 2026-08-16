@@ -14,6 +14,9 @@ import {
   IconLayoutDashboard,
   IconListDetails,
   IconLogout,
+  IconReceiptDollar,
+  IconReportAnalytics,
+  IconShoppingCart,
   IconTable,
   IconUsersGroup,
 } from '@tabler/icons-react'
@@ -34,34 +37,61 @@ function NavGroupHeading({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * One persistent sidebar for the whole office experience — company-level
- * (Portfolio, Overview, Tenders) and contract-level (Production, Finance)
- * nav together, at all times, rather than the two-shell split this replaces
- * (CompanyShell for company routes, this component for contract routes).
- * That split read as two different apps when Overview/Tenders vanished
- * entirely the moment you opened a contract, and put Rates/Cost build in a
- * "Projects" group that had no other connection to money at all — neither
- * survives here.
+ * One persistent sidebar for the whole office experience.
  *
- * COMPANY is always visible, ungated — it's not about this contract.
- * PRODUCTION holds every surface that works without a Unit Price (Progress,
- * Tracker, Items, Daily Entry, Confirm) — Progress and Tracker have no
- * rights gate of their own, same as before. FINANCE is the two priced
- * surfaces plus the money-over-time list: Rates, Cost build, Months. The
- * section itself is gated on view_rates — the whole point is that a seat
- * without rate access sees no FINANCE header and no path to Rates/Cost
- * build/Months at all, not a section that's there but empty. Cost build
- * additionally needs set_cost (a write right) on top of that read gate.
- * ADMIN stays its own section — company-wide rights, not contract ones, so
- * it doesn't belong nested inside the contract-scope panel below any more
- * than COMPANY does.
+ * The tree has two organizing axes, not three. STAGE — pre-award, then
+ * this contract — and DIMENSION, the five groups inside a contract:
+ * Production, Submissions, Revenue, Cost, Procurement. COMPANY sits
+ * outside both, for work that isn't about any one contract or stage at
+ * all (Portfolio, Overview, and now Admin nested inside it, since
+ * creating a contract or seating a member is company-scope work, not a
+ * third axis of its own the way it used to sit as a separate top-level
+ * heading).
  *
- * The contract-scope panel (name + number, then PRODUCTION and FINANCE) is
- * its own visually distinct block — a left accent border and a filled
- * background — precisely so it reads as "everything in here is about THIS
- * contract," bracketed by COMPANY above and ADMIN below at the sidebar's
- * normal, unscoped indent. Reported as a judgment call, not a spec'd pixel
- * value — this is the treatment chosen for 220px.
+ * An earlier version of this tree mixed three axes across four headings
+ * — Company vs. the contract panel was scope, Production vs. Finance was
+ * dimension, Tenders was stage — which is why no arrangement of them
+ * read cleanly. Collapsing to two axes is what fixed it, and it also
+ * fixed two real placement problems that fell out of the old mix:
+ * Progress claims lived in Finance and inherited a rate-visibility gate
+ * it never actually needed (its own screen has always gated on
+ * prepare_claims, project-management work that happens to carry
+ * dollars) — it's under Submissions now, gated on prepare_claims
+ * directly. And cost never fit under Finance beside revenue, because it
+ * runs the whole length of a contract rather than belonging to one
+ * stage — Cost is its own dimension now, gated on set_cost alone rather
+ * than the set_cost-and-view_rates combination it inherited only by
+ * nesting under the old Finance/view_rates wrapper (no seeded seat on
+ * either sandbox contract holds set_cost without view_rates today, so
+ * this is a change in principle, not in any real seat's reachable
+ * screens — reported, not silently assumed).
+ *
+ * PRODUCTION is everything that works without a Unit Price (Progress,
+ * Tracker, Items, Daily Entry, Confirm) — always visible, no section
+ * gate. SUBMISSIONS is what gets sent out: Progress claims (gated on
+ * prepare_claims) and Daily reports, a placeholder visible to any seated
+ * member (no daily-report right exists yet to gate it on — proposed
+ * when it's built). REVENUE is the priced surfaces plus the
+ * money-over-time list — Rates, Months, and Payments, a placeholder —
+ * all gated on view_rates, same as Finance was. COST holds Cost build,
+ * gated on set_cost. PROCUREMENT holds Purchase orders, a placeholder
+ * proposed on the same set_cost gate as Cost, since procurement and cost
+ * are the same "commits this contract's money" concern with no
+ * dedicated right of its own yet.
+ *
+ * Each section's own visibility is computed inline as the OR of its
+ * children's individual conditions — not a named helper meaning "this
+ * seat is Finance" or "this seat is a PM." Rights stay atomic; any
+ * combination of them stays valid, a section just shows or hides based
+ * on whether anything inside it would actually render.
+ *
+ * The contract-scope panel (name + number, then the five dimension
+ * headings) is its own visually distinct block — a left accent border
+ * and a filled background — precisely so it reads as "everything in
+ * here is about THIS contract," bracketed by COMPANY and PRE-AWARD
+ * above at the sidebar's normal, unscoped indent. Reported as a
+ * judgment call, not a spec'd pixel value — this is the treatment
+ * chosen for 220px.
  *
  * No contract switcher here — Portfolio and Overview are both where
  * switching contracts happens now (click a row), same established
@@ -102,8 +132,32 @@ export function Sidebar() {
     navigate('/')
   }
 
-  const canUseFinance = contract.viewRates
-  const canReachProduction = contract.enterQuantity || contract.correctQuantity || contract.confirmQuantity
+  // Production — Progress and Tracker carry no rights gate of their own,
+  // so the section is always visible; the two conditional links are
+  // computed here, once, rather than inline at each NavLink.
+  const canReachDailyEntry = contract.enterQuantity || contract.correctQuantity || contract.confirmQuantity
+  const canSeeItems = contract.createItems
+  const canSeeConfirm = contract.confirmQuantity
+
+  // Submissions — Daily reports has no right to gate on yet (proposed
+  // when it's built); "visible to any seated member" means unconditional
+  // here, which is also why the section itself never actually hides.
+  const canSeeProgressClaims = contract.prepareClaims
+  const canSeeDailyReports = true
+
+  // Revenue — Rates, Months, Payments all gate on the same right today
+  // (view_rates), same as Finance's own single gate; written per-child
+  // rather than collapsed to one boolean so a future child with its own
+  // gate doesn't require restructuring this.
+  const canSeeRates = contract.viewRates
+  const canSeeMonths = contract.viewRates
+  const canSeePayments = contract.viewRates
+  const revenueVisible = canSeeRates || canSeeMonths || canSeePayments
+
+  // Cost and Procurement — one child each, so the section's own
+  // visibility is just that child's condition.
+  const canSeeCostBuild = contract.setCost
+  const canSeePurchaseOrders = contract.setCost
 
   return (
     <div className="flex h-screen bg-nc-page">
@@ -132,9 +186,44 @@ export function Sidebar() {
                 <IconLayoutDashboard size={18} stroke={1.75} />
                 Overview
               </NavLink>
+            </div>
+
+            {/* Admin — company-wide rights (create_projects/manage_members),
+                not per-contract, so it's scoped to nothing but the seat's
+                own admin standing. Nested inside Company now rather than
+                sitting as its own top-level heading — it's company-scope
+                work, the same axis Portfolio/Overview are on, not a third
+                organizing axis of its own. */}
+            {(companyRights.createProjects || companyRights.manageMembers) && (
+              <div className="mt-4">
+                <NavGroupHeading>Admin</NavGroupHeading>
+                <div className="space-y-0.5">
+                  {companyRights.createProjects && (
+                    <NavLink to="/admin/contracts/new" className={navLinkClass}>
+                      <IconFilePlus size={18} stroke={1.75} />
+                      Create contract
+                    </NavLink>
+                  )}
+                  {companyRights.manageMembers && (
+                    <NavLink to="/admin/members" className={navLinkClass}>
+                      <IconUsersGroup size={18} stroke={1.75} />
+                      Seat members
+                    </NavLink>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Pre-award — a stage, not a contract. Ungated, same as
+              Tenders was: nothing here reads or writes any table, so
+              there's no right to check yet. */}
+          <div>
+            <NavGroupHeading>Pre-award</NavGroupHeading>
+            <div className="space-y-0.5">
               <NavLink to="/tenders" className={navLinkClass}>
                 <IconGavel size={18} stroke={1.75} />
-                Tenders
+                Bids
               </NavLink>
             </div>
           </div>
@@ -161,19 +250,19 @@ export function Sidebar() {
                     <IconTable size={18} stroke={1.75} />
                     Tracker
                   </NavLink>
-                  {contract.createItems && (
+                  {canSeeItems && (
                     <NavLink to="/line-items" className={navLinkClass}>
                       <IconListDetails size={18} stroke={1.75} />
                       Items
                     </NavLink>
                   )}
-                  {canReachProduction && (
+                  {canReachDailyEntry && (
                     <NavLink to="/daily-entry" className={navLinkClass}>
                       <IconCalendarPlus size={18} stroke={1.75} />
                       Daily Entry
                     </NavLink>
                   )}
-                  {contract.confirmQuantity && (
+                  {canSeeConfirm && (
                     <NavLink to="/confirm" className={navLinkClass}>
                       <IconClipboardCheck size={18} stroke={1.75} />
                       Confirm
@@ -183,62 +272,92 @@ export function Sidebar() {
                 </div>
               </div>
 
-              {/* The whole section disappears for a seat without
-                  view_rates — not just the money inside Rates/Months, the
-                  entire path to any of the three links. Cost build needs
-                  set_cost on top, since it's the one write surface here. */}
-              {canUseFinance && (
-                <div>
-                  <NavGroupHeading>Finance</NavGroupHeading>
-                  <div className="space-y-0.5">
-                    <NavLink to="/rates" className={navLinkClass}>
-                      <IconCurrencyDollar size={18} stroke={1.75} />
-                      Rates
-                    </NavLink>
-                    {contract.setCost && (
-                      <NavLink to="/cost-build" className={navLinkClass}>
-                        <IconCalculator size={18} stroke={1.75} />
-                        Cost build
-                      </NavLink>
-                    )}
-                    <NavLink to="/finance" className={navLinkClass}>
-                      <IconCalendarStats size={18} stroke={1.75} />
-                      Months
-                    </NavLink>
+              {/* Submissions — what gets sent out. Progress claims moved
+                  here from Finance; same route, same screen, same
+                  behaviour, only its section and its own gate changed —
+                  prepare_claims directly, the right the screen itself has
+                  always actually checked, rather than the view_rates gate
+                  it inherited from sitting under Finance. */}
+              <div>
+                <NavGroupHeading>Submissions</NavGroupHeading>
+                <div className="space-y-0.5">
+                  {canSeeProgressClaims && (
                     <NavLink to="/progress-estimates" className={navLinkClass}>
                       <IconFileInvoice size={18} stroke={1.75} />
                       Progress claims
+                    </NavLink>
+                  )}
+                  {canSeeDailyReports && (
+                    <NavLink to="/daily-reports" className={navLinkClass}>
+                      <IconReportAnalytics size={18} stroke={1.75} />
+                      Daily reports
+                    </NavLink>
+                  )}
+                </div>
+              </div>
+
+              {/* Revenue — the priced surfaces plus the money-over-time
+                  list. The whole section disappears for a seat without
+                  view_rates, same as Finance's own gate did. */}
+              {revenueVisible && (
+                <div>
+                  <NavGroupHeading>Revenue</NavGroupHeading>
+                  <div className="space-y-0.5">
+                    {canSeeRates && (
+                      <NavLink to="/rates" className={navLinkClass}>
+                        <IconCurrencyDollar size={18} stroke={1.75} />
+                        Rates
+                      </NavLink>
+                    )}
+                    {canSeeMonths && (
+                      <NavLink to="/finance" className={navLinkClass}>
+                        <IconCalendarStats size={18} stroke={1.75} />
+                        Months
+                      </NavLink>
+                    )}
+                    {canSeePayments && (
+                      <NavLink to="/payments" className={navLinkClass}>
+                        <IconReceiptDollar size={18} stroke={1.75} />
+                        Payments
+                      </NavLink>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Cost — runs the whole length of a contract rather than
+                  belonging to one stage, which is why it's its own
+                  dimension now instead of nested under Revenue. Gated on
+                  set_cost alone. */}
+              {canSeeCostBuild && (
+                <div>
+                  <NavGroupHeading>Cost</NavGroupHeading>
+                  <div className="space-y-0.5">
+                    <NavLink to="/cost-build" className={navLinkClass}>
+                      <IconCalculator size={18} stroke={1.75} />
+                      Cost build
+                    </NavLink>
+                  </div>
+                </div>
+              )}
+
+              {/* Procurement — new. Purchase orders proposed on the same
+                  set_cost gate as Cost: both are "commits this contract's
+                  money" concerns, and there's no dedicated procurement
+                  right in the schema to gate on instead. */}
+              {canSeePurchaseOrders && (
+                <div>
+                  <NavGroupHeading>Procurement</NavGroupHeading>
+                  <div className="space-y-0.5">
+                    <NavLink to="/purchase-orders" className={navLinkClass}>
+                      <IconShoppingCart size={18} stroke={1.75} />
+                      Purchase orders
                     </NavLink>
                   </div>
                 </div>
               )}
             </div>
           </div>
-
-          {/* Company-wide rights (profiles), not per-contract — same as
-              the panel above being scoped to one contract, this one is
-              scoped to nothing but the seat's own admin standing, so it
-              sits outside that bordered block at the sidebar's normal
-              indent, same as Company above. */}
-          {(companyRights.createProjects || companyRights.manageMembers) && (
-            <div>
-              <NavGroupHeading>Admin</NavGroupHeading>
-              <div className="space-y-0.5">
-                {companyRights.createProjects && (
-                  <NavLink to="/admin/contracts/new" className={navLinkClass}>
-                    <IconFilePlus size={18} stroke={1.75} />
-                    Create contract
-                  </NavLink>
-                )}
-                {companyRights.manageMembers && (
-                  <NavLink to="/admin/members" className={navLinkClass}>
-                    <IconUsersGroup size={18} stroke={1.75} />
-                    Seat members
-                  </NavLink>
-                )}
-              </div>
-            </div>
-          )}
         </nav>
 
         <div className="space-y-2 border-t border-white/10 p-3">

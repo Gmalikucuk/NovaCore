@@ -9,11 +9,14 @@ import type { CurrentContractState } from './lib/useCurrentContract'
 import { SignInScreen } from './screens/SignIn/SignInScreen'
 import { EntryScreen } from './screens/Entry/EntryScreen'
 import { PortfolioScreen } from './screens/Portfolio/PortfolioScreen'
-import { TendersScreen } from './screens/Tenders/TendersScreen'
+import { BidsScreen } from './screens/Bids/BidsScreen'
 import { OverviewScreen } from './screens/Overview/OverviewScreen'
 import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
 import { CostBuildScreen } from './screens/CostBuild/CostBuildScreen'
+import { DailyReportsScreen } from './screens/DailyReports/DailyReportsScreen'
+import { PaymentsScreen } from './screens/Payments/PaymentsScreen'
+import { PurchaseOrdersScreen } from './screens/PurchaseOrders/PurchaseOrdersScreen'
 import { QuantityRecordsScreen } from './screens/QuantityRecords/QuantityRecordsScreen'
 import { ProgressScreen } from './screens/Progress/ProgressScreen'
 import { MonthsScreen } from './screens/Finance/MonthsScreen'
@@ -28,7 +31,7 @@ import { SeatMembersScreen } from './screens/Admin/SeatMembersScreen'
 
 /**
  * Narrows the full CurrentContractState (Sidebar's own outlet context, since
- * Portfolio/Overview/Tenders/Admin need the whole contracts list) down to
+ * Portfolio/Overview/Bids/Admin need the whole contracts list) down to
  * the single resolved `current` contract that every contract-scoped screen
  * (Tracker, Rates, Progress, ...) has always expected. The same narrowing
  * CompanyOverviewBridge used to do for Overview alone, now applied to every
@@ -71,7 +74,7 @@ function App() {
             {/* One persistent sidebar for the whole office experience — see
                 Sidebar.tsx's own comment for why the old CompanyShell/
                 Sidebar split is gone. Its own Outlet carries the FULL
-                CurrentContractState (Portfolio/Overview/Tenders/Admin all
+                CurrentContractState (Portfolio/Overview/Bids/Admin all
                 need the contracts list, not one resolved contract);
                 ContractScopeBridge narrows that down for the routes below
                 that are actually scoped to a single contract. */}
@@ -92,11 +95,14 @@ function App() {
                   </ErrorBoundary>
                 }
               />
+              {/* Route path unchanged — renamed Tenders -> Bids on the nav
+                  side only (see BidsScreen's own comment); flagged as a
+                  candidate route rename, not done in this pass. */}
               <Route
                 path="/tenders"
                 element={
                   <ErrorBoundary>
-                    <TendersScreen />
+                    <BidsScreen />
                   </ErrorBoundary>
                 }
               />
@@ -152,6 +158,30 @@ function App() {
                   element={
                     <ErrorBoundary>
                       <CostBuildScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/daily-reports"
+                  element={
+                    <ErrorBoundary>
+                      <DailyReportsScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/payments"
+                  element={
+                    <ErrorBoundary>
+                      <PaymentsScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/purchase-orders"
+                  element={
+                    <ErrorBoundary>
+                      <PurchaseOrdersScreen />
                     </ErrorBoundary>
                   }
                 />
