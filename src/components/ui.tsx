@@ -1,6 +1,8 @@
 import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TdHTMLAttributes, type TextareaHTMLAttributes, type ThHTMLAttributes } from 'react'
 import type { ContractState } from '../lib/supabase/contracts'
 import { CONTRACT_STATE_LABEL } from '../lib/calculations/overview'
+import type { BidStatus } from '../lib/supabase/bids'
+import { BID_STATUS_LABEL } from '../lib/calculations/bidValue'
 
 /**
  * NovaCore UI primitives — ported from Vektor Freight's `ui.jsx` (the
@@ -144,6 +146,28 @@ const CONTRACT_STATE_TONE: Record<ContractState, StatusTone> = {
 
 export function ContractStateTag({ state, className = '' }: { state: ContractState; className?: string }) {
   return <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CLASSES[CONTRACT_STATE_TONE[state]]} ${className}`}>{CONTRACT_STATE_LABEL[state]}</span>
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// BidStatusTag — not_submitted/submitted/won/lost/no_award/withdrawn.
+// success only for won — the one outcome that's actually good news; danger
+// for lost (real, worth a glance at, not hidden as neutral — see 0047's own
+// "losses stay as priced records permanently" reasoning); warning for
+// submitted (waiting on someone else, worth noticing); neutral for the
+// other three, none of which is a fault or a pending state.
+// ─────────────────────────────────────────────────────────────────────────
+
+const BID_STATUS_TONE: Record<BidStatus, StatusTone> = {
+  not_submitted: 'neutral',
+  submitted: 'warning',
+  won: 'success',
+  lost: 'danger',
+  no_award: 'neutral',
+  withdrawn: 'neutral',
+}
+
+export function BidStatusTag({ status, className = '' }: { status: BidStatus; className?: string }) {
+  return <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CLASSES[BID_STATUS_TONE[status]]} ${className}`}>{BID_STATUS_LABEL[status]}</span>
 }
 
 // ─────────────────────────────────────────────────────────────────────────

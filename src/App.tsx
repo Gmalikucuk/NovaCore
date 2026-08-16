@@ -10,6 +10,7 @@ import { SignInScreen } from './screens/SignIn/SignInScreen'
 import { EntryScreen } from './screens/Entry/EntryScreen'
 import { PortfolioScreen } from './screens/Portfolio/PortfolioScreen'
 import { BidsScreen } from './screens/Bids/BidsScreen'
+import { BidDetailScreen } from './screens/Bids/BidDetailScreen'
 import { OverviewScreen } from './screens/Overview/OverviewScreen'
 import { ItemsScreen } from './screens/Items/ItemsScreen'
 import { RatesScreen } from './screens/Rates/RatesScreen'
@@ -95,14 +96,25 @@ function App() {
                   </ErrorBoundary>
                 }
               />
-              {/* Route path unchanged — renamed Tenders -> Bids on the nav
-                  side only (see BidsScreen's own comment); flagged as a
-                  candidate route rename, not done in this pass. */}
+              {/* Company-wide, not contract-scoped (0047) — Bids sits at
+                  this level alongside Portfolio/Overview/Admin, not inside
+                  ContractScopeBridge below. /tenders renamed to /bids here,
+                  the route finally matching its label. */}
               <Route
-                path="/tenders"
+                path="/bids"
                 element={
                   <ErrorBoundary>
                     <BidsScreen />
+                  </ErrorBoundary>
+                }
+              />
+              {/* One bid's detail — reached only by opening a row on Bids,
+                  same convention as /tracker/:itemId. */}
+              <Route
+                path="/bids/:bidId"
+                element={
+                  <ErrorBoundary>
+                    <BidDetailScreen />
                   </ErrorBoundary>
                 }
               />

@@ -2505,6 +2505,124 @@ check "readonly: update on quantities' preferences row matches 0 rows" "200, []"
 # SQL-level check in this script. Not fixed now — noted so it's seen next
 # time this file is touched.
 
+# =============================================================================
+# Bids — company-wide rights, not is_member()/has_right(contract_id, ...).
+# The first object outside a contract's boundary: owners/bids/bid_items are
+# open-read to any authenticated seat (there is no membership concept to
+# scope them by), write gated on create_bids; bid_item_costs is the actual
+# finance wall, split at the table boundary rather than the row (sell_price
+# lives on bid_items itself, open-read; cost lives only here) — see the
+# migration's own header for why that's a deliberate departure from
+# line_item_prices' one-flag-one-row shape.
+#
+# Three isolated fixtures for the three new rights, added by
+# probe_bids_rights_fixtures.sql specifically because none of the five
+# existing fixtures held any of them: full (create_bids only), viewer
+# (view_bid_costs only), correct_only (set_bid_cost only — alongside its
+# existing manage_members, proving set_bid_cost is independent of that too,
+# and giving a "can write cost, cannot read it back" case). readonly is
+# left untouched — it becomes the "open SELECT needs zero rights, every
+# write needs one" fixture; quantities is unaffected.
+# =============================================================================
+echo "=== Bids (company-wide rights) ==="
+
+# --- create_bids: full succeeds, viewer (no create_bids) is rejected -------
+request POST "owners" "$FULL_TOKEN" '{"name":"Probe Owner Co","owner_type":"private"}'
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full (create_bids): insert owner" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+OWNER_ID=$(json_field "$BODY_OUT" 0 id)
+
+request POST "owners" "$VIEWER_TOKEN" '{"name":"Should Not Land","owner_type":"private"}'
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer (no create_bids): insert owner rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+request POST "bids" "$FULL_TOKEN" "{\"bid_type\":\"quote\",\"owner_id\":\"$OWNER_ID\",\"name\":\"Probe Quote\",\"created_by\":\"$FULL_ID\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full (create_bids): insert bid" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+BID_ID=$(json_field "$BODY_OUT" 0 id)
+
+request POST "bids" "$VIEWER_TOKEN" "{\"bid_type\":\"quote\",\"owner_id\":\"$OWNER_ID\",\"name\":\"Should Not Land\",\"created_by\":\"$VIEWER_ID\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer (no create_bids): insert bid rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+request POST "bid_items" "$FULL_TOKEN" "{\"bid_id\":\"$BID_ID\",\"description\":\"Probe line\",\"unit\":\"Each\",\"quantity\":1,\"sell_price\":100}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full (create_bids): insert bid_item with sell_price" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+BID_ITEM_ID=$(json_field "$BODY_OUT" 0 id)
+
+request POST "bid_items" "$VIEWER_TOKEN" "{\"bid_id\":\"$BID_ID\",\"description\":\"Should not land\",\"unit\":\"Each\",\"quantity\":1}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer (no create_bids): insert bid_item rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# --- open read: readonly holds NONE of the three new rights, sees bids/
+# bid_items/owners anyway (no membership concept — same posture as
+# quantity_records visibility following membership alone) ------------------
+request GET "bids?id=eq.$BID_ID&select=id,name" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "readonly (no bid rights): select bids (open read)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "bid_items?id=eq.$BID_ITEM_ID&select=id,sell_price" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  sell_visible=$(json_field "$BODY_OUT" 0 sell_price)
+  [ "$sell_visible" = "100" ] && ok=1
+fi
+check "readonly (no bid rights): select bid_items sees sell_price" "200, sell_price=100" "$ok" "$STATUS $BODY_OUT"
+
+# --- the finance wall: set_bid_cost gates write, view_bid_costs gates read,
+# independently of each other and of create_bids -----------------------------
+request POST "bid_item_costs" "$VIEWER_TOKEN" "{\"bid_item_id\":\"$BID_ITEM_ID\",\"bid_id\":\"$BID_ID\",\"cost_price\":80,\"cost_source\":\"judgement\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer (view_bid_costs, no set_bid_cost): insert bid_item_costs rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# return=minimal, not the shared request() helper's return=representation:
+# correct_only can INSERT (set_bid_cost passes the WITH CHECK) but cannot
+# SELECT (no view_bid_costs) — and RETURNING requires SELECT visibility of
+# the row it just wrote, so asking for a representation here would make
+# Postgres report the whole statement as an RLS violation even though the
+# write itself is genuinely permitted. A real, deliberate consequence of
+# set_bid_cost/view_bid_costs being independent, not a bug — confirmed by
+# reading the row back below as viewer instead, who can.
+resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/bid_item_costs" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $CORRECT_ONLY_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=minimal" \
+  -d "{\"bid_item_id\":\"$BID_ITEM_ID\",\"bid_id\":\"$BID_ID\",\"cost_price\":80,\"cost_source\":\"judgement\"}")
+STATUS=$(printf '%s' "$resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$resp" | sed '$d')
+ok=0; [ "$STATUS" = "201" ] && ok=1
+check "correct_only (set_bid_cost): insert bid_item_costs (return=minimal — see comment)" "201" "$ok" "$STATUS $BODY_OUT"
+
+request GET "bid_item_costs?bid_item_id=eq.$BID_ITEM_ID&select=cost_price,cost_source" "$VIEWER_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  cp=$(json_field "$BODY_OUT" 0 cost_price)
+  [ "$cp" = "80" ] && ok=1
+fi
+check "viewer (view_bid_costs): select bid_item_costs sees the row" "200, cost_price=80" "$ok" "$STATUS $BODY_OUT"
+
+# correct_only WROTE the cost above but does not hold view_bid_costs —
+# proves write is not implied by read, the pairing this fixture exists for.
+request GET "bid_item_costs?bid_item_id=eq.$BID_ITEM_ID&select=cost_price" "$CORRECT_ONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "correct_only (set_bid_cost, no view_bid_costs): select bid_item_costs empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# readonly holds neither — the row exists (proven above) and is still hidden.
+request GET "bid_item_costs?bid_item_id=eq.$BID_ITEM_ID&select=cost_price" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "readonly (no bid rights): select bid_item_costs empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# --- winning_price only permitted when status = 'lost' (bids_winning_price_
+# only_when_lost) — a CHECK constraint, so PostgREST reports it as a 400
+# (Postgres error), not a 403 (RLS denial) — a different failure mode worth
+# distinguishing rather than treating every rejection as "the same wall".
+request PATCH "bids?id=eq.$BID_ID" "$FULL_TOKEN" '{"status":"won","winning_price":500000}'
+ok=0; [ "$STATUS" = "400" ] && ok=1
+check "full: winning_price on a 'won' bid rejected (check constraint)" "400" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "bids?id=eq.$BID_ID" "$FULL_TOKEN" '{"status":"lost","winning_price":500000}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full: status+winning_price to 'lost' together succeeds" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
 echo
 echo "=== Summary: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -eq 0 ]; then

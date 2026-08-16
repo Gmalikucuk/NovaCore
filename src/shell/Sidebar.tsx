@@ -215,13 +215,15 @@ export function Sidebar() {
             )}
           </div>
 
-          {/* Pre-award — a stage, not a contract. Ungated, same as
-              Tenders was: nothing here reads or writes any table, so
-              there's no right to check yet. */}
+          {/* Pre-award — a stage, not a contract. Ungated here on purpose:
+              Bids is open-read to any seated user (0047 — company-wide,
+              no membership boundary to scope by), so there is no right
+              that would ever hide this link; RLS still walls the write
+              surface and bid costs regardless of what the nav shows. */}
           <div>
             <NavGroupHeading>Pre-award</NavGroupHeading>
             <div className="space-y-0.5">
-              <NavLink to="/tenders" className={navLinkClass}>
+              <NavLink to="/bids" className={navLinkClass}>
                 <IconGavel size={18} stroke={1.75} />
                 Bids
               </NavLink>

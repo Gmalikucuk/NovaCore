@@ -4,7 +4,7 @@ import { errorMessage } from './errorMessage'
 
 const STORAGE_KEY = 'novacore_current_contract_id'
 
-const NO_COMPANY_RIGHTS: CompanyRights = { createProjects: false, manageMembers: false }
+const NO_COMPANY_RIGHTS: CompanyRights = { createProjects: false, manageMembers: false, createBids: false, setBidCost: false, viewBidCosts: false }
 
 export interface CurrentContractState {
   status: 'loading' | 'none' | 'ready' | 'error'
@@ -12,7 +12,7 @@ export interface CurrentContractState {
   current: MyContract | null
   setCurrentId: (id: string) => void
   message?: string
-  /** Company-wide rights (profiles.create_projects/manage_members) — gates the sidebar's ADMIN group. See CompanyRights. */
+  /** Company-wide rights (profiles.create_projects/manage_members/create_bids/set_bid_cost/view_bid_costs) — gates the sidebar's ADMIN group and the Bids surface. See CompanyRights. */
   companyRights: CompanyRights
 }
 

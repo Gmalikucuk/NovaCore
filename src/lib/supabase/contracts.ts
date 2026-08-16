@@ -53,6 +53,12 @@ export interface MyContract extends ContractRights {
 export interface CompanyRights {
   createProjects: boolean
   manageMembers: boolean
+  /** Create/edit a bid, its item lines, and each line's sell price (0047) — the pre-award equivalent of createProjects, on the same has_global_right mechanism. */
+  createBids: boolean
+  /** Write cost_price/cost_source on a bid line (0047). Independent of createBids — the estimator costing a line is often not the person pricing the submission. */
+  setBidCost: boolean
+  /** Read cost_price/cost_source on a bid line (0047). Never implied by createBids or setBidCost. */
+  viewBidCosts: boolean
 }
 
 interface RawMembershipRow {
@@ -197,17 +203,23 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
   }
 }
 
-/** The signed-in user's two company-wide rights — see CompanyRights. */
+/** The signed-in user's company-wide rights — see CompanyRights. */
 export async function fetchMyCompanyRights(): Promise<CompanyRights> {
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return { createProjects: false, manageMembers: false }
+  if (!user) return { createProjects: false, manageMembers: false, createBids: false, setBidCost: false, viewBidCosts: false }
 
-  const { data, error } = await supabase.from('profiles').select('create_projects, manage_members').eq('id', user.id).single()
+  const { data, error } = await supabase.from('profiles').select('create_projects, manage_members, create_bids, set_bid_cost, view_bid_costs').eq('id', user.id).single()
   if (error) throw error
 
-  return { createProjects: data.create_projects, manageMembers: data.manage_members }
+  return {
+    createProjects: data.create_projects,
+    manageMembers: data.manage_members,
+    createBids: data.create_bids,
+    setBidCost: data.set_bid_cost,
+    viewBidCosts: data.view_bid_costs,
+  }
 }
 
 /**
