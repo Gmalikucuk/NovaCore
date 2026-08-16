@@ -8,8 +8,35 @@ import { compareItemCodes, sectionLabel, sectionPrefix } from '../../lib/calcula
 import { remainingDisplay } from '../../lib/calculations/trackerRemaining'
 import { errorMessage } from '../../lib/errorMessage'
 import { exportTrackerWorkbook } from '../../lib/export/trackerExport'
-import { money, percent, quantity as fmtQuantity } from '../../lib/format'
+import { quantity as fmtQuantity } from '../../lib/format'
 import { Button, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Spinner, Table, TBody, TD, TH, THead, TR } from '../../components/ui'
+
+/**
+ * Description read, item number as the drill-down beneath it — same
+ * identity line as Rates and the month detail. The kind tag is the one
+ * thing about an Item's identity that isn't a quantity: it's what tells a
+ * reader why Remaining is about to read em-dash for this row (§3 below),
+ * before they've scanned that far right.
+ */
+function ItemIdentity({ item, onOpen }: { item: Item; onOpen: () => void }) {
+  return (
+    <div>
+      <div className="max-w-[260px] truncate text-sm text-nc-text" title={item.description}>
+        {item.description}
+      </div>
+      <div className="mt-0.5 flex items-center gap-1.5 text-xs">
+        <button type="button" className="text-nc-info-text underline decoration-dotted hover:decoration-solid" onClick={onOpen} title={`View ${item.itemNumber}'s history`}>
+          {item.itemNumber}
+        </button>
+        {item.itemKind !== 'unit_price' && (
+          <span className="inline-flex items-center rounded-full bg-nc-neutral-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-nc-neutral-text">
+            {item.itemKind === 'lump_sum' ? 'Lump sum' : 'Provisional sum'}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 /**
  * Contract → Item. The matrix (Items × months, Qty/$ alternating) moved to
@@ -23,6 +50,15 @@ import { Button, EmptyState, NotificationBanner, PageHeader, SandboxBanner, Spin
  * No weighted contract-completion figure, no CPI/SPI/Earned Value — no
  * Planned Value baseline exists to compute them against, and Remaining is
  * already the contract-native answer to "how much is left."
+ *
+ * Remaining is Approximate Quantity minus quantity to date — a question
+ * that only has an answer for a unit_price Item; Lump Sum and Provisional
+ * Sum don't have an Approximate Quantity to be "remaining" against, so
+ * their own row renders em-dash here rather than a different metric
+ * (percent complete, authorized value) standing in under the same header.
+ * Those two figures already have a home — Rates' own optional columns —
+ * so nothing here goes unreachable, and "Remaining" keeps one meaning
+ * instead of three.
  */
 export function TrackerScreen() {
   const contract = useOutletContext<MyContract>()
@@ -80,8 +116,23 @@ export function TrackerScreen() {
     }
   }
 
+  // Design-target pixel widths — see Rates' own COL_W comment for why
+  // these are ratios (pctW below), not literal pixels. Only two fixed
+  // columns here, so identity almost always clamps to its own maximum
+  // rather than TABLE_TARGET_W ever binding.
+  const COL_W = { quantity: 170, remaining: 170 }
+  const IDENTITY_MIN_W = 220
+  const IDENTITY_MAX_W = 300
+  const TABLE_TARGET_W = 1360
+  const fixedColumnsW = COL_W.quantity + COL_W.remaining
+  const identityW = Math.min(IDENTITY_MAX_W, Math.max(IDENTITY_MIN_W, TABLE_TARGET_W - fixedColumnsW))
+  const tableWidthPx = fixedColumnsW + identityW
+  const pctW = (px: number) => `${Math.round((px / tableWidthPx) * 10000) / 100}%`
+
   return (
-    <div>
+    // tableWidthPx caps the whole screen — title through table — the same
+    // one-shared-measure rule Rates and the month detail now follow.
+    <div style={{ maxWidth: tableWidthPx, marginLeft: 'auto', marginRight: 'auto' }}>
       <PageHeader
         title="Tracker"
         subtitle={contract.name}
@@ -114,86 +165,78 @@ export function TrackerScreen() {
         (sections.length === 0 ? (
           <EmptyState icon={<IconTable size={32} stroke={1.5} />} title="No items to track yet." description="Add items on the Items screen first." />
         ) : (
-          <Table>
-            <THead>
-              <TR>
-                <TH>Item #</TH>
-                <TH>Description</TH>
-                <TH>Unit</TH>
-                <TH align="right">Approx. Qty</TH>
-                <TH align="right">Remaining</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {sections.map((section) => (
-                <Fragment key={section.prefix}>
-                  {/* A section break reads as structure — typography, no
-                      fill — not as a data row with something to scan.
-                      First section gets no top rule; every following one
-                      does, so "Section" reads as a break between groups,
-                      not a label glued to the group below it. */}
-                  <TR>
-                    <TD colSpan={5} className={`text-xs font-semibold uppercase tracking-wide text-nc-text-muted ${section.prefix === sections[0]?.prefix ? '' : 'border-t border-nc-border'}`}>
-                      {section.label}
-                    </TD>
-                  </TR>
-                  {section.items.map((item) => {
-                    const unitPriced = item.itemKind === 'unit_price'
-                    // v_item_progress_rate is scoped to unit_price Items only —
-                    // Lump Sum/Provisional Sum never have a row here, but their
-                    // own figures (percentComplete/provisionalSum/authorizedValue)
-                    // already live directly on the Item, no separate fetch needed.
-                    const itemProgress = unitPriced ? progressByItem.get(item.id) : undefined
-                    const remaining = itemProgress ? remainingDisplay(itemProgress) : null
+          <div style={{ width: '100%' }}>
+            <Table style={{ tableLayout: 'fixed', width: '100%' }}>
+              <THead>
+                <TR>
+                  <TH style={{ width: pctW(identityW) }}>Item</TH>
+                  <TH align="right" style={{ width: pctW(COL_W.quantity) }}>
+                    Approx. Qty
+                  </TH>
+                  <TH align="right" style={{ width: pctW(COL_W.remaining) }}>
+                    Remaining
+                  </TH>
+                </TR>
+              </THead>
+              <TBody>
+                {sections.map((section) => (
+                  <Fragment key={section.prefix}>
+                    {/* A section break reads as structure — typography, no
+                        fill — not as a data row with something to scan.
+                        First section gets no top rule; every following one
+                        does, so "Section" reads as a break between groups,
+                        not a label glued to the group below it. */}
+                    <TR>
+                      <TD colSpan={3} className={`text-xs font-semibold uppercase tracking-wide text-nc-text-muted ${section.prefix === sections[0]?.prefix ? '' : 'border-t border-nc-border'}`}>
+                        {section.label}
+                      </TD>
+                    </TR>
+                    {section.items.map((item) => {
+                      const unitPriced = item.itemKind === 'unit_price'
+                      // v_item_progress_rate is scoped to unit_price Items
+                      // only — Lump Sum/Provisional Sum never have a row
+                      // here, and (per this screen's own doc comment) have
+                      // no Approximate Quantity to be "remaining" against
+                      // either, so Remaining renders em-dash for them
+                      // rather than standing in a different figure.
+                      const itemProgress = unitPriced ? progressByItem.get(item.id) : undefined
+                      const remaining = itemProgress ? remainingDisplay(itemProgress) : null
 
-                    return (
-                      <TR key={item.id}>
-                        <TD className="nc-numeric">
-                          <button
-                            type="button"
-                            className="text-nc-info-text underline decoration-dotted hover:decoration-solid"
-                            onClick={() => navigate(`/tracker/${item.id}`)}
-                            title={`View ${item.itemNumber}'s history`}
-                          >
-                            {item.itemNumber}
-                          </button>
-                        </TD>
-                        <TD prose>
-                          <div className="max-w-[420px] truncate" title={item.description}>
-                            {item.description}
-                          </div>
-                        </TD>
-                        <TD>{item.unit}</TD>
-                        <TD align="right" className="nc-numeric">
-                          {unitPriced ? fmtQuantity(item.approximateQuantity) : '—'}
-                        </TD>
-                        {/* Remaining, the primary frame — Approximate Quantity
-                            minus quantity to date, contract-native, no
-                            weighting. Over quantity keeps the same violet
-                            tone plus a non-colour signal as the Finance
-                            screen and its export already use for the same
-                            condition — one rule, three surfaces. */}
-                        <TD align="right" className={`nc-numeric ${remaining?.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
-                          {item.itemKind === 'lump_sum' ? (
-                            `${percent(item.percentComplete != null ? item.percentComplete / 100 : null)} complete`
-                          ) : item.itemKind === 'provisional_sum' ? (
-                            `${money(item.authorizedValue)} of ${money(item.provisionalSum)}`
-                          ) : remaining?.isOverQuantity ? (
-                            <span className="inline-flex items-center justify-end gap-1">
-                              <IconAlertTriangle size={13} stroke={1.75} />
-                              {fmtQuantity(remaining.amount)} over
-                            </span>
-                          ) : (
-                            fmtQuantity(remaining?.amount ?? null)
-                          )}
-                        </TD>
-                      </TR>
-                    )
-                  })}
-                </Fragment>
-              ))}
-            </TBody>
-          </Table>
+                      return (
+                        <TR key={item.id}>
+                          <TD className="align-top">
+                            <ItemIdentity item={item} onOpen={() => navigate(`/tracker/${item.id}`)} />
+                          </TD>
+                          <TD align="right" className="nc-numeric align-top">
+                            {unitPriced ? fmtQuantity(item.approximateQuantity, item.unit) : '—'}
+                          </TD>
+                          {/* Remaining, the primary frame — Approximate
+                              Quantity minus quantity to date, contract-
+                              native, no weighting. Over quantity keeps the
+                              same violet tone plus a non-colour signal as
+                              the Finance screen and its export already use
+                              for the same condition — one rule, three
+                              surfaces. */}
+                          <TD align="right" className={`nc-numeric align-top ${remaining?.isOverQuantity ? 'bg-nc-over-bg font-semibold text-nc-over-text' : ''}`}>
+                            {!unitPriced ? (
+                              '—'
+                            ) : remaining?.isOverQuantity ? (
+                              <span className="inline-flex items-center justify-end gap-1">
+                                <IconAlertTriangle size={13} stroke={1.75} />
+                                {fmtQuantity(remaining.amount)} over
+                              </span>
+                            ) : (
+                              fmtQuantity(remaining?.amount ?? null)
+                            )}
+                          </TD>
+                        </TR>
+                      )
+                    })}
+                  </Fragment>
+                ))}
+              </TBody>
+            </Table>
+          </div>
         ))}
     </div>
   )
