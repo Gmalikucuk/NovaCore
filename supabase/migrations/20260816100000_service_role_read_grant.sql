@@ -1,0 +1,50 @@
+-- =============================================================================
+-- NovaCore v1 — Migration: service_role read grant on contracts, items
+--
+-- THE GAP. service_role already bypasses RLS on every table, by Postgres/
+-- Supabase design — that's what makes it the trusted server-side role for
+-- Edge Functions in the first place. But RLS bypass is not the same thing
+-- as a table GRANT: without an explicit GRANT, Postgres still refuses the
+-- query outright ("permission denied for table ..."), before RLS is even
+-- evaluated. Every GRANT written for these two tables in this repo's prior
+-- migrations was scoped to `authenticated` only (RLS then narrows that by
+-- membership/right) — service_role was never granted anything, on any
+-- table, because nothing server-side had needed to read past the client
+-- until now (Brief 7's Hwy 5 read function, supabase/functions/
+-- hwy5-log-read, needs to read contracts.id and items.item_number/
+-- area_basis/item_kind to match Google Sheets workbooks against real
+-- Items — it has no signed-in user of its own to read them as).
+--
+-- SCOPE, DELIBERATELY NARROW. SELECT only, on exactly these two tables.
+-- Not a blanket `GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role`
+-- — that would hand every future Edge Function unreviewed write access to
+-- everything, which is a materially different decision this migration does
+-- not make. Widening this to INSERT/UPDATE/DELETE, or to any other table,
+-- is a separate decision for whoever needs it next, made explicitly, not
+-- inherited from this file.
+--
+-- Requires migrations through 20260814230000.
+-- =============================================================================
+
+grant select on public.contracts to service_role;
+grant select on public.items to service_role;
+
+-- =============================================================================
+-- Verify — as service_role (e.g. from an Edge Function), both now succeed
+-- where they previously raised 42501 "permission denied":
+--
+--   select id, contract_name, contract_no from public.contracts
+--   where contract_no = '26607-0000';
+--
+--   select item_number, area_basis, item_kind from public.items
+--   where contract_id = (select id from public.contracts where contract_no = '26607-0000');
+--
+-- And unchanged — service_role still cannot write to either table (no
+-- INSERT/UPDATE/DELETE grant exists), and `authenticated` still reads/
+-- writes only through is_member()/has_right() exactly as before this file:
+--
+--   -- as service_role:
+--   update public.items set description = 'x' where item_number = '01.01';
+--   -- expect: still 42501 permission denied — this migration granted
+--   -- SELECT only.
+-- =============================================================================
