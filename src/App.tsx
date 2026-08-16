@@ -25,6 +25,8 @@ import { FinanceMonthScreen } from './screens/Finance/FinanceMonthScreen'
 import { ProgressEstimatesScreen } from './screens/Finance/ProgressEstimatesScreen'
 import { ProgressEstimateScreen } from './screens/Finance/ProgressEstimateScreen'
 import { ConfirmQueueScreen } from './screens/Confirm/ConfirmQueueScreen'
+import { DailyWorkReportsScreen } from './screens/DailyWorkReports/DailyWorkReportsScreen'
+import { DailyWorkReportScreen } from './screens/DailyWorkReports/DailyWorkReportScreen'
 import { TrackerScreen } from './screens/Tracker/TrackerScreen'
 import { TrackerItemScreen } from './screens/Tracker/TrackerItemScreen'
 import { CreateContractScreen } from './screens/Admin/CreateContractScreen'
@@ -242,6 +244,27 @@ function App() {
                   element={
                     <ErrorBoundary>
                       <ConfirmQueueScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                {/* Daily Work Reports (Force Account claims, GC 49.00) — the
+                    list. Distinct from the unbuilt /daily-reports placeholder
+                    (weather/crew/equipment general reporting). */}
+                <Route
+                  path="/daily-work-reports"
+                  element={
+                    <ErrorBoundary>
+                      <DailyWorkReportsScreen />
+                    </ErrorBoundary>
+                  }
+                />
+                {/* One DWR's detail — reached only by opening a row on the
+                    list or right after creating one. */}
+                <Route
+                  path="/daily-work-reports/:id"
+                  element={
+                    <ErrorBoundary>
+                      <DailyWorkReportScreen />
                     </ErrorBoundary>
                   }
                 />

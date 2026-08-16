@@ -9,6 +9,7 @@ import {
   IconDeviceMobile,
   IconFileInvoice,
   IconFilePlus,
+  IconFileText,
   IconFlask,
   IconGavel,
   IconHome,
@@ -147,6 +148,11 @@ export function Sidebar() {
   // here, which is also why the section itself never actually hides.
   const canSeeProgressClaims = contract.prepareClaims
   const canSeeDailyReports = true
+  // Daily Work Reports — matches daily_work_reports' own SELECT policy
+  // (record_force_account OR the company-wide rate-visibility rights); a
+  // DWR carries rate figures, same finance-wall reasoning as the cost
+  // registers themselves.
+  const canSeeDwr = contract.recordForceAccount || companyRights.viewCostRegisterRates || companyRights.maintainCostRegisters
 
   // Revenue — Rates, Months, Payments all gate on the same right today
   // (view_rates), same as Finance's own single gate; written per-child
@@ -321,6 +327,12 @@ export function Sidebar() {
                     <NavLink to="/daily-reports" className={navLinkClass}>
                       <IconReportAnalytics size={18} stroke={1.75} />
                       Daily reports
+                    </NavLink>
+                  )}
+                  {canSeeDwr && (
+                    <NavLink to="/daily-work-reports" className={navLinkClass}>
+                      <IconFileText size={18} stroke={1.75} />
+                      Force Account (DWR)
                     </NavLink>
                   )}
                 </div>

@@ -2768,6 +2768,212 @@ fi
 check "readonly (view_cost_register_rates): select tool_allowance_rates sees the row" "200, percent=1" "$ok" "$STATUS $BODY_OUT"
 
 echo
+echo "=== Daily Work Reports (record_force_account x view_cost_register_rates/maintain_cost_registers) ==="
+echo "=== full: record_force_account ALONE, no company-wide cost-register right ==="
+echo "=== quantities: record_force_account + maintain_cost_registers (both halves) ==="
+echo "=== readonly: view_cost_register_rates alone, no record_force_account ==="
+echo "=== viewer: neither ==="
+
+# --- contract_force_account_terms — record_force_account alone is enough.
+# Upsert on (contract_id, effective_date), same rerun-safety pattern as
+# payroll_additive_rates/tool_allowance_rates above — a plain POST would
+# collide with a prior run's row on the second run.
+resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/contract_force_account_terms?on_conflict=contract_id,effective_date" \
+  -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $FULL_TOKEN" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
+  -d "{\"contract_id\":\"$PROJECT_ID\",\"effective_date\":\"2026-01-01\",\"gc_version_date\":\"2026-04-01\",\"labour_basic_pct\":0.30,\"labour_reduced_pct\":0.20,\"equipment_basic_pct\":0.15,\"equipment_reduced_pct\":0.10,\"materials_basic_pct\":0.15,\"materials_reduced_pct\":0.15,\"prep_basic_pct\":0.15,\"prep_reduced_pct\":0.10,\"food_basic_pct\":0.15,\"food_reduced_pct\":0.15,\"subcontractor_markup_pct\":0.10}")
+STATUS=$(printf '%s' "$resp" | tail -n1)
+BODY_OUT=$(printf '%s' "$resp" | sed '$d')
+ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full (record_force_account, no rate right): insert/upsert contract_force_account_terms" "201/200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request POST "contract_force_account_terms" "$READONLY_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"effective_date\":\"2026-02-01\",\"gc_version_date\":\"2026-04-01\",\"labour_basic_pct\":0.30,\"labour_reduced_pct\":0.20,\"equipment_basic_pct\":0.15,\"equipment_reduced_pct\":0.10,\"materials_basic_pct\":0.15,\"materials_reduced_pct\":0.15,\"prep_basic_pct\":0.15,\"prep_reduced_pct\":0.10,\"food_basic_pct\":0.15,\"food_reduced_pct\":0.15,\"subcontractor_markup_pct\":0.10}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "readonly (view_cost_register_rates alone, no record_force_account): insert contract_force_account_terms rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+request GET "contract_force_account_terms?contract_id=eq.$PROJECT_ID&select=id" "$READONLY_TOKEN"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  n=$(json_len "$BODY_OUT")
+  [ "$n" != "-1" ] && [ "$n" -ge 1 ] 2>/dev/null && ok=1
+fi
+check "readonly (view_cost_register_rates): select contract_force_account_terms (OR clause)" "200, >=1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "contract_force_account_terms?contract_id=eq.$PROJECT_ID&select=id" "$VIEWER_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "viewer (neither right): select contract_force_account_terms empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# --- daily_work_reports header — record_force_account alone is enough ---
+request POST "daily_work_reports" "$FULL_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"work_date\":\"2026-08-10\",\"description_of_work\":\"PROBE force account line\",\"gc_version_date\":\"2026-04-01\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full (record_force_account, no rate right): insert daily_work_reports header" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+DWR_ID=$(json_field "$BODY_OUT" 0 id)
+DWR_NUMBER_1=$(json_field "$BODY_OUT" 0 dwr_number)
+
+request POST "daily_work_reports" "$FULL_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"work_date\":\"2026-08-11\",\"description_of_work\":\"PROBE second header, sequential numbering\",\"gc_version_date\":\"2026-04-01\"}"
+ok=0
+if [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  n2=$(json_field "$BODY_OUT" 0 dwr_number)
+  [ "$n2" -gt "$DWR_NUMBER_1" ] 2>/dev/null && ok=1
+fi
+check "full: dwr_number assigned server-side, sequential per contract" "201, dwr_number > $DWR_NUMBER_1" "$ok" "$STATUS $BODY_OUT"
+
+request POST "daily_work_reports" "$READONLY_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"work_date\":\"2026-08-10\",\"description_of_work\":\"Should not land\",\"gc_version_date\":\"2026-04-01\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "readonly (view_cost_register_rates alone): insert daily_work_reports rejected (no record_force_account)" "403" "$ok" "$STATUS $BODY_OUT"
+
+request POST "daily_work_reports" "$VIEWER_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"work_date\":\"2026-08-10\",\"description_of_work\":\"Should not land\",\"gc_version_date\":\"2026-04-01\"}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "viewer (neither right): insert daily_work_reports rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+request GET "daily_work_reports?id=eq.$DWR_ID&select=id" "$READONLY_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "readonly (view_cost_register_rates, no record_force_account): select daily_work_reports (OR clause)" "200, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+request GET "daily_work_reports?id=eq.$DWR_ID&select=id" "$VIEWER_TOKEN"
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "viewer (neither right): select daily_work_reports empty" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# --- subcontractor list — record_force_account alone, no rate right needed ---
+request POST "daily_work_report_subcontractors" "$FULL_TOKEN" \
+  "{\"dwr_id\":\"$DWR_ID\",\"contract_id\":\"$PROJECT_ID\",\"name\":\"PROBE Subco Ltd.\"}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "full (record_force_account, no rate right): insert a subcontractor" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+SUBCO_ID=$(json_field "$BODY_OUT" 0 id)
+
+# --- line items — the AND requirement: record_force_account is not enough ---
+# alone, and view_cost_register_rates/maintain_cost_registers is not enough
+# alone either. full holds only the first half.
+request POST "daily_work_report_line_items" "$FULL_TOKEN" \
+  "{\"dwr_id\":\"$DWR_ID\",\"contract_id\":\"$PROJECT_ID\",\"block\":\"A\",\"sub_flag\":\"n\",\"descriptor\":\"PROBE Operator\",\"quantity\":8,\"rate\":42.00,\"amount\":336.00}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "full (record_force_account ALONE, no rate right): insert line item rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# readonly holds only the second half (view_cost_register_rates), no
+# record_force_account at all — also rejected, from the other side.
+request POST "daily_work_report_line_items" "$READONLY_TOKEN" \
+  "{\"dwr_id\":\"$DWR_ID\",\"contract_id\":\"$PROJECT_ID\",\"block\":\"A\",\"sub_flag\":\"n\",\"descriptor\":\"Should not land\",\"quantity\":1,\"rate\":1,\"amount\":1}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "readonly (view_cost_register_rates ALONE, no record_force_account): insert line item rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# quantities holds record_force_account (this migration) AND
+# maintain_cost_registers (20260816140000) — proves maintain satisfies the
+# AND exactly like view_cost_register_rates would (20260816170000's fix).
+request POST "daily_work_report_line_items" "$QUANTITIES_TOKEN" \
+  "{\"dwr_id\":\"$DWR_ID\",\"contract_id\":\"$PROJECT_ID\",\"block\":\"A\",\"sub_flag\":\"n\",\"descriptor\":\"PROBE Operator\",\"secondary_descriptor\":\"Class 1\",\"quantity\":8,\"rate\":42.00,\"amount\":336.00}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities (record_force_account + maintain_cost_registers, both halves): insert line item" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+LINE_ITEM_ID=$(json_field "$BODY_OUT" 0 id)
+
+# Block F — "Negotiated Price and Credits": amount is signed, a credit is a
+# negative amount, not rejected by any check constraint.
+request POST "daily_work_report_line_items" "$QUANTITIES_TOKEN" \
+  "{\"dwr_id\":\"$DWR_ID\",\"contract_id\":\"$PROJECT_ID\",\"block\":\"F\",\"sub_flag\":\"n\",\"descriptor\":\"PROBE negotiated credit\",\"quantity\":1,\"rate\":0,\"amount\":-500.00}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities: Block F line item with a NEGATIVE amount (a credit) accepted" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# A line item tied to a real subcontractor row on the SAME dwr — the
+# composite FK (subcontractor_id, dwr_id) proves it structurally.
+request POST "daily_work_report_line_items" "$QUANTITIES_TOKEN" \
+  "{\"dwr_id\":\"$DWR_ID\",\"contract_id\":\"$PROJECT_ID\",\"block\":\"B\",\"sub_flag\":\"y\",\"subcontractor_id\":\"$SUBCO_ID\",\"descriptor\":\"PROBE Excavator\",\"quantity\":4,\"rate\":110.00,\"amount\":440.00}"
+ok=0; [ "$STATUS" = "201" ] && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
+check "quantities: line item attributed to a named subcontractor (subcontractor_id)" "201, 1 row" "$ok" "$STATUS $BODY_OUT"
+
+# --- certify / reopen — the only doors to certified_at/certified_by ---
+# Unlike quantity_records' revoked-but-previously-granted columns (0022,
+# which reads as 200/[] since the role still has SOME UPDATE privilege on
+# that table), certified_at/certified_by were NEVER granted here at all —
+# Postgres denies column-specific UPDATE privilege outright, so PostgREST
+# returns 403 before RLS is ever evaluated. Confirmed against the real
+# database, not assumed from the quantity_records precedent.
+request PATCH "daily_work_reports?id=eq.$DWR_ID" "$FULL_TOKEN" '{"certified_at": "2026-08-10T12:00:00Z"}'
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "full: plain PATCH of certified_at rejected outright (no column grant, RPC only)" "403" "$ok" "$STATUS $BODY_OUT"
+
+request POST "rpc/certify_daily_work_report" "$READONLY_TOKEN" "{\"p_id\":\"$DWR_ID\"}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "not-permitted" || ok=0; }
+check "readonly (view_cost_register_rates, no record_force_account): certify rejected" ">=400, not-permitted" "$ok" "$STATUS $BODY_OUT"
+
+request POST "rpc/certify_daily_work_report" "$FULL_TOKEN" "{\"p_id\":\"$DWR_ID\"}"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  ca=$(obj_field "$BODY_OUT" certified_at)
+  [ -n "$ca" ] && ok=1
+fi
+check "full: certify_daily_work_report succeeds, certified_at set" "200, certified_at set" "$ok" "$STATUS $BODY_OUT"
+
+# Certified: the claim's substance is locked — work_date rejected by the
+# trigger, not just left unwritten.
+request PATCH "daily_work_reports?id=eq.$DWR_ID" "$FULL_TOKEN" '{"work_date": "2026-08-12"}'
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "locked once certified" || ok=0; }
+check "full: edit work_date on a certified DWR rejected" ">=400, locked once certified" "$ok" "$STATUS $BODY_OUT"
+
+# Certified: line items are locked too, even for a seat holding both rights.
+request POST "daily_work_report_line_items" "$QUANTITIES_TOKEN" \
+  "{\"dwr_id\":\"$DWR_ID\",\"contract_id\":\"$PROJECT_ID\",\"block\":\"C\",\"sub_flag\":\"n\",\"descriptor\":\"Should not land\",\"quantity\":1,\"rate\":1,\"amount\":1}"
+ok=0; [ "$STATUS" = "403" ] && ok=1
+check "quantities (both rights, but DWR certified): insert line item rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+request PATCH "daily_work_report_line_items?id=eq.$LINE_ITEM_ID" "$QUANTITIES_TOKEN" '{"quantity": 99}'
+ok=0; [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "0" ] && ok=1
+check "quantities: edit an existing line item on a certified DWR matches 0 rows" "200, []" "$ok" "$STATUS $BODY_OUT"
+
+# Certifying again — a distinct diagnosis from "not-permitted".
+request POST "rpc/certify_daily_work_report" "$FULL_TOKEN" "{\"p_id\":\"$DWR_ID\"}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "already-certified" || ok=0; }
+check "full: certify an already-certified DWR rejected" ">=400, already-certified" "$ok" "$STATUS $BODY_OUT"
+
+# reopen — the explicit, audited way back. Not a plain PATCH (no grant), not
+# available to a seat lacking record_force_account either.
+request POST "rpc/reopen_daily_work_report" "$READONLY_TOKEN" "{\"p_id\":\"$DWR_ID\"}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "not-permitted" || ok=0; }
+check "readonly: reopen rejected (no record_force_account)" ">=400, not-permitted" "$ok" "$STATUS $BODY_OUT"
+
+request POST "rpc/reopen_daily_work_report" "$FULL_TOKEN" "{\"p_id\":\"$DWR_ID\"}"
+ok=0
+if [ "$STATUS" = "200" ]; then
+  ca=$(obj_field "$BODY_OUT" certified_at)
+  [ -z "$ca" ] && ok=1
+fi
+check "full: reopen_daily_work_report succeeds, certified_at cleared" "200, certified_at null" "$ok" "$STATUS $BODY_OUT"
+
+# Reopened: line items are writable again.
+request PATCH "daily_work_report_line_items?id=eq.$LINE_ITEM_ID" "$QUANTITIES_TOKEN" '{"quantity": 9}'
+ok=0
+if [ "$STATUS" = "200" ] && [ "$(json_len "$BODY_OUT")" = "1" ]; then
+  q=$(json_field "$BODY_OUT" 0 quantity)
+  [ "$q" = "9" ] && ok=1
+fi
+check "quantities: edit a line item after reopen succeeds" "200, quantity=9" "$ok" "$STATUS $BODY_OUT"
+
+# Reopening a DWR that is not currently certified — distinct diagnosis.
+request POST "rpc/reopen_daily_work_report" "$FULL_TOKEN" "{\"p_id\":\"$DWR_ID\"}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "not-certified" || ok=0; }
+check "full: reopen a DWR that is not certified rejected" ">=400, not-certified" "$ok" "$STATUS $BODY_OUT"
+
+# A nonexistent id reads as not-found, from either RPC, not a bare 403/500.
+request POST "rpc/certify_daily_work_report" "$FULL_TOKEN" '{"p_id":"00000000-0000-0000-0000-000000000000"}'
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "not-found" || ok=0; }
+check "full: certify a nonexistent DWR id rejected" ">=400, not-found" "$ok" "$STATUS $BODY_OUT"
+
+echo
 echo "=== Summary: $PASS passed, $FAIL failed ==="
 if [ "$FAIL" -eq 0 ]; then
   exit 0

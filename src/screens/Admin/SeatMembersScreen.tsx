@@ -31,6 +31,7 @@ const RIGHTS: { key: ContractRightKey; label: string }[] = [
   { key: 'viewRates', label: 'View rates' },
   { key: 'extractReport', label: 'Export' },
   { key: 'prepareClaims', label: 'Prepare progress claims' },
+  { key: 'recordForceAccount', label: 'Record Daily Work Reports (Force Account)' },
 ]
 
 /**

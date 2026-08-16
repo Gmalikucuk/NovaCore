@@ -20,6 +20,8 @@ export interface ContractRights {
   extractReport: boolean
   /** May prepare and submit the monthly progress claim (0046) — Unit Price and quantity, never cost or margin. Independent of setCost/setUnitPrice on purpose: the project management team prepares claims, not Finance. */
   prepareClaims: boolean
+  /** Enter, edit, certify, and reopen Daily Work Reports (Force Account claims, GC 49.00) on this contract. Does NOT imply the company-wide viewCostRegisterRates/maintainCostRegisters — a DWR line's rate is a register rate, and both must be held to actually write one; see CompanyRights. */
+  recordForceAccount: boolean
 }
 
 export interface MyContract extends ContractRights {
@@ -75,6 +77,7 @@ interface RawMembershipRow {
   view_rates: boolean
   extract_report: boolean
   prepare_claims: boolean
+  record_force_account: boolean
   contracts: {
     id: string
     contract_name: string
@@ -109,7 +112,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
   const { data, error } = await supabase
     .from('contract_members')
     .select(
-      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, prepare_claims, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end, contract_state, cost_tracking_enabled, holdback_percent, gst_percent )',
+      'create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, prepare_claims, record_force_account, contracts!inner ( id, contract_name, contract_no, is_sandbox, tender_price, contract_end, contract_state, cost_tracking_enabled, holdback_percent, gst_percent )',
     )
     .eq('user_id', user.id)
   if (error) throw error
@@ -136,6 +139,7 @@ export async function fetchMyContracts(): Promise<MyContract[]> {
       viewRates: r.view_rates,
       extractReport: r.extract_report,
       prepareClaims: r.prepare_claims,
+      recordForceAccount: r.record_force_account,
     }
   })
 }
@@ -204,6 +208,7 @@ export async function createContract(input: NewContractInput): Promise<MyContrac
     viewRates: false,
     extractReport: false,
     prepareClaims: false,
+    recordForceAccount: false,
   }
 }
 

@@ -44,6 +44,7 @@ interface RawContractMemberRow {
   view_rates: boolean
   extract_report: boolean
   prepare_claims: boolean
+  record_force_account: boolean
   profiles: { full_name: string | null } | null
 }
 
@@ -60,11 +61,12 @@ function mapContractMemberRow(row: RawContractMemberRow): ContractMember {
     viewRates: row.view_rates,
     extractReport: row.extract_report,
     prepareClaims: row.prepare_claims,
+    recordForceAccount: row.record_force_account,
   }
 }
 
 const CONTRACT_MEMBER_SELECT =
-  'user_id, create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, prepare_claims, profiles ( full_name )'
+  'user_id, create_items, set_cost, set_unit_price, enter_quantity, correct_quantity, confirm_quantity, view_rates, extract_report, prepare_claims, record_force_account, profiles ( full_name )'
 
 /** Every seat on a contract, with the name to show against each — manage_members only (contract_members_select's own is_member(contract_id) gate is satisfied by 0028's widened contracts visibility, not bypassed). */
 export async function fetchContractMembers(contractId: string): Promise<ContractMember[]> {
@@ -105,6 +107,7 @@ const RIGHT_COLUMN: Record<ContractRightKey, string> = {
   viewRates: 'view_rates',
   extractReport: 'extract_report',
   prepareClaims: 'prepare_claims',
+  recordForceAccount: 'record_force_account',
 }
 
 /**

@@ -39,6 +39,7 @@ const CONTRACT: MyContract = {
   viewRates: true,
   extractReport: false,
   prepareClaims: false,
+  recordForceAccount: false,
 }
 
 const UNIT_PRICE_ITEM: Item = {
