@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
-import { IconArrowLeft, IconMinus, IconTrendingDown, IconTrendingUp } from '@tabler/icons-react'
+import { IconArrowLeft, IconFileSpreadsheet, IconMinus, IconTrendingDown, IconTrendingUp } from '@tabler/icons-react'
 import type { MyContract } from '../../lib/supabase/contracts'
 import { fetchItems, type Item } from '../../lib/supabase/items'
 import { fetchItemPrices, type ItemPrice } from '../../lib/supabase/prices'
@@ -466,8 +466,8 @@ export function FinanceMonthScreen() {
     // it.
     <div style={{ maxWidth: tableWidthPx, marginLeft: 'auto', marginRight: 'auto' }}>
       <PageHeader
-        title="Finance"
-        subtitle={`${contract.name} · ${selectedMonthLabel}`}
+        title={selectedMonthLabel}
+        subtitle={contract.name}
         actions={
           <Button type="button" variant="ghost" onClick={() => navigate('/finance')}>
             <IconArrowLeft size={16} stroke={2} className="mr-1 inline" />
@@ -502,7 +502,12 @@ export function FinanceMonthScreen() {
               <h2 className="text-sm font-semibold uppercase tracking-wide text-nc-text-muted">Money — {selectedMonthLabel}</h2>
               <p className="text-xs text-nc-text-muted">{lastConfirmedAt ? <>Confirmed records as of {formatConfirmedAt(lastConfirmedAt)}</> : 'No confirmed records yet'}</p>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {/* Est. margin only ever renders when costVisible — same rule
+                Months' own column now follows. A card that only ever says
+                "—" earns no less than a column that only ever says "—";
+                Value of Work takes the full width instead of splitting it
+                with a card that has nothing to show. */}
+            <div className={`grid grid-cols-1 gap-3 ${costVisible ? 'sm:grid-cols-2' : ''}`}>
               {contract.viewRates ? (
                 currentContractMonth ? (
                   <>
@@ -519,34 +524,36 @@ export function FinanceMonthScreen() {
                         )
                       }
                     />
-                    <StatCard
-                      label="Est. margin"
-                      value={marginThisMonth === null ? '—' : <span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{rate(marginThisMonth)}</span>}
-                      sub={
-                        marginThisMonth === null ? (
-                          contract.costTrackingEnabled ? (
-                            "Cost isn't fully priced for this month's Items"
-                          ) : undefined
-                        ) : marginLastMonth !== null ? (
-                          <>
-                            <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {rate(marginLastMonth)} the prior month
-                          </>
-                        ) : (
-                          'No prior month to compare'
-                        )
-                      }
-                    />
+                    {costVisible && (
+                      <StatCard
+                        label="Est. margin"
+                        value={marginThisMonth === null ? '—' : <span className={`text-3xl ${marginThisMonth < 0 ? 'text-nc-danger-text' : ''}`}>{rate(marginThisMonth)}</span>}
+                        sub={
+                          marginThisMonth === null ? (
+                            contract.costTrackingEnabled ? (
+                              "Cost isn't fully priced for this month's Items"
+                            ) : undefined
+                          ) : marginLastMonth !== null ? (
+                            <>
+                              <DirectionBadge direction={monthDirection(marginThisMonth, marginLastMonth)} /> {rate(marginLastMonth)} the prior month
+                            </>
+                          ) : (
+                            'No prior month to compare'
+                          )
+                        }
+                      />
+                    )}
                   </>
                 ) : (
                   <>
                     <StatCard label="Value of Work" value="—" sub={`No records yet for ${selectedMonthLabel}`} />
-                    <StatCard label="Est. margin" value="—" sub={`No records yet for ${selectedMonthLabel}`} />
+                    {costVisible && <StatCard label="Est. margin" value="—" sub={`No records yet for ${selectedMonthLabel}`} />}
                   </>
                 )
               ) : (
                 <>
                   <StatCard label="Value of Work" value="—" sub="Needs rate-viewing permission" />
-                  <StatCard label="Est. margin" value="—" sub="Needs rate-viewing permission" />
+                  {costVisible && <StatCard label="Est. margin" value="—" sub="Needs rate-viewing permission" />}
                 </>
               )}
             </div>
@@ -571,8 +578,13 @@ export function FinanceMonthScreen() {
                   })}
                 </Select>
                 {contract.viewRates && <ColumnsControl columns={columns} costVisible={costVisible} onToggle={toggleColumn} />}
+                {/* "Export to Excel" wrapped to three lines beside controls
+                    that sit on one — the heading above already says what
+                    this exports; the icon carries "to Excel" so the label
+                    doesn't have to. */}
                 <Button type="button" variant="secondary" disabled={exporting} onClick={() => void handleFinanceExport()}>
-                  {exporting ? 'Exporting…' : 'Export to Excel'}
+                  <IconFileSpreadsheet size={16} stroke={1.75} className="mr-1 inline" />
+                  {exporting ? 'Exporting…' : 'Export'}
                 </Button>
               </div>
             </div>
