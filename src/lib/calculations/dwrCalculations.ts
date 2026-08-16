@@ -40,6 +40,8 @@
 //     flagged, not assumed correct.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { asOfDate, asOfYear } from './rateHistory'
+
 export type DwrBlock = 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
 export type SubFlag = 'y' | 'n' | 'a'
 
@@ -279,4 +281,63 @@ export function summarizeSubcontractorCap(
     })),
     unattributedMarkup: unattributed,
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Register-rate resolution — Blocks A/B/C read their rate from the cost
+// registers, as at the DWR's own work_date, never today's. Once prefilled
+// onto a line, that rate is the line's own figure (stored on the row,
+// resolved once at selection time) — these functions exist to compute what
+// the register says NOW, for prefill on a new line and for a neutral
+// diff display on an existing one; they never overwrite a stored rate.
+//
+// Equipment resolves by Blue Book edition (asOfYear, book_year), not by
+// calendar date — the register has no effective_date for equipment, only
+// book_year. "As at the work date" for equipment means the calendar YEAR
+// the work date falls in, same asOfYear discipline as anywhere else a
+// book_year is resolved.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The calendar year a work_date (ISO 'YYYY-MM-DD') falls in — the bookYear asOfYear resolves equipment rates against. */
+export function yearOfWorkDate(workDate: string): number {
+  return Number(workDate.slice(0, 4))
+}
+
+/** Blue Book rate for one machine, as at the calendar year of workDate — null if no edition exists at or before that year, or the edition on file has no blue_book_rate typed in. Absent, not zero — the caller must say so, not default to $0. */
+export function resolveEquipmentRate<T extends { equipmentId: string; bookYear: number; blueBookRate: number | null }>(
+  equipmentId: string,
+  workDate: string,
+  equipmentRates: readonly T[],
+): number | null {
+  const row = asOfYear(
+    equipmentRates.filter((r) => r.equipmentId === equipmentId),
+    yearOfWorkDate(workDate),
+  )
+  return row?.blueBookRate ?? null
+}
+
+/** Hourly rate for one labour class, as at workDate — null if no rate is on file at or before that date. */
+export function resolveLabourClassRate<T extends { labourClassId: string; effectiveDate: string; hourlyRate: number }>(
+  labourClassId: string,
+  workDate: string,
+  labourClassRates: readonly T[],
+): number | null {
+  const row = asOfDate(
+    labourClassRates.filter((r) => r.labourClassId === labourClassId),
+    workDate,
+  )
+  return row?.hourlyRate ?? null
+}
+
+/** Unit rate for one material, as at workDate — null if no rate is on file at or before that date. */
+export function resolveMaterialRate<T extends { materialId: string; effectiveDate: string; rate: number }>(
+  materialId: string,
+  workDate: string,
+  materialRates: readonly T[],
+): number | null {
+  const row = asOfDate(
+    materialRates.filter((r) => r.materialId === materialId),
+    workDate,
+  )
+  return row?.rate ?? null
 }

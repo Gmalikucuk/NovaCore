@@ -5,9 +5,13 @@ import {
   computeBlock,
   computeBlockF,
   lineItemsForBlock,
+  resolveEquipmentRate,
+  resolveLabourClassRate,
+  resolveMaterialRate,
   subtotal,
   suggestReducedMarkups,
   summarizeSubcontractorCap,
+  yearOfWorkDate,
   type DwrLineItem,
   type ForceAccountTerms,
 } from './dwrCalculations'
@@ -196,5 +200,69 @@ describe('summarizeSubcontractorCap', () => {
     const result = summarizeSubcontractorCap([{ subcontractorId: 'sub-1', markupAmount: 0 }], 100000)
     expect(result.bySubcontractor).toEqual([])
     expect(result.unattributedMarkup).toBe(0)
+  })
+})
+
+describe('yearOfWorkDate', () => {
+  it('reads the calendar year out of an ISO work date', () => {
+    expect(yearOfWorkDate('2026-08-11')).toBe(2026)
+  })
+})
+
+describe('resolveEquipmentRate', () => {
+  const rates = [
+    { equipmentId: 'eq-1', bookYear: 2024, blueBookRate: 100 },
+    { equipmentId: 'eq-1', bookYear: 2026, blueBookRate: 145 },
+    { equipmentId: 'eq-2', bookYear: 2026, blueBookRate: null },
+  ]
+
+  it('resolves the edition at or before the work date’s calendar year', () => {
+    expect(resolveEquipmentRate('eq-1', '2026-08-11', rates)).toBe(145)
+    expect(resolveEquipmentRate('eq-1', '2025-01-01', rates)).toBe(100)
+  })
+
+  it('is null when no edition exists at or before that year — absent, not zero', () => {
+    expect(resolveEquipmentRate('eq-1', '2023-01-01', rates)).toBeNull()
+  })
+
+  it('is null when the machine has no rows at all', () => {
+    expect(resolveEquipmentRate('eq-nonexistent', '2026-08-11', rates)).toBeNull()
+  })
+
+  it('is null when the edition on file has no blue_book_rate typed in', () => {
+    expect(resolveEquipmentRate('eq-2', '2026-08-11', rates)).toBeNull()
+  })
+
+  it('never resolves a future edition', () => {
+    const futureOnly = [{ equipmentId: 'eq-3', bookYear: 2030, blueBookRate: 999 }]
+    expect(resolveEquipmentRate('eq-3', '2026-08-11', futureOnly)).toBeNull()
+  })
+})
+
+describe('resolveLabourClassRate', () => {
+  const rates = [
+    { labourClassId: 'lc-1', effectiveDate: '2024-01-01', hourlyRate: 40 },
+    { labourClassId: 'lc-1', effectiveDate: '2026-01-01', hourlyRate: 45.5 },
+  ]
+
+  it('resolves the rate at or before the work date', () => {
+    expect(resolveLabourClassRate('lc-1', '2026-08-11', rates)).toBe(45.5)
+    expect(resolveLabourClassRate('lc-1', '2025-01-01', rates)).toBe(40)
+  })
+
+  it('is null when no rate is on file at or before that date', () => {
+    expect(resolveLabourClassRate('lc-1', '2023-01-01', rates)).toBeNull()
+  })
+})
+
+describe('resolveMaterialRate', () => {
+  const rates = [{ materialId: 'mat-1', effectiveDate: '2026-01-01', rate: 95 }]
+
+  it('resolves the rate at or before the work date', () => {
+    expect(resolveMaterialRate('mat-1', '2026-08-11', rates)).toBe(95)
+  })
+
+  it('is null when no rate is on file at or before that date', () => {
+    expect(resolveMaterialRate('mat-1', '2025-01-01', rates)).toBeNull()
   })
 })

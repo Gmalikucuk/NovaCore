@@ -26,9 +26,34 @@ import {
   type DwrLineItemInput,
   type DwrSubcontractor,
 } from '../../lib/supabase/dailyWorkReports'
-import { fetchPayrollAdditiveRates, fetchToolAllowanceRates, type PercentRate } from '../../lib/supabase/costRegisters'
+import {
+  fetchEquipment,
+  fetchEquipmentRates,
+  fetchLabourClasses,
+  fetchLabourClassRates,
+  fetchMaterialRates,
+  fetchMaterials,
+  fetchPayrollAdditiveRates,
+  fetchToolAllowanceRates,
+  type Equipment,
+  type EquipmentRate,
+  type LabourClass,
+  type LabourClassRate,
+  type Material,
+  type MaterialRate,
+  type PercentRate,
+} from '../../lib/supabase/costRegisters'
 import { asOfDate } from '../../lib/calculations/rateHistory'
-import { computeAllBlocks, suggestReducedMarkups, summarizeSubcontractorCap, type DwrBlock, type SubFlag } from '../../lib/calculations/dwrCalculations'
+import {
+  computeAllBlocks,
+  resolveEquipmentRate,
+  resolveLabourClassRate,
+  resolveMaterialRate,
+  suggestReducedMarkups,
+  summarizeSubcontractorCap,
+  type DwrBlock,
+  type SubFlag,
+} from '../../lib/calculations/dwrCalculations'
 import { formatDayLabel } from '../../lib/dateFormat'
 import { errorMessage } from '../../lib/errorMessage'
 import { rate as fmtRate } from '../../lib/format'
@@ -57,6 +82,21 @@ const BLANK_LINE: DwrLineItemInput = {
   materialId: null,
 }
 
+/** Blocks D (Preparatory work), E (Food and lodging) and F (Invoiced work) have no register behind them — GC 49.03 gives them no identity list to pick from, so they stay plain typed fields, by decision. */
+function isRegisterBlock(block: DwrBlock): block is 'A' | 'B' | 'C' {
+  return block === 'A' || block === 'B' || block === 'C'
+}
+
+/** The register's own identity list for one block, as {id, label} pairs for the "From register" select — free typing (an empty pick) is always the alternative, never removed. */
+function registerOptionsFor(
+  block: 'A' | 'B' | 'C',
+  registers: { labourClasses: LabourClass[]; equipment: Equipment[]; materials: Material[] },
+): { id: string; label: string }[] {
+  if (block === 'A') return registers.labourClasses.map((c) => ({ id: c.id, label: c.className }))
+  if (block === 'B') return registers.equipment.map((e) => ({ id: e.id, label: [e.equipmentType, e.year, e.make, e.model].filter(Boolean).join(' ') }))
+  return registers.materials.map((m) => ({ id: m.id, label: `${m.description} (${m.unit})` }))
+}
+
 /**
  * One DWR — header, subcontractors, six blocks of line items, and the
  * derived totals. Block subtotals/markups are computed here, never stored
@@ -81,6 +121,12 @@ export function DailyWorkReportScreen() {
   const [terms, setTerms] = useState<ContractForceAccountTerms[]>([])
   const [payrollRates, setPayrollRates] = useState<PercentRate[]>([])
   const [toolRates, setToolRates] = useState<PercentRate[]>([])
+  const [equipment, setEquipment] = useState<Equipment[]>([])
+  const [equipmentRates, setEquipmentRates] = useState<EquipmentRate[]>([])
+  const [labourClasses, setLabourClasses] = useState<LabourClass[]>([])
+  const [labourClassRates, setLabourClassRates] = useState<LabourClassRate[]>([])
+  const [materials, setMaterials] = useState<Material[]>([])
+  const [materialRates, setMaterialRates] = useState<MaterialRate[]>([])
   const [otherDwrs, setOtherDwrs] = useState<DailyWorkReport[]>([])
   const [otherLineItems, setOtherLineItems] = useState<DailyWorkReportLineItem[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -91,6 +137,20 @@ export function DailyWorkReportScreen() {
   const [newSubName, setNewSubName] = useState('')
   const [newLine, setNewLine] = useState<Record<DwrBlock, DwrLineItemInput>>(() =>
     Object.fromEntries(BLOCKS.map((b) => [b.key, { ...BLANK_LINE, block: b.key }])) as Record<DwrBlock, DwrLineItemInput>,
+  )
+  // '' = typed freely (no register selection); a register id once a pick is
+  // made. Tracks WHICH identity is picked so re-resolving the rate (e.g. if
+  // work_date changes) and the "type manually" reset both have something to
+  // key off — the FK on newLine itself is the source of truth for what gets
+  // submitted, this is just the dropdown's own current value.
+  const [newLineRegisterPick, setNewLineRegisterPick] = useState<Record<DwrBlock, string>>(
+    () => Object.fromEntries(BLOCKS.map((b) => [b.key, ''])) as Record<DwrBlock, string>,
+  )
+  // null = nothing picked; a number/null result once picked (null meaning
+  // the register has no rate on file as at the work date — absent, not
+  // zero, shown as a plain message rather than a silent $0 prefill).
+  const [newLineResolvedRate, setNewLineResolvedRate] = useState<Record<DwrBlock, number | null>>(
+    () => Object.fromEntries(BLOCKS.map((b) => [b.key, null])) as Record<DwrBlock, number | null>,
   )
 
   function load() {
@@ -107,8 +167,14 @@ export function DailyWorkReportScreen() {
       fetchDailyWorkReports(contract.id),
       fetchContractDwrLineItems(contract.id),
       fetchContractDwrSubcontractors(contract.id),
+      fetchEquipment(),
+      fetchEquipmentRates(),
+      fetchLabourClasses(),
+      fetchLabourClassRates(),
+      fetchMaterials(),
+      fetchMaterialRates(),
     ])
-      .then(([rights, dwrRow, subs, lines, allTerms, payroll, tool, allDwrs, allLines, everySub]) => {
+      .then(([rights, dwrRow, subs, lines, allTerms, payroll, tool, allDwrs, allLines, everySub, eq, eqRates, lc, lcRates, mat, matRates]) => {
         if (!dwrRow) {
           setLoadError('Not found.')
           setStatus('error')
@@ -124,6 +190,12 @@ export function DailyWorkReportScreen() {
         setToolRates(tool)
         setOtherDwrs(allDwrs.filter((d) => d.id !== dwrRow.id))
         setOtherLineItems(allLines.filter((li) => li.dwrId !== dwrRow.id))
+        setEquipment(eq)
+        setEquipmentRates(eqRates)
+        setLabourClasses(lc)
+        setLabourClassRates(lcRates)
+        setMaterials(mat)
+        setMaterialRates(matRates)
         setStatus('ready')
       })
       .catch((err) => {
@@ -178,6 +250,23 @@ export function DailyWorkReportScreen() {
     return summarizeSubcontractorCap(withMarkup, currentTerms.subcontractorCapAmount)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lineItems, otherLineItems, currentTerms])
+
+  /**
+   * What the register says NOW for an already-stored line — undefined when
+   * the line carries no FK (nothing to compare, always the case for D/E/F
+   * and any freely-typed A/B/C line), null when the register has no rate on
+   * file as at work_date, a number otherwise. Never overwrites li.rate —
+   * that figure is frozen at whatever it was resolved to (or typed) at
+   * entry time, per the brief: a DWR's numbers are evidence of what was
+   * agreed then, not a live join against today's register.
+   */
+  function resolvedRateForLine(li: DailyWorkReportLineItem): number | null | undefined {
+    if (!dwr) return undefined
+    if (li.block === 'A' && li.labourClassId) return resolveLabourClassRate(li.labourClassId, dwr.workDate, labourClassRates)
+    if (li.block === 'B' && li.equipmentId) return resolveEquipmentRate(li.equipmentId, dwr.workDate, equipmentRates)
+    if (li.block === 'C' && li.materialId) return resolveMaterialRate(li.materialId, dwr.workDate, materialRates)
+    return undefined
+  }
 
   const canWriteHeader = contract.recordForceAccount
   const canWriteLines = contract.recordForceAccount && (companyRights?.viewCostRegisterRates || companyRights?.maintainCostRegisters)
@@ -262,8 +351,59 @@ export function DailyWorkReportScreen() {
       const created = await createDwrLineItem(dwr.id, contract.id, input)
       setLineItems((prev) => [...prev, created])
       setNewLine((prev) => ({ ...prev, [block]: { ...BLANK_LINE, block } }))
+      setNewLineRegisterPick((prev) => ({ ...prev, [block]: '' }))
+      setNewLineResolvedRate((prev) => ({ ...prev, [block]: null }))
     } catch (err) {
       setActionError(errorMessage(err))
+    }
+  }
+
+  /**
+   * Selecting an identity from the register prefills descriptor/detail/rate
+   * by resolving the register AS AT the DWR's own work date — never
+   * today's — and records the FK for provenance. The rate stays a plain,
+   * editable field afterward: a register rate is a starting point, not a
+   * constraint. Picking "Type manually" clears the FK and every field this
+   * function would have filled, back to a blank line for that block.
+   */
+  function handleRegisterPick(block: DwrBlock, registerId: string) {
+    if (!dwr) return
+    setNewLineRegisterPick((prev) => ({ ...prev, [block]: registerId }))
+
+    if (!registerId) {
+      setNewLine((prev) => ({ ...prev, [block]: { ...BLANK_LINE, block } }))
+      setNewLineResolvedRate((prev) => ({ ...prev, [block]: null }))
+      return
+    }
+
+    if (block === 'A') {
+      const lc = labourClasses.find((c) => c.id === registerId)
+      if (!lc) return
+      const resolved = resolveLabourClassRate(lc.id, dwr.workDate, labourClassRates)
+      setNewLine((prev) => ({
+        ...prev,
+        A: { ...prev.A, labourClassId: lc.id, secondaryDescriptor: lc.className, rate: resolved ?? prev.A.rate },
+      }))
+      setNewLineResolvedRate((prev) => ({ ...prev, A: resolved }))
+    } else if (block === 'B') {
+      const eq = equipment.find((e) => e.id === registerId)
+      if (!eq) return
+      const resolved = resolveEquipmentRate(eq.id, dwr.workDate, equipmentRates)
+      const detail = [eq.year, eq.make, eq.model].filter(Boolean).join(' ')
+      setNewLine((prev) => ({
+        ...prev,
+        B: { ...prev.B, equipmentId: eq.id, descriptor: eq.equipmentType, secondaryDescriptor: detail || null, rate: resolved ?? prev.B.rate },
+      }))
+      setNewLineResolvedRate((prev) => ({ ...prev, B: resolved }))
+    } else if (block === 'C') {
+      const mat = materials.find((m) => m.id === registerId)
+      if (!mat) return
+      const resolved = resolveMaterialRate(mat.id, dwr.workDate, materialRates)
+      setNewLine((prev) => ({
+        ...prev,
+        C: { ...prev.C, materialId: mat.id, descriptor: mat.description, secondaryDescriptor: mat.unit, rate: resolved ?? prev.C.rate },
+      }))
+      setNewLineResolvedRate((prev) => ({ ...prev, C: resolved }))
     }
   }
 
@@ -454,6 +594,7 @@ export function DailyWorkReportScreen() {
                     </TD>
                     <TD align="right" className="nc-numeric">
                       {fmtRate(li.rate)}
+                      <RegisterRateNote resolved={resolvedRateForLine(li)} entered={li.rate} workDate={dwr.workDate} />
                     </TD>
                     <TD align="right" className="nc-numeric">
                       {fmtRate(li.amount)}
@@ -467,6 +608,29 @@ export function DailyWorkReportScreen() {
                     )}
                   </TR>
                 ))}
+                {canWriteLines && !locked && isRegisterBlock(key) && (
+                  <TR>
+                    <TD colSpan={7} className="bg-nc-page">
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-nc-text-muted">From register:</label>
+                        <Select value={newLineRegisterPick[key]} onChange={(e) => handleRegisterPick(key, e.target.value)} className="w-64">
+                          <option value="">Type manually</option>
+                          {registerOptionsFor(key, { labourClasses, equipment, materials }).map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </Select>
+                        {newLineRegisterPick[key] &&
+                          (newLineResolvedRate[key] === null ? (
+                            <span className="text-xs text-nc-warning-text">No rate on file as at {dwr.workDate} — enter one below.</span>
+                          ) : (
+                            <span className="text-xs text-nc-text-muted">Rate prefilled from the register as at {dwr.workDate} — still editable.</span>
+                          ))}
+                      </div>
+                    </TD>
+                  </TR>
+                )}
                 {canWriteLines && !locked && (
                   <TR>
                     <TD>
@@ -501,6 +665,9 @@ export function DailyWorkReportScreen() {
                         value={newLine[key].rate}
                         onChange={(e) => setNewLine((p) => ({ ...p, [key]: { ...p[key], rate: Number(e.target.value) } }))}
                       />
+                      {newLineRegisterPick[key] && newLineResolvedRate[key] !== null && newLineResolvedRate[key] !== newLine[key].rate && (
+                        <span className="block text-xs font-normal text-nc-text-muted">Register {fmtRate(newLineResolvedRate[key])}</span>
+                      )}
                     </TD>
                     <TD align="right">
                       <Input
@@ -604,5 +771,26 @@ function Field({ label, children, className }: { label: string; children: React.
       <label className="mb-1 block text-xs text-nc-text-muted">{label}</label>
       {children}
     </div>
+  )
+}
+
+/**
+ * Neutral, never a warning against the entered figure itself — a register
+ * rate is a starting point, not a constraint, and the Ministry may accept a
+ * different one. undefined (no FK on the line) renders nothing. null (FK
+ * set, but the register has no rate on file as at work_date) says so
+ * plainly rather than implying $0. A match renders nothing — only a real
+ * difference is worth a line.
+ */
+function RegisterRateNote({ resolved, entered, workDate }: { resolved: number | null | undefined; entered: number; workDate: string }) {
+  if (resolved === undefined) return null
+  if (resolved === null) return <span className="block text-xs font-normal text-nc-warning-text">No rate on file as at {workDate}</span>
+  if (resolved === entered) return null
+  const delta = entered - resolved
+  return (
+    <span className="block text-xs font-normal text-nc-text-muted">
+      Register {fmtRate(resolved)} ({delta > 0 ? '+' : ''}
+      {fmtRate(delta)})
+    </span>
   )
 }
