@@ -46,6 +46,7 @@ import {
 import { asOfDate } from '../../lib/calculations/rateHistory'
 import {
   computeAllBlocks,
+  pctToFraction,
   resolveEquipmentRate,
   resolveLabourClassRate,
   resolveMaterialRate,
@@ -246,7 +247,7 @@ export function DailyWorkReportScreen() {
   const subcontractorCap = useMemo(() => {
     if (!currentTerms) return null
     const allSubFlagged = [...lineItems, ...otherLineItems].filter((li) => li.subFlag === 'y')
-    const withMarkup = allSubFlagged.map((li) => ({ subcontractorId: li.subcontractorId, markupAmount: li.amount * currentTerms.subcontractorMarkupPct }))
+    const withMarkup = allSubFlagged.map((li) => ({ subcontractorId: li.subcontractorId, markupAmount: li.amount * pctToFraction(currentTerms.subcontractorMarkupPct) }))
     return summarizeSubcontractorCap(withMarkup, currentTerms.subcontractorCapAmount)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lineItems, otherLineItems, currentTerms])

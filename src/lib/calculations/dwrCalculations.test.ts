@@ -5,6 +5,7 @@ import {
   computeBlock,
   computeBlockF,
   lineItemsForBlock,
+  pctToFraction,
   resolveEquipmentRate,
   resolveLabourClassRate,
   resolveMaterialRate,
@@ -16,27 +17,40 @@ import {
   type ForceAccountTerms,
 } from './dwrCalculations'
 
+// Raw numbers (30 meaning 30%), not fractions — the schema-wide convention,
+// fixed here after 20260816210000 caught contract_force_account_terms as
+// the one table stored the other way. basicMarkupPct()/pctToFraction() etc.
+// convert internally; assertions below check the resulting FRACTION they
+// hand back (0.3, not 30), same as before this fixture changed.
 const TERMS: ForceAccountTerms = {
   effectiveDate: '2026-01-01',
   gcVersionDate: '2026-04-01',
-  labourBasicPct: 0.3,
-  labourReducedPct: 0.2,
-  equipmentBasicPct: 0.15,
-  equipmentReducedPct: 0.1,
-  materialsBasicPct: 0.15,
-  materialsReducedPct: 0.15,
-  prepBasicPct: 0.15,
-  prepReducedPct: 0.1,
-  foodBasicPct: 0.15,
-  foodReducedPct: 0.15,
-  subcontractorMarkupPct: 0.1,
-  reducedThresholdPct: 0.25,
+  labourBasicPct: 30,
+  labourReducedPct: 20,
+  equipmentBasicPct: 15,
+  equipmentReducedPct: 10,
+  materialsBasicPct: 15,
+  materialsReducedPct: 15,
+  prepBasicPct: 15,
+  prepReducedPct: 10,
+  foodBasicPct: 15,
+  foodReducedPct: 15,
+  subcontractorMarkupPct: 10,
+  reducedThresholdPct: 25,
   subcontractorCapAmount: 100000,
 }
 
 function line(overrides: Partial<DwrLineItem>): DwrLineItem {
   return { id: 'x', block: 'A', subFlag: 'n', quantity: 1, rate: 1, amount: 1, subcontractorId: null, ...overrides }
 }
+
+describe('pctToFraction', () => {
+  it('converts a raw percent number to the fraction arithmetic needs', () => {
+    expect(pctToFraction(30)).toBe(0.3)
+    expect(pctToFraction(0)).toBe(0)
+    expect(pctToFraction(100)).toBe(1)
+  })
+})
 
 describe('basicMarkupPct', () => {
   it('reads the basic figure when reduced markups do not apply', () => {

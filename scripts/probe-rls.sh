@@ -2777,20 +2777,36 @@ echo "=== viewer: neither ==="
 # --- contract_force_account_terms — record_force_account alone is enough.
 # Upsert on (contract_id, effective_date), same rerun-safety pattern as
 # payroll_additive_rates/tool_allowance_rates above — a plain POST would
-# collide with a prior run's row on the second run.
+# collide with a prior run's row on the second run. Raw percent numbers (30
+# meaning 30%), not fractions — 20260816210000 fixed this table to match
+# every other percent column in the schema.
 resp=$(curl -s -w '\n%{http_code}' -X POST "$SUPABASE_URL/rest/v1/contract_force_account_terms?on_conflict=contract_id,effective_date" \
   -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $FULL_TOKEN" \
   -H "Content-Type: application/json" -H "Prefer: return=representation,resolution=merge-duplicates" \
-  -d "{\"contract_id\":\"$PROJECT_ID\",\"effective_date\":\"2026-01-01\",\"gc_version_date\":\"2026-04-01\",\"labour_basic_pct\":0.30,\"labour_reduced_pct\":0.20,\"equipment_basic_pct\":0.15,\"equipment_reduced_pct\":0.10,\"materials_basic_pct\":0.15,\"materials_reduced_pct\":0.15,\"prep_basic_pct\":0.15,\"prep_reduced_pct\":0.10,\"food_basic_pct\":0.15,\"food_reduced_pct\":0.15,\"subcontractor_markup_pct\":0.10}")
+  -d "{\"contract_id\":\"$PROJECT_ID\",\"effective_date\":\"2026-01-01\",\"gc_version_date\":\"2026-04-01\",\"labour_basic_pct\":30,\"labour_reduced_pct\":20,\"equipment_basic_pct\":15,\"equipment_reduced_pct\":10,\"materials_basic_pct\":15,\"materials_reduced_pct\":15,\"prep_basic_pct\":15,\"prep_reduced_pct\":10,\"food_basic_pct\":15,\"food_reduced_pct\":15,\"subcontractor_markup_pct\":10}")
 STATUS=$(printf '%s' "$resp" | tail -n1)
 BODY_OUT=$(printf '%s' "$resp" | sed '$d')
 ok=0; { [ "$STATUS" = "201" ] || [ "$STATUS" = "200" ]; } && [ "$(json_len "$BODY_OUT")" = "1" ] && ok=1
 check "full (record_force_account, no rate right): insert/upsert contract_force_account_terms" "201/200, 1 row" "$ok" "$STATUS $BODY_OUT"
 
 request POST "contract_force_account_terms" "$READONLY_TOKEN" \
-  "{\"contract_id\":\"$PROJECT_ID\",\"effective_date\":\"2026-02-01\",\"gc_version_date\":\"2026-04-01\",\"labour_basic_pct\":0.30,\"labour_reduced_pct\":0.20,\"equipment_basic_pct\":0.15,\"equipment_reduced_pct\":0.10,\"materials_basic_pct\":0.15,\"materials_reduced_pct\":0.15,\"prep_basic_pct\":0.15,\"prep_reduced_pct\":0.10,\"food_basic_pct\":0.15,\"food_reduced_pct\":0.15,\"subcontractor_markup_pct\":0.10}"
+  "{\"contract_id\":\"$PROJECT_ID\",\"effective_date\":\"2026-02-01\",\"gc_version_date\":\"2026-04-01\",\"labour_basic_pct\":30,\"labour_reduced_pct\":20,\"equipment_basic_pct\":15,\"equipment_reduced_pct\":10,\"materials_basic_pct\":15,\"materials_reduced_pct\":15,\"prep_basic_pct\":15,\"prep_reduced_pct\":10,\"food_basic_pct\":15,\"food_reduced_pct\":15,\"subcontractor_markup_pct\":10}"
 ok=0; [ "$STATUS" = "403" ] && ok=1
 check "readonly (view_cost_register_rates alone, no record_force_account): insert contract_force_account_terms rejected" "403" "$ok" "$STATUS $BODY_OUT"
+
+# The range check guards against a genuinely out-of-range value (a typo like
+# 130, or negative). It does NOT and cannot catch a mistyped fraction like
+# 0.30 in place of 30 — 0.30 is a legal number between 0 and 100, so a
+# fraction is indistinguishable from a small legitimate percent by range
+# alone. That's a convention enforced by review and the table comment, not
+# by this constraint — do not add a probe here asserting fractions are
+# rejected, they are not.
+request POST "contract_force_account_terms?on_conflict=contract_id,effective_date" "$FULL_TOKEN" \
+  "{\"contract_id\":\"$PROJECT_ID\",\"effective_date\":\"2026-03-01\",\"gc_version_date\":\"2026-04-01\",\"labour_basic_pct\":130,\"labour_reduced_pct\":20,\"equipment_basic_pct\":15,\"equipment_reduced_pct\":10,\"materials_basic_pct\":15,\"materials_reduced_pct\":15,\"prep_basic_pct\":15,\"prep_reduced_pct\":10,\"food_basic_pct\":15,\"food_reduced_pct\":15,\"subcontractor_markup_pct\":10}"
+ok=0
+case "$STATUS" in [4-5][0-9][0-9]) ok=1 ;; esac
+[ "$ok" = "1" ] && { printf '%s' "$BODY_OUT" | grep -q "contract_force_account_terms_pct_range" || ok=0; }
+check "full: an out-of-range percent (130) is rejected by the range check" ">=400, pct_range" "$ok" "$STATUS $BODY_OUT"
 
 request GET "contract_force_account_terms?contract_id=eq.$PROJECT_ID&select=id" "$READONLY_TOKEN"
 ok=0

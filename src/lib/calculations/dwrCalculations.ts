@@ -58,6 +58,17 @@ export interface DwrLineItem {
 export interface ForceAccountTerms {
   effectiveDate: string
   gcVersionDate: string
+  /**
+   * Every *Pct field below (including reducedThresholdPct) is a RAW NUMBER
+   * — 30 means 30%, not 0.30 — same convention as contracts.holdbackPercent/
+   * gstPercent, payroll_additive_rates/tool_allowance_rates' own percent
+   * column, and progress_estimate_items.claimedPercent/certifiedPercent:
+   * the only convention used anywhere else in this schema. This table was
+   * the one exception (stored as fractions) until 20260816210000, which
+   * fixed a real 100x bug caused by exactly that inconsistency — read
+   * through pctToFraction() below, never divided ad hoc at a call site.
+   * subcontractorCapAmount is a dollar figure, not a percent, and is exempt.
+   */
   labourBasicPct: number
   labourReducedPct: number
   equipmentBasicPct: number
@@ -73,6 +84,11 @@ export interface ForceAccountTerms {
   subcontractorCapAmount: number
 }
 
+/** A raw percent column (30 meaning 30%) as the fraction (0.30) arithmetic actually needs — the one conversion point for every *Pct field on ForceAccountTerms, see that interface's own doc comment for the convention and why it is enforced here rather than at each call site. Exported so callers outside this module (DailyWorkReportScreen.tsx's own direct reads) go through the same conversion rather than reinventing it. */
+export function pctToFraction(rawPercent: number): number {
+  return rawPercent / 100
+}
+
 const BLOCK_PCT_KEYS: Record<Exclude<DwrBlock, 'F'>, { basic: keyof ForceAccountTerms; reduced: keyof ForceAccountTerms }> = {
   A: { basic: 'labourBasicPct', reduced: 'labourReducedPct' },
   B: { basic: 'equipmentBasicPct', reduced: 'equipmentReducedPct' },
@@ -81,10 +97,10 @@ const BLOCK_PCT_KEYS: Record<Exclude<DwrBlock, 'F'>, { basic: keyof ForceAccount
   E: { basic: 'foodBasicPct', reduced: 'foodReducedPct' },
 }
 
-/** The basic markup percentage for a block (A-E only — Block F has no basic-markup concept, see module header) at this DWR's reduced_markups state. */
+/** The basic markup percentage for a block (A-E only — Block F has no basic-markup concept, see module header) at this DWR's reduced_markups state, as a fraction ready to multiply. */
 export function basicMarkupPct(block: Exclude<DwrBlock, 'F'>, terms: ForceAccountTerms, reducedMarkups: boolean): number {
   const keys = BLOCK_PCT_KEYS[block]
-  return reducedMarkups ? (terms[keys.reduced] as number) : (terms[keys.basic] as number)
+  return pctToFraction(reducedMarkups ? (terms[keys.reduced] as number) : (terms[keys.basic] as number))
 }
 
 export function lineItemsForBlock(lineItems: readonly DwrLineItem[], block: DwrBlock): DwrLineItem[] {
@@ -137,7 +153,7 @@ export function computeBlock(
   const tool = isLabour ? raw * toolAllowancePct : 0
   const markupBase = raw + payroll + tool
   const basic = markupBase * basicMarkupPct(block, terms, reducedMarkups)
-  const additional = subcontractorPortion(lines) * terms.subcontractorMarkupPct
+  const additional = subcontractorPortion(lines) * pctToFraction(terms.subcontractorMarkupPct)
   return {
     block,
     rawSubtotal: raw,
@@ -162,8 +178,8 @@ export function computeBlockF(lineItems: readonly DwrLineItem[], terms: ForceAcc
   const lines = lineItemsForBlock(lineItems, 'F')
   const raw = subtotal(lines)
   const subPortion = subcontractorPortion(lines)
-  const basic = subPortion * terms.subcontractorMarkupPct
-  const additional = subPortion * terms.subcontractorMarkupPct
+  const basic = subPortion * pctToFraction(terms.subcontractorMarkupPct)
+  const additional = subPortion * pctToFraction(terms.subcontractorMarkupPct)
   return {
     block: 'F',
     rawSubtotal: raw,
@@ -222,7 +238,7 @@ export function suggestReducedMarkups(cumulativeForceAccount: number, tenderPric
     return { cumulativeForceAccount, tenderPrice: 0, ratio: 0, suggestReduced: false }
   }
   const ratio = cumulativeForceAccount / tenderPrice
-  return { cumulativeForceAccount, tenderPrice, ratio, suggestReduced: ratio >= terms.reducedThresholdPct }
+  return { cumulativeForceAccount, tenderPrice, ratio, suggestReduced: ratio >= pctToFraction(terms.reducedThresholdPct) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
